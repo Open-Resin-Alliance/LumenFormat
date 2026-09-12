@@ -1,0 +1,4 @@
+# Store text files with LF line endings; check them out with LF on every platform.
+# This spec is consumed by tooling (Rust encoders, Dart firmware, docs sites) on
+# Windows, Linux and macOS; normalizing avoids spurious whole-file diffs.
+* text=auto eol=lf
