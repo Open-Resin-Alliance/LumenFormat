@@ -14,7 +14,7 @@ never loses the source. Any compatible slicer can extract the VOXL, restore the
 full scene (models, supports, modifiers, hollowing state), and continue editing
 as if the file had never been closed.
 
-**Payload:** The raw bytes of a VOXL file (see `docs/dev/voxl-format-spec.md`).
+**Payload:** The raw bytes of a VOXL file (see `DragonFruit/docs/dev/voxl-format-spec.md`).
 V2 binary chunk format is the current target; V1 JSON is also valid. The VOXL carries its
 own internal version field for format detection.
 

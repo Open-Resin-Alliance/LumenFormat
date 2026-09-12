@@ -4,7 +4,12 @@
 
 ## Appendix B: Reference Encoder Integration
 
-The LUMEN encoder follows the existing plugin pattern (`FormatEncoder` +
+This appendix is informative. It describes how a reference encoder for a slicer
+using the plugin pattern below is expected to integrate; it is not a description of
+shipped code, and a conforming implementation is free to structure itself
+differently.
+
+Such an encoder would follow the plugin pattern (`FormatEncoder` +
 `RleStreamEncoder` traits defined in
 `rust/dragonfruit-slicing-engine/src/encoders/mod.rs`):
 

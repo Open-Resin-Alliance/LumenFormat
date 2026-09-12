@@ -13,7 +13,7 @@ metadata needed to derive or unwrap the session key.
 
 | Offset | Size | Type | Field | Description |
 |--------|------|------|-------|-------------|
-| 0 | 4 | `[u8; 4]` | `cipher_id` | ASCII. `A256G` = AES-256-GCM, `C20P1` = ChaCha20-Poly1305. |
+| 0 | 4 | `[u8; 4]` | `cipher_id` | ASCII. `A256` = AES-256-GCM, `C20P` = ChaCha20-Poly1305. |
 | 4 | 4 | `u32` | `auth_version` | Layout version. `1` for this spec. |
 | 8 | 4 | `u32` | `mode` | Bitfield: bit 0 = password, bit 1 = machine-binding. |
 | 12 | 4 | `u32` | `password_section_len` | Byte length of password section. 0 if not used. |

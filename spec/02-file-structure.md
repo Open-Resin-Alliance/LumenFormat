@@ -87,13 +87,16 @@ encryption - in which case the on-disk length is `size_uncompressed`.
 chunk type, not of `size_compressed` ([§6.3](09-compression.md#63-per-chunk-compression-policy)). For a compressed chunk the payload is a
 zstd frame that decompresses to `size_uncompressed` bytes; for an uncompressed chunk
 the payload bytes are the chunk data itself. This matters for chunks that are stored
-uncompressed but may still be encrypted (`ZDIC`, `PREV`): their `size_compressed` is
+uncompressed but may still be encrypted (`LAYR`, `ZDIC`, `PREV`): their `size_compressed` is
 non-zero yet there is no zstd layer to undo.
 
-**Encryption:** if the `ENCRYPTED` flag (bit 4) is set in the chunk descriptor's `flags`
-field, the payload (on-disk bytes, i.e. the zstd frame) is encrypted. See [§9](12-encryption.md#9-encryption-model).
-This is per-chunk encryption, distinct from the file-level `ENCRYPTED` flag
-(header bit 3) which signals the presence of an `AUTH` chunk.
+**Encryption:** if the `ENCRYPTED` flag (bit 4) is set in the chunk descriptor's
+`flags` field, the payload is encrypted as described in
+[§9.3](12-encryption.md#93-encryption-format): for most chunks the whole payload is
+one sealed unit, while `LAYR` keeps its header and block table plaintext and seals
+each block frame separately. This is per-chunk encryption, distinct from the
+file-level `ENCRYPTED` flag (header bit 3) which signals the presence of an `AUTH`
+chunk.
 
 **Null descriptors** (`offset == 0`) are ignored. Writers may pre-allocate directory
 space with null descriptors.

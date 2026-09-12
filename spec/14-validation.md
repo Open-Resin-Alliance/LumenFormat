@@ -10,7 +10,9 @@
 - [ ] Trailer magic `LEND` at `file_size - 8`.
 - [ ] Trailer CRC-32C matches `bytes[0 .. file_len-8]`.
 - [ ] `header.version` is recognized.
+- [ ] `HDR.hdr_version`, `LTBL.table_version`, `LAYR.layr_version`, `ZDIC.zdic_version` and `AUTH.auth_version` are recognized.
 - [ ] `header.dir_offset` is within file bounds.
+- [ ] If `header.total_uncompressed_size != 0`, it equals the sum of every chunk's `size_uncompressed`.
 - [ ] Chunk count matches directory entries.
 - [ ] No two chunks overlap. A chunk's stored extent is `[offset, offset + size_compressed)`
   when `size_compressed > 0`, and `[offset, offset + size_uncompressed)` when
@@ -32,6 +34,7 @@
 - [ ] `HDR.encoder_name_len <= 256`, and `HDR.size_uncompressed >= 52 + encoder_name_len` - the fixed fields before and after the name total 52 bytes, so a v1 `HDR` chunk is exactly `52 + encoder_name_len` bytes.
 - [ ] Every `LTBL.entries[i].block_index` is less than `LAYR.block_count`, and the sequence of `block_index` values is non-decreasing in `i`.
 - [ ] (Multi-sector only) For every layer `i` with `LTBL.entries[i].sector_count > 0`, the `sector_count` varint at the start of that layer's data within its block equals `LTBL.entries[i].sector_count` (the LAYR value is authoritative for decoding). Layers with `sector_count == 0` store no bytes at all. In single-sector mode, layer data starts with the encoding tag byte, not a `sector_count` varint.
+- [ ] (Single-sector only) Every non-empty layer has `LTBL.entries[i].sector_count == 1`.
 - [ ] `HDR.display_width_px × display_height_px > 0`.
 - [ ] `HDR.physical_width_px` is an integer multiple of `display_width_px`, and `physical_height_px` is an integer multiple of `display_height_px`. A ratio of 1 means one display pixel per physical pixel.
 - [ ] `META.meta_version` is present and recognized.
@@ -58,12 +61,14 @@
 - [ ] If `META.chamber_temperature_c` or `vat_temperature_c` present, values are in range `[0.0, 120.0]`.
 - [ ] If `LHAS` chunk present, recompute Merkle root from `layer_hashes` and verify it matches `merkle_root`.
 - [ ] (Strict mode) If `LHAS` chunk present, decompress and hash each layer; verify against `layer_hashes`.
+- [ ] If `PREV` chunk present, its payload parses as a PNG image.
 - [ ] If `VOXL` chunk present, payload is a valid VOXL file (parseable, recognized version, passes VOXL validation rules).
 - [ ] (Strict mode) If `VOXL` chunk present, scene metadata (printer name, resolution) is consistent with `HDR` fields.
 
 ### 11.3 Layer Data Validation (post-decompression)
 
 - [ ] `layr_header.block_count >= 1` and `layr_header.block_count <= HDR.total_layers`.
+- [ ] `layr_header.block_table_entry_size >= 24`, and the block table holds exactly `block_count` entries of that size.
 - [ ] Block table entries are contiguous and ordered: `frame_offset[0] == 0` and `frame_offset[k+1] == frame_offset[k] + frame_size[k]` for all `k`.
 - [ ] The end of the last block frame lies within the LAYR chunk payload.
 - [ ] Every block index in `0..block_count` is referenced by at least one LTBL entry.
@@ -109,7 +114,7 @@ accepts them, a strict validator rejects them.
 ### 11.6 Conformance Corpus
 
 The repository carries byte-exact test vectors and an independent validator under
-`test-vectors/`. Implementations SHOULD validate against them: the valid vectors
+[`test-vectors/`](test-vectors/). Implementations SHOULD validate against them: the valid vectors
 pin every uncompressed structure exactly, and each invalid vector fails exactly one
 named check from this section. See `test-vectors/README.md` for the check-name
 convention and for what is pinned exactly versus by property.

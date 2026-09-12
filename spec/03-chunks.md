@@ -54,7 +54,7 @@ across format versions without changing the 32-byte magic header.
 **Display readiness.** Layer masks are stored exactly as the printer must expose them.
 Mirroring (`mirror_x` / `mirror_y` in the slicer's build settings) is applied by the
 slicer before encoding, and pixel values are already scaled to the panel's bit depth.
-LUMEN therefore carries no mirror, rotation or bit-depth field, and a reader MUST NOT
+The file header therefore carries no mirror, rotation or bit-depth field, and a reader MUST NOT
 apply an additional transform. Firmware-side mirroring is a calibration concern that
 belongs to the printer, not the file ([§1.1](01-overview.md#11-what-lumen-is-not)).
 
@@ -102,7 +102,6 @@ Human-readable print parameters as a single JSON object.
   "bottom_retract_speed_mm_min": 100.0,
   "bottom_retract_distance2_mm": 4.0,
   "bottom_retract_speed2_mm_min": 120.0,
-  "bottom_retract_height2_mm": 0.0,
 
   // Wait/rest times (seconds)
   "wait_time_before_cure_sec": 1.0,
@@ -237,7 +236,7 @@ When a LUMEN-capable printer receives a file with a `PROF` chunk, it may:
       "manufacturer": "Open Resin Alliance",
       "model_pattern": "Ares 12K*",
       "display_width_px": 11520,
-      "display_height_px": 6320,
+      "display_height_px": 6480,
       "pixel_size_um": 19.0
     }
   ],
@@ -247,7 +246,7 @@ When a LUMEN-capable printer receives a file with a `PROF` chunk, it may:
     "name": "Ares 12K",
     "manufacturer": "Open Resin Alliance",
     "display_width_px": 11520,
-    "display_height_px": 6320,
+    "display_height_px": 6480,
     "pixel_size_um": 19.0,
     "build_width_mm": 218.0,
     "build_depth_mm": 123.0,
@@ -281,7 +280,6 @@ When a LUMEN-capable printer receives a file with a `PROF` chunk, it may:
     "bottom_retract_speed_mm_min": 100.0,
     "bottom_retract_distance2_mm": 4.0,
     "bottom_retract_speed2_mm_min": 120.0,
-    "bottom_retract_height2_mm": 0.0,
 
     "wait_time_before_cure_sec": 1.0,
     "wait_time_after_cure_sec": 0.0,

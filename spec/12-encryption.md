@@ -29,8 +29,8 @@ Two options, identified in the AUTH chunk:
 
 | `cipher_id` | Algorithm | Nonce size | Tag size | Notes |
 |-------------|-----------|------------|----------|-------|
-| `A256G` | AES-256-GCM | 12 bytes | 16 bytes | Hardware-accelerated on x86 (AES-NI) and ARM (AES extensions). |
-| `C20P1` | ChaCha20-Poly1305 | 12 bytes | 16 bytes | Faster in software; constant-time on all platforms. |
+| `A256` | AES-256-GCM | 12 bytes | 16 bytes | Hardware-accelerated on x86 (AES-NI) and ARM (AES extensions). |
+| `C20P` | ChaCha20-Poly1305 | 12 bytes | 16 bytes | Faster in software; constant-time on all platforms. |
 
 ### 9.3 Encryption Format
 

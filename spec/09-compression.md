@@ -66,6 +66,7 @@ reader whether a chunk payload carries a zstd frame. The levels are recommendati
 | HDR | None | Tiny (~50 bytes); read before decompressor init. |
 | AUTH | None | Tiny (~few hundred bytes); read before decompressor init. |
 | META | zstd level 3 | Small payload; speed matters. |
+| PROF | zstd level 3 | Reusable profile; small payload. |
 | SECT | zstd level 3 | Small payload. |
 | LROV | zstd level 3 | Small payload. |
 | PREV | None | PNG is already compressed. |

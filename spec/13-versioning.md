@@ -17,6 +17,11 @@
 | ZDIC chunk | `zdic_version` | Changes to the dictionary chunk layout. |
 | EXTD chunk | `ext_version` | Per-extension versioning. |
 
+`header.version` is the container version, not the version of this document: LUMEN
+v1.0 is carried by `header.version = 1`. A revision that changes the container
+layout bumps `header.version`; one that only adds fields bumps that field's own
+sub-version.
+
 ### 10.2 Forward Compatibility Mechanisms
 
 1. **Unknown chunk types:** Skip (chunk descriptor gives byte range).

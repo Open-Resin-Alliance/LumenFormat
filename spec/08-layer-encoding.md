@@ -27,6 +27,11 @@ Tags `0x03`–`0xFF` are reserved. Readers must refuse a layer with an unknown t
 Encoders MUST emit the canonical byte stream for the tag they choose; [§5.6](#56-canonical-encoding) defines the
 canonical form of each tag and the rules for choosing one.
 
+`total_pixels`, used throughout this section, is the number of pixels in a layer
+mask: `HDR.display_width_px × HDR.display_height_px`. The panel's own dimensions
+(`physical_width_px`, `physical_height_px`) may be integer multiples of those and do
+not change the mask grid.
+
 ### 5.1 Rationale
 
 Conceptually, REE replaces classic RLE `(value, length)` with `(value, end_position)`
@@ -68,7 +73,8 @@ before allocating decode buffers.
 ### 5.3 Binary REE (No Anti-Aliasing)
 
 Used when every pixel is 0 or 255.
-Runs strictly alternate: even runs are black, odd runs are white.
+Runs alternate in value, starting from `first_value`: run `i` carries `first_value` when
+`i` is even, and the opposite value when `i` is odd.
 
 **Stream format (as stored):**
 
@@ -126,7 +132,7 @@ Absolute end positions are recovered by accumulating the stored lengths.
 **Decoding algorithm:**
 
 ```
-total_pixels = width × height
+total_pixels = display_width_px × display_height_px
 first_value = read_u8()        // 0x00 or 0xFF
 run_count = read_varint()
 if run_count == 0: fill 0; return
@@ -231,16 +237,17 @@ Since AA pixels cluster along geometry edges, consecutive deltas are small
 // Step 1: decode binary mask
 decode_binary_ree() → fill mask with 0 or 255
 
-// Step 2: decode AA overlay
+// Step 2: decode AA overlay: every position, then every value
 aa_count = read_varint()
 if aa_count == 0: return   // pure binary, no AA pixels
 
 pos = 0
+positions = []
 for i in 0..aa_count:
-    delta = read_varint()
-    pos += delta            // reconstruct absolute pixel index
-    value = read_u8()
-    mask[pos] = value       // overwrite the thresholded value
+    pos += read_varint()     // delta-encoded absolute pixel index
+    positions.push(pos)
+for i in 0..aa_count:
+    mask[positions[i]] = read_u8()   // overwrite the thresholded value
 ```
 
 **Encoding guidelines:**
