@@ -116,6 +116,7 @@ To avoid confusion with other parts of the ORA ecosystem, Lumen is explicitly
 | Magic bytes | `LUMN` (`0x4C 0x55 0x4D 0x4E`) |
 | Endianness | Little-endian (all multi-byte integers) |
 | Coordinate basis | Right-handed, Z-up |
+| Image orientation | Layer masks are stored as the printer must expose them; readers apply no flip (§4.1). |
 | Units | Millimeters (`mm`), millimeters per minute (`mm/min`) |
 | Range notation | `a..b` is half-open `[a, b)`. `for i in 0..N` iterates `i = 0, 1, ..., N-1`. |
 
@@ -219,6 +220,10 @@ This is per-chunk encryption, distinct from the file-level `ENCRYPTED` flag
 **Null descriptors** (`offset == 0`) are ignored. Writers may pre-allocate directory
 space with null descriptors.
 
+**Alignment.** Readers MUST NOT assume any alignment for a chunk payload. Writers
+SHOULD place payloads at 8-byte-aligned offsets - the explicit `offset` field makes the
+resulting gaps free - so an embedded reader can map or DMA into a payload directly.
+
 ### 3.3 Directory Trailer
 
 Last 8 bytes of the file.
@@ -287,6 +292,13 @@ across format versions without changing the 32-byte magic header.
 | 40+N | 4 | `f32` | `build_height_mm` | Build plate Z dimension. |
 | 44+N | 4 | `f32` | `layer_height_mm` | Default layer thickness. |
 | 48+N | 4 | `u32` | `total_layers` | Total layer count. |
+
+**Display readiness.** Layer masks are stored exactly as the printer must expose them.
+Mirroring (`mirror_x` / `mirror_y` in the slicer's build settings) is applied by the
+slicer before encoding, and pixel values are already scaled to the panel's bit depth.
+Lumen therefore carries no mirror, rotation or bit-depth field, and a reader MUST NOT
+apply an additional transform. Firmware-side mirroring is a calibration concern that
+belongs to the printer, not the file (§1.1).
 
 ### 4.2 META - Metadata Chunk
 
@@ -636,9 +648,32 @@ Contains one or more recipient entries. Each entry:
 
 Total per entry: 104 bytes. `machine_section_len / 104` gives the recipient count.
 
-To decrypt: the machine performs X25519 ECDH with its private key and
-`ephemeral_pk`, derives a KEK from the shared secret via HKDF-SHA-256, then
-unwraps `wrapped_key` with AES-256-KW.
+The sender must obtain the recipient's X25519 public key out of band (a machine key
+registry, or a pairing step). The file carries only its fingerprint, as an index; there
+is no way to recover the public key from `machine_fp`.
+
+To decrypt, for each entry whose `machine_fp` matches the local machine:
+
+1. `ss = X25519(recipient_private_key, ephemeral_pk)`. If `ss` is the all-zero value
+   (the low-order-point result), reject the entry.
+2. Derive the KEK with HKDF-SHA-256:
+
+   ```
+   KEK = HKDF-SHA-256(
+           IKM  = ss,
+           salt = machine_fp,
+           info = "Lumen machine-binding v1\0" || ephemeral_pk || machine_fp,
+           L    = 32)
+   ```
+
+   `info` is the ASCII label, then a NUL byte, then the two 32-byte values in the order
+   shown. All lengths are fixed, so the concatenation is unambiguous.
+3. Unwrap `wrapped_key` with AES-256-KW. RFC 3394 unwrapping fails on a wrong KEK, so a
+   successful unwrap is what proves possession of the recipient private key.
+
+Binding both values and a protocol label into `info`, and using `machine_fp` as the HKDF
+salt, keeps the KEK unique to this recipient entry and to this construction; a bare
+`HKDF(ss)` would be reassociable with any other use of the same shared secret.
 
 **Notes:**
 - All recipient entries wrap the **same** session key - any authorized machine
@@ -1030,9 +1065,8 @@ Readers skip unknown EXTD chunks (or refuse if `critical` is set).
 | `ext_type` | Name | Purpose |
 |------------|------|---------|
 | `SIGN` | Signature | Cryptographic signature for file authenticity. |
-| `BLKP` | Blocked LAYR | Alternative: independently-compressed layer blocks for memory-constrained readers. |
-| `VLYR` | Variable Layers | Per-layer height values (future variable layer height). |
-| `CMLT` | Compression ML | Extended dictionary training metadata. |
+| `VLYR` | Variable Layers | Per-layer height values. Reserved for a future core mechanism; not usable in v1 (§5.6). |
+| `CMLT` | Compression ML | Training metadata for the `ZDIC` dictionary (corpus size, training parameters). |
 | `CMAP` | Color Map | Per-sector color channel mapping for multi-color printing. |
 
 ---
@@ -1315,7 +1349,7 @@ Where:
 
 **Practical use cases:**
 
-- **Adaptive layer height (requires VOXL):** The cure curve tells Odyssey what
+- **Adaptive layer height (not available in v1):** The cure curve tells Odyssey what
   exposure to use for a given layer height, but changing the layer height
   requires re-slicing the source geometry - you cannot derive 30 μm layers from
   fixed 50 μm layer data. When a `.lumen` file includes both a `VOXL` chunk
@@ -1325,6 +1359,14 @@ Where:
   `E_new = Ec × exp(Cd_new / Dp)`. No guesswork, no test prints. Without the
   VOXL, the cure curve still helps validate that the existing exposure is
   appropriate for the given layer height.
+
+  **Adaptive layer height is not available in v1.** It needs per-layer heights in the
+  file, and v1 has nowhere to put them: `HDR.layer_height_mm` is a single default, and
+  the `VLYR` extension is non-critical (§4.13), so a conforming reader may skip it and
+  print at the wrong Z. A future core mechanism - most likely an `LTBL` field - is
+  required first. Until then encoders MUST NOT emit variable-height `.lumen` files, and
+  the cure curve's v1 role is limited to validating the exposure for the fixed layer
+  height in use.
 - **Batch compensation:** Different resin batches have slightly different Dp/Ec.
   A profile with measured batch parameters automatically corrects exposure
   without requiring re-slicing.
@@ -1346,8 +1388,8 @@ is 149 GB of raw data. Without aggressive compression, files are unmanageably
 large for storage, network transfer, and embedded-printer memory.
 
 Lumen's compression strategy has two layers. First, the REE encoding (§5)
-reduces the per-layer information content well below that of raw pixels or
-classic RLE. Second, zstd compresses the layer data stream in blocks with a shared
+reduces the per-layer information content well below that of raw pixels.
+Second, zstd compresses the layer data stream in blocks with a shared
 trained dictionary, exploiting the fact that adjacent layers in a
 3D print are nearly identical - only the edges change. No existing resin print
 format does cross-layer compression; this alone is expected to yield a step
@@ -1505,7 +1547,15 @@ per-layer overrides.
 - **Content-scoped encryption.** The directory, HDR, AUTH, LTBL, and the LAYR header
   and block table remain plaintext. Everything that carries content or content-derived
   data (LAYR block frames, ZDIC, META, PROF, SECT, LROV, VOXL) is encrypted. PREV is
-  optionally encrypted.
+  optionally encrypted. When `AUTH` is present every content chunk MUST be encrypted;
+  v1 has no partial-encryption mode, so the `ENCRYPTED` flag is set on all of them.
+- **Confidentiality and per-chunk integrity, not authenticity.** Encryption hides
+  content and detects modification of each sealed unit, and the AAD binds a unit to its
+  chunk type and index (§9.3). It does **not** authenticate the file: the fixed header,
+  the chunk directory, `LTBL`, `LHAS`, and the LAYR header and block table are plaintext
+  and unauthenticated, so an attacker can still add, remove, reorder or repoint chunks.
+  A file-level signature (`EXTD`/`SIGN`) is the only mechanism that proves origin, and
+  it is optional in v1.
 
 ### 9.2 Encryption Algorithm
 
@@ -1657,6 +1707,7 @@ prefer the newer one.
 - [ ] The end of the last block frame lies within the LAYR chunk payload.
 - [ ] Every block index in `0..block_count` is referenced by at least one LTBL entry.
 - [ ] Decompressing block `k` yields exactly `block_table[k].uncompressed_size` bytes.
+- [ ] Before allocating, each block's `uncompressed_size` is checked against an upper bound derived from the layers it contains (grayscale REE costs at most about 5 bytes per pixel plus framing), so a corrupt or hostile chunk cannot force an unbounded allocation.
 - [ ] A block frame's zstd dictionary ID equals `ZDIC.dict_id` when `ZDIC` is present, and is `0` when it is absent.
 - [ ] For each LTBL entry: `data_offset + data_size <= block_table[block_index].uncompressed_size`.
 - [ ] All varints are well-formed: minimally encoded (no overlong forms), terminated within the containing buffer, and at most 10 bytes (the maximum for a 64-bit value).
@@ -1678,8 +1729,7 @@ prefer the newer one.
 - [ ] If `AUTH.mode` bit 0 is set, `password_section_len >= 65` (the fixed password section size; see §4.4.1).
 - [ ] If `AUTH.mode` bit 1 is set, `machine_section_len >= 104` and `machine_section_len % 104 == 0` (must contain at least one complete recipient entry; see §4.4.2).
 - [ ] Machine-binding entries have valid key lengths.
-- [ ] Argon2id parameters are within reasonable bounds (`iterations >= 1`,
-  `memory_kib >= 8192`).
+- [ ] Argon2id parameters are within the reader's supported budget. Readers MUST reject a file whose derivation cost exceeds that budget rather than attempting it - a hostile file can otherwise exhaust memory. Recommended ceilings: `iterations <= 10`, `memory_kib <= 4 194 304`, `parallelism <= 16`.
 
 ### 11.5 Validation Levels
 
