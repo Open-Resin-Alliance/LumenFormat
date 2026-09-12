@@ -13,12 +13,10 @@ output format for the **DragonFruit** slicer and the primary print format
 consumed by **Odyssey** firmware (via its **Orion** frontend).
 
 Existing container formats (CTB, GOO, AFZ, NanoDLP) were reverse-engineered from
-proprietary ecosystems. They carry the legacy of fixed binary layouts, weak
-compression, vendor obfuscation, and fundamental design constraints that limit
-what next-generation hardware can achieve. LUMEN breaks from this lineage
-entirely. It is designed from first principles to be the most efficient,
-flexible, and future-proof resin print format ever specified - with no
-proprietary baggage and no compromises made for legacy compatibility.
+proprietary ecosystems. They carry the legacy of fixed binary layouts, run-length-only
+compression, obfuscated layer encoding, and fixed limits on resolution and layer
+count. LUMEN breaks from this lineage entirely. It is designed from first principles,
+without proprietary baggage and without constraints kept for legacy compatibility.
 
 This document is the normative specification for LUMEN v1.0. It defines every
 byte on disk, every semantic invariant, and every validation rule a conforming
@@ -50,7 +48,7 @@ Alliance:
    approximately 150 GB of raw pixel data before compression. LUMEN combines
    Run-End Encoding (REE), zstd cross-layer dictionary compression, and a novel
    split encoding strategy for anti-aliased prints to push compressed file sizes
-   as low as the underlying information theory allows.
+   far below what run-length-only formats achieve.
 
 2. **Human-inspectable metadata.** Print parameters, material definitions,
    per-layer overrides, and machine metadata are stored as structured JSON.
@@ -65,17 +63,16 @@ Alliance:
 4. **Multi-material from the ground up.** Sectors (exposure groups) are a
    first-class concept, not an afterthought. Each layer can carry multiple
    independent masks, each with its own resin, exposure, and motion profile -
-   ready for the multi-vat hardware that will define the next decade of resin
-   printing.
+   ready for multi-vat hardware.
 
 5. **Per-layer settings.** Any timing parameter can be overridden for any layer
-   or range of layers. This replaces the rigid "bottom layers, transition
-   layers, normal layers" model that has constrained every existing format.
+   or range of layers. The bottom, transition and normal ranges still describe the
+   common case ([§8](11-layer-timing.md#8-per-layer-settings-model)); per-layer overrides extend
+   that model rather than replacing it.
 
-6. **Open and transparent.** No obfuscation, no mandatory encryption designed
-   for vendor lock-in. Optional authenticated encryption is available for secure
-   facilities that require confidentiality - but it is the user's choice, never
-   the vendor's demand.
+6. **Open and transparent.** No obfuscation and no mandatory encryption. Optional
+   authenticated encryption is available for secure facilities that require
+   confidentiality, and its use is the file author's choice.
 
 ### 1.1 What LUMEN Is Not
 
@@ -97,9 +94,8 @@ To avoid confusion with other parts of the ORA ecosystem, LUMEN is explicitly
   interpret. Printer-specific calibration data belongs in the firmware, not
   in the print file.
 
-- **Not a replacement for existing formats - yet.** LUMEN requires Odyssey
-  firmware. Stock printers still need CTB, GOO, or other legacy formats.
-  As Odyssey adoption grows, LUMEN may replace them.
+- **Not a drop-in replacement.** LUMEN requires firmware that implements it.
+  Printers that do not still need CTB, GOO, or another format they support.
 
 ---
 

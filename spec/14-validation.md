@@ -114,7 +114,15 @@ accepts them, a strict validator rejects them.
 ### 11.6 Conformance Corpus
 
 The repository carries byte-exact test vectors and an independent validator under
-[`test-vectors/`](test-vectors/). Implementations SHOULD validate against them: the valid vectors
-pin every uncompressed structure exactly, and each invalid vector fails exactly one
-named check from this section. See `test-vectors/README.md` for the check-name
-convention and for what is pinned exactly versus by property.
+[`test-vectors/`](test-vectors/). Implementations SHOULD validate against them. Each
+valid vector pins the uncompressed structures it contains exactly - the file header,
+`HDR`, `LTBL`, the `LAYR` header and block table, `LHAS`, every REE stream, the chunk
+directory and the trailer - and each invalid vector fails exactly one named check from
+this section. Compressed payloads are pinned by property rather than by byte, because
+zstd output is not stable across versions.
+
+Coverage is not exhaustive. The corpus exercises single- and multi-sector layer data,
+the empty-layer form, all three encoding tags, dictionary compression and multi-block
+framing. It does **not** yet cover encryption (`AUTH`), previews (`PREV`) or embedded
+scenes (`VOXL`), so those parts of this section have no executable check. See
+`test-vectors/README.md` for the check-name convention and the full scope.
