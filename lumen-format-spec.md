@@ -1989,10 +1989,12 @@ behaviour is specified in §11 and exercised by the conformance corpus in
 **Published specification:** this document,
 `https://github.com/Open-Resin-Alliance/LumenFormat/blob/main/lumen-format-spec.md`.
 RFC 6838 does not require a vendor-tree registration to be published as an RFC, but
-the reviewer has to be able to read the specification, so this URL must resolve
-publicly before submitting. The registration template is MIT-licensed (see
-*License*), which satisfies the requirement in §4.10 that the copyright on the
-template allow IANA to copy it into the registry.
+the reviewer has to be able to read the specification, so this URL MUST resolve
+publicly before submitting. **The repository is currently private**, so either it is
+made public or the document is published at a stable `openresin.org` URL first. The
+registration template is MIT-licensed (see *License*), which satisfies the
+requirement in §4.10 that the copyright on the template allow IANA to copy it into
+the registry.
 
 **Applications that use this media type:** DragonFruit (encoder); Odyssey
 firmware, via the Orion frontend (decoder).
@@ -2014,10 +2016,8 @@ These five names are the ones RFC 6838 §5.6 uses, which also requires fields th
 do not apply to read `N/A` exactly - not `none`, or any other word that could be
 mistaken for a response.
 
-**Person & email address to contact for further information:** Open Resin
-Alliance, `<contact role address>`. A working address is required; the issue tracker
-URL alone is not enough. A role address such as `maintainers@openresin.org` must be
-supplied before submitting.
+**Person & email address to contact for further information:** Paul Skapczyk,
+`paul@openresin.org`.
 
 **Intended usage:** COMMON
 
@@ -2041,6 +2041,21 @@ domain, `openresin.org`.
 The standards tree (`application/lumen`, with no `vnd.` prefix) would require the
 Alliance to be recognised as a standards body by IANA. The vendor tree is the
 correct tree until that changes.
+
+### D.2 Submission checklist
+
+1. **Make the specification reachable.** The repository is private today. Either
+   make `Open-Resin-Alliance/LumenFormat` public, or publish the document at a
+   stable URL such as `openresin.org/specs/lumen`. Note that the website currently
+   carries only a `blog` collection, so a specifications section would be new work.
+2. **Submit** by pasting this appendix into
+   `https://www.iana.org/form/media-types`, or by emailing it to `iana@iana.org`.
+3. **Optional pre-review.** Post the template to `media-types@iana.org` first
+   (§5.2); comments there are cheaper than a returned submission.
+4. **Expect one revision round.** The reviewer returns submissions that do not meet
+   RFC 6838's requirements. The two easiest fields to get wrong are the contact
+   address and a reachable specification, and a name that does not match the
+   specification it is registered against.
 
 ---
 
