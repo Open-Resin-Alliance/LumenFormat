@@ -13,5 +13,7 @@ Written and maintained by Paul Skapczyk.
 Rendered: <https://openresin.org/specs/lumen>
 
 Status: **LUMEN v1.0**, published 2026-09-12. Corrections and discussion are welcome
-as GitHub issues. Changes to the published version follow the deprecation policy in
-the specification (§10.3).
+as GitHub issues. Changes to the published version follow the change-control policy in the
+specification (§10.3): an erratum may correct a published revision in place, additive
+changes ship as a minor revision, and anything that changes what a conforming encoder
+writes waits for the next major revision.

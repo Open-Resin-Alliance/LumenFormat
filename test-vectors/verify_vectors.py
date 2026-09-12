@@ -20,6 +20,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import struct
 import sys
 
@@ -198,6 +199,11 @@ SEALED_FLAG = 0x10          # chunk descriptor: this chunk's payload is sealed
 AEAD_OVERHEAD = 28          # nonce[12] + tag[16]
 SEALED_CHUNK_TYPES = (b"LAYR", b"META", b"PROF", b"SECT", b"LROV", b"VOXL", b"ZDIC")
 CLEAR_CHUNK_TYPES = (b"HDR\0", b"AUTH", b"LTBL")
+# PREV's sealing is optional (§4.7), so it is deliberately absent from
+# SEALED_CHUNK_TYPES: a clear PREV beside a sealed one is not a defect.  Its
+# ENCRYPTED bit still has to be honoured when it is set, so the decrypt phase
+# covers it too.
+SEALABLE_CHUNK_TYPES = SEALED_CHUNK_TYPES + (b"PREV",)
 COMPRESSED_TYPES = frozenset((b"META", b"PROF", b"SECT", b"LROV", b"VOXL"))
 
 
@@ -316,12 +322,71 @@ def chunk_flag_report(real, blocks, encrypted_flag: bool, sealed_layr: bool):
     return (not bad), ", ".join(bad)
 
 
+# ------------------------------------------------- content chunk helpers
+#
+# §4.3 / §4.6 / §4.7, shared by the PROF, LROV and PREV checks.
+
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+UUID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}"
+                     r"-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+
+
+def is_number(v) -> bool:
+    """A JSON number, as opposed to a bool (which is an int in Python)."""
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def materials_shape_ok(mats) -> bool:
+    """§11.2: absent, or a non-empty array of objects each with a non-empty name."""
+    return mats is None or (
+        isinstance(mats, list) and len(mats) > 0
+        and all(isinstance(m, dict) and m.get("name") for m in mats))
+
+
+def lrov_indices_ok(entry, total_layers: int) -> bool:
+    """§11.2: layer, and both layer_range bounds, in [0, total_layers-1]."""
+    def in_range(v):
+        return is_number(v) and 0 <= v <= total_layers - 1
+
+    if "layer" in entry:
+        return in_range(entry["layer"])
+    rng = entry.get("layer_range")
+    return isinstance(rng, list) and len(rng) == 2 and all(in_range(v) for v in rng)
+
+
+def lrov_range_ordered(entry) -> bool:
+    """§11.2: layer_range is inclusive and end >= start."""
+    rng = entry.get("layer_range")
+    if rng is None:
+        return True
+    return isinstance(rng, list) and len(rng) == 2 and rng[1] >= rng[0]
+
+
+def png_header_ok(blob: bytes) -> bool:
+    """§4.7 / §11.2 (strict): PNG signature followed by a well-formed IHDR.
+
+    Only the leading IHDR is inspected: the signature must be present, its
+    declared length must be at least the 13 bytes of the fixed IHDR layout, and
+    its width and height must both be non-zero.
+    """
+    if len(blob) < 24 or blob[:8] != PNG_SIGNATURE:
+        return False
+    if struct.unpack_from(">I", blob, 8)[0] < 13 or blob[12:16] != b"IHDR":
+        return False
+    width, height = struct.unpack_from(">II", blob, 16)
+    return width > 0 and height > 0
+
+
 # ------------------------------------------------------------- file reader
 
 class Checks:
     def __init__(self, verbose: bool):
         self.items: list[tuple[str, bool]] = []
         self.verbose = verbose
+        # Plaintext payloads of the content chunks, keyed by type tag; filled in
+        # by validate() so check_manifest() can pin them without re-deriving the
+        # session key.
+        self.payloads: dict = {}
 
     def __call__(self, name: str, ok: bool, detail: str = "") -> bool:
         self.items.append((name, bool(ok)))
@@ -521,7 +586,7 @@ def validate(path: str, strict: bool, verbose: bool = False, crypto: dict | None
             halt_crypto = halt_content = True
         else:
             for e in real:
-                if (e["type"] in SEALED_CHUNK_TYPES and e["type"] != b"LAYR"
+                if (e["type"] in SEALABLE_CHUNK_TYPES and e["type"] != b"LAYR"
                         and (e["flags"] & SEALED_FLAG)):
                     try:
                         decrypted[e["offset"]] = open_unit(
@@ -561,6 +626,9 @@ def validate(path: str, strict: bool, verbose: bool = False, crypto: dict | None
     def content(ctype):
         return content_entry(find(ctype)[0])
 
+    # Plaintext payloads of the optional content chunks, for check_manifest().
+    payloads: dict = {}
+
     if halt_content:
         chk("__checks_complete", True)
         return chk
@@ -572,15 +640,74 @@ def validate(path: str, strict: bool, verbose: bool = False, crypto: dict | None
         "meta_version", "normal_exposure_sec", "bottom_exposure_sec", "bottom_layer_count",
         "transition_layer_count", "layer_height_mm", "lift_distance_mm", "lift_speed_mm_min",
         "retract_distance_mm", "retract_speed_mm_min")))
-    chk("meta.materials_shape", mats is None or (
-        isinstance(mats, list) and len(mats) > 0
-        and all(isinstance(m, dict) and m.get("name") for m in mats)))
+    chk("meta.materials_shape", materials_shape_ok(mats))
     sects = [json.loads(content_entry(e)) for e in find(b"SECT")]
     chk("sect.sector_id_nonzero", all(s.get("sector_id", 0) >= 1 for s in sects))
     chk("sect.ids_unique", len({s["sector_id"] for s in sects}) == len(sects))
     chk("sect.material_index_bounds", all(
         "material_index" not in s or (mats is not None and 0 <= s["material_index"] < len(mats))
         for s in sects))
+    sect_ids = {s.get("sector_id") for s in sects if "sector_id" in s}
+
+    # ---- PROF / LROV / PREV --------------------------------------------
+    # Optional content chunks.  PROF and LROV go through the same
+    # sealed/compressed path as META/SECT; PREV is uncompressed but may carry
+    # its own ENCRYPTED bit (§4.7), independent of the file-level flag.
+    if find(b"PROF"):
+        prof_plain = content(b"PROF")
+        prof = json.loads(prof_plain)
+        if not isinstance(prof, dict):
+            prof = {}
+        settings = prof.get("settings")
+        chk("prof.profile_identity",
+            isinstance(prof.get("profile_name"), str) and prof["profile_name"] != ""
+            and isinstance(prof.get("profile_version"), str) and prof["profile_version"] != "")
+        chk("prof.profile_type", prof.get("profile_type") in ("material", "printer", "combined"))
+        chk("prof.settings_exposure",
+            isinstance(settings, dict)
+            and is_number(settings.get("normal_exposure_sec"))
+            and settings["normal_exposure_sec"] > 0.0
+            and is_number(settings.get("bottom_exposure_sec"))
+            and settings["bottom_exposure_sec"] > 0.0)
+        chk("prof.settings_layer_height",
+            isinstance(settings, dict)
+            and is_number(settings.get("layer_height_mm"))
+            and settings["layer_height_mm"] > 0.0)
+        curve = settings.get("cure_curve") if isinstance(settings, dict) else None
+        chk("prof.cure_curve", curve is None or (
+            isinstance(curve, dict)
+            and is_number(curve.get("dp_um")) and curve["dp_um"] > 0.0
+            and is_number(curve.get("ec_mj_cm2")) and curve["ec_mj_cm2"] > 0.0
+            and is_number(curve.get("e0_mj_cm2")) and curve["e0_mj_cm2"] >= 0.0))
+        puuid = prof.get("profile_uuid")
+        chk("prof.profile_uuid", puuid is None or (
+            isinstance(puuid, str) and UUID_RE.fullmatch(puuid) is not None))
+        chk("prof.materials_shape", materials_shape_ok(prof.get("materials")))
+        payloads[b"PROF"] = prof_plain
+
+    if find(b"LROV"):
+        lrov_plain = content(b"LROV")
+        lrov = json.loads(lrov_plain)
+        overrides = lrov.get("overrides") if isinstance(lrov, dict) else None
+        entries = overrides if isinstance(overrides, list) else None
+        chk("lrov.entry_form", entries is not None and all(
+            isinstance(x, dict) and (("layer" in x) != ("layer_range" in x)) for x in entries))
+        chk("lrov.layer_index_range", entries is not None and all(
+            lrov_indices_ok(x, total_layers) for x in entries))
+        chk("lrov.layer_range_order", entries is not None and all(
+            lrov_range_ordered(x) for x in entries))
+        chk("lrov.sector_id_defined", entries is not None and all(
+            "sector_id" not in x or x["sector_id"] == 0 or x["sector_id"] in sect_ids
+            for x in entries))
+        payloads[b"LROV"] = lrov_plain
+
+    prev_e = find(b"PREV")
+    if prev_e:
+        chk("prev.flags", all(
+            (e["flags"] & 0x0F) <= 3 and (e["flags"] >> 5) == 0 for e in prev_e))
+        if strict:
+            chk("prev.png_signature", all(png_header_ok(content_entry(e)) for e in prev_e))
+        payloads[b"PREV"] = [content_entry(e) for e in prev_e]
 
     # dictionary
     zdic = find(b"ZDIC")
@@ -729,6 +856,7 @@ def validate(path: str, strict: bool, verbose: bool = False, crypto: dict | None
         chk("sector.partition", partition_ok)
 
     # ---- manifest agreement --------------------------------------------
+    chk.payloads = payloads
     chk("__checks_complete", True)
     return chk
 
@@ -761,7 +889,7 @@ def main() -> int:
         path = os.path.join(HERE, v["file"])
         chk = validate(path, strict=True, verbose=args.verbose, crypto=v.get("crypto"))
         bad = chk.failed()
-        ref = check_manifest(v, path)
+        ref = check_manifest(v, path, chk.payloads)
         if ref:
             bad += ref
         status = "PASS" if not bad else "FAIL"
@@ -803,8 +931,14 @@ def main() -> int:
     return 1 if failures else (3 if skipped else 0)
 
 
-def check_manifest(v: dict, path: str) -> list[str]:
-    """Compare the committed bytes against the recorded golden values."""
+def check_manifest(v: dict, path: str, payloads: dict | None = None) -> list[str]:
+    """Compare the committed bytes against the recorded golden values.
+
+    `payloads` carries the plaintext payload of each optional content chunk as
+    the validator decoded it, keyed by type tag (a list for PREV, in file
+    order), so the recorded `chunk_payload_sha256` pins can be compared without
+    re-deriving the session key here.  An absent payload has no pin to check.
+    """
     bad = []
     raw = open(path, "rb").read()
     if len(raw) != v["file_size"]:
@@ -852,6 +986,23 @@ def check_manifest(v: dict, path: str) -> list[str]:
         leaf = raw[lhas_off + 38 + 32 * i: lhas_off + 38 + 32 * (i + 1)].hex()
         if leaf != rec["lhas_leaf"]:
             bad.append("manifest.layer[%d].lhas_leaf" % i)
+            break
+
+    # plaintext payload pins for the optional content chunks (§11.6)
+    available = payloads or {}
+    for ctype, want in sorted((v.get("chunk_payload_sha256") or {}).items()):
+        got = available.get(ctype.encode("ascii"))
+        if got is None:
+            continue
+        if isinstance(want, list):
+            actual = ([hashlib.sha256(b).hexdigest() for b in got]
+                      if isinstance(got, list) else [])
+            mismatch = actual != want
+        else:
+            mismatch = (not isinstance(got, (bytes, bytearray))
+                        or hashlib.sha256(got).hexdigest() != want)
+        if mismatch:
+            bad.append("manifest.chunk_payload_sha256")
             break
     return bad
 

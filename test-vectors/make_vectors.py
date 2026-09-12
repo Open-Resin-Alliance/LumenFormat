@@ -20,6 +20,7 @@ import json
 import os
 import struct
 import sys
+import zlib
 from importlib.metadata import version as package_version
 
 import zstandard as zstd
@@ -301,6 +302,86 @@ def layr_payload(frames: list[bytes], uncompressed_sizes: list[int]) -> bytes:
     return struct.pack("<III", 1, len(frames), BLOCK_TABLE_ENTRY_SIZE) + bytes(table) + b"".join(frames)
 
 
+def prof_payload(settings_extra: dict | None = None, **overrides) -> bytes:
+    """A reusable print profile (spec 4.3), with META's field names under `settings`."""
+    prof = {
+        "profile_name": "LumenFormat test profile",
+        "profile_version": "1.0.0",
+        "profile_type": "combined",
+        "profile_uuid": "3f2504e0-4f89-11d3-9a0c-0305e82c3301",
+        "settings": {
+            "normal_exposure_sec": 2.5,
+            "bottom_exposure_sec": 32.0,
+            "bottom_layer_count": 5,
+            "transition_layer_count": 8,
+            "layer_height_mm": 0.05,
+            "lift_distance_mm": 5.0,
+            "lift_speed_mm_min": 65.0,
+            "lift_distance2_mm": 3.0,
+            "lift_speed2_mm_min": 200.0,
+            "retract_distance_mm": 4.0,
+            "retract_speed_mm_min": 150.0,
+            "retract_distance2_mm": 2.0,
+            "retract_speed2_mm_min": 180.0,
+            "bottom_lift_distance_mm": 6.0,
+            "bottom_lift_speed_mm_min": 50.0,
+            "bottom_retract_distance_mm": 6.0,
+            "bottom_retract_speed_mm_min": 100.0,
+            "wait_time_before_cure_sec": 1.0,
+            "wait_time_after_cure_sec": 0.0,
+            "wait_time_after_lift_sec": 0.5,
+            "delay_mode": "light_off",
+            "light_off_delay_sec": 1.0,
+            "light_pwm": 255,
+            "chamber_temperature_c": 30.0,
+            "vat_temperature_c": 28.0,
+            "cure_curve": {"dp_um": 120.0, "ec_mj_cm2": 7.5, "e0_mj_cm2": 3.0},
+        },
+        "materials": [
+            {"name": "ABS-Like Grey", "brand": "DragonFruit", "family": "abs-like",
+             "density_g_ml": 1.1, "color_rgba": [128, 128, 128, 255],
+             "bottle_price": 29.99, "bottle_capacity_ml": 1000},
+        ],
+        "scale_compensation_pct": {"x": 0.5, "y": 0.5, "z": 0.0},
+        "extra": {},
+    }
+    if settings_extra:
+        prof["settings"].update(settings_extra)
+    prof.update(overrides)
+    return json.dumps(prof, indent=2, sort_keys=True).encode()
+
+
+def lrov_payload(overrides: list) -> bytes:
+    """Layer overrides (spec 4.6)."""
+    return json.dumps({"overrides": overrides}, indent=2, sort_keys=True).encode()
+
+
+def png_preview(width: int, height: int, rgb=(200, 200, 200)) -> bytes:
+    """A minimal deterministic 8-bit RGB PNG for PREV vectors (spec 4.7)."""
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        return (struct.pack(">I", len(data)) + tag + data
+                + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF))
+    rows = b"".join(b"\x00" + bytes(rgb) * width for _ in range(height))
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr)
+            + chunk(b"IDAT", zlib.compress(rows, 9)) + chunk(b"IEND", b""))
+
+
+def payload_hashes(chunks: list[dict]) -> dict:
+    """SHA-256 of each PROF/LROV/PREV plaintext payload, as the manifest records it."""
+    out: dict = {}
+    for ch in chunks:
+        name = ch["type"].decode("ascii").rstrip("\x00")
+        if name not in ("PROF", "LROV", "PREV"):
+            continue
+        digest = hashlib.sha256(ch["payload"]).hexdigest()
+        if name == "PREV":
+            out.setdefault("PREV", []).append(digest)
+        else:
+            out[name] = digest
+    return out
+
+
 # --------------------------------------------------------------------------
 # container assembly
 # --------------------------------------------------------------------------
@@ -476,19 +557,31 @@ def sparse_layers(count: int, total: int) -> list:
 
 
 def content_chunks(enc: dict, encoder_name: str, display: tuple[int, int], layer_height: float,
-                   layer_count: int, meta_extra) -> list[dict]:
-    """The chunk list before any encryption, in the order section 3 recommends."""
+                   layer_count: int, meta_extra, prof: bytes | None = None,
+                   lrov: bytes | None = None, prevs=()) -> list[dict]:
+    """The chunk list before any encryption, in the order section 3 recommends.
+
+    `prevs` is a list of (payload, role, seal) triples: a PREV's role lives in its
+    chunk descriptor flags, and its sealing is optional even in an encrypted file
+    (spec 4.7, 9.1).
+    """
     w, h = display
     chunks = [
         {"type": b"HDR\0", "payload": hdr_payload(
             encoder_name, w, h, 218.0, 123.0, 250.0, layer_height, layer_count)},
         {"type": b"META", "payload": meta_payload(**(meta_extra or {})), "compressed": True},
     ]
+    if prof is not None:
+        chunks.append({"type": b"PROF", "payload": prof, "compressed": True})
     if enc["multi_sector"]:
         chunks.append({"type": b"SECT", "payload": sect_payload(1, "Support", 3.0),
                        "compressed": True})
+    if lrov is not None:
+        chunks.append({"type": b"LROV", "payload": lrov, "compressed": True})
     if enc["use_dict"]:
         chunks.append({"type": b"ZDIC", "payload": zdic_payload(enc["dict_bytes"], enc["dict_id"])})
+    for payload, role, seal_prev in prevs:
+        chunks.append({"type": b"PREV", "payload": payload, "flags": role, "seal": seal_prev})
     chunks += [
         {"type": b"LTBL", "payload": ltbl_payload(enc["entries"])},
         {"type": b"LHAS", "payload": lhas_payload(enc["leaves"])},
@@ -513,7 +606,8 @@ def stored_block_table(raw: bytes, layout: dict) -> list[dict]:
 
 def vector_meta(name: str, description: str, features: list[str], display: tuple[int, int],
                 layer_height: float, block_size: int, enc: dict, chunks: list[dict],
-                raw: bytes, layout: dict, crypto: dict | None = None) -> dict:
+                raw: bytes, layout: dict, crypto: dict | None = None,
+                chunk_hashes: dict | None = None) -> dict:
     """The manifest entry's golden data for one vector."""
     w, h = display
     meta = {
@@ -548,21 +642,24 @@ def vector_meta(name: str, description: str, features: list[str], display: tuple
     }
     if crypto is not None:
         meta["crypto"] = crypto
+    if chunk_hashes:
+        meta["chunk_payload_sha256"] = chunk_hashes
     return meta
 
 
 def build_vector(name: str, description: str, features: list[str], display: tuple[int, int],
                  layer_height: float, layers, block_size: int, use_dict: bool,
                  dict_samples_bytes: int = 2048, split_layers=(), force_run_count_zero=(),
-                 meta_extra: dict | None = None):
+                 meta_extra: dict | None = None, prof: bytes | None = None,
+                 lrov: bytes | None = None, prevs=()):
     """layers: list of (list of sector spans). One sector per layer => single-sector."""
     enc = encode_layers(display, layers, block_size, use_dict, dict_samples_bytes,
                         split_layers, force_run_count_zero)
     chunks = content_chunks(enc, "LumenFormat test vectors 1.0", display, layer_height,
-                            len(layers), meta_extra)
+                            len(layers), meta_extra, prof, lrov, prevs)
     raw, layout = build_file(chunks, FLAG_MULTI_SECTOR if enc["multi_sector"] else 0)
     meta = vector_meta(name, description, features, display, layer_height, block_size, enc,
-                       chunks, raw, layout)
+                       chunks, raw, layout, chunk_hashes=payload_hashes(chunks))
     return raw, meta, layout
 
 
@@ -673,12 +770,15 @@ def seal_content_chunks(chunks: list[dict], enc: dict, key: bytes, cipher_id: st
             out.append({"type": b"LAYR",
                         "payload": layr_payload(sealed_frames, enc["uncompressed_sizes"]),
                         "flags": FLAG_CHUNK_ENCRYPTED})
-        elif ctype in ENC_CONTENT_TYPES:
+        elif ctype in ENC_CONTENT_TYPES or ch.get("seal"):
             plain = ch["payload"]
             stored = (zstd.ZstdCompressor(level=ZSTD_SMALL_LEVEL).compress(plain)
                       if ch.get("compressed") else plain)
+            # Keep any chunk-specific flag bits (a PREV carries its role in bits 0-3)
+            # and add the sealed bit.
             out.append({"type": ctype, "sealed": seal(key, cipher_id, ctype, 0, stored),
-                        "size_uncompressed": len(plain), "flags": FLAG_CHUNK_ENCRYPTED})
+                        "size_uncompressed": len(plain),
+                        "flags": ch.get("flags", 0) | FLAG_CHUNK_ENCRYPTED})
         else:
             out.append(ch)
     return out
@@ -689,7 +789,8 @@ def build_encrypted_vector(name: str, description: str, features: list[str],
                            block_size: int, cipher_id: str, mode: int, use_dict: bool = False,
                            dict_samples_bytes: int = 1024, split_layers=(), meta_extra=None,
                            argon2_params=None, password_trim: int = 0, machine_roles=(),
-                           session_key: bytes | None = None):
+                           session_key: bytes | None = None, prof: bytes | None = None,
+                           lrov: bytes | None = None, prevs=()):
     """An encrypted file: the same content chunks, sealed, plus an AUTH chunk.
 
     `machine_roles` lists the recipient entries in file order; the role "local"
@@ -729,10 +830,11 @@ def build_encrypted_vector(name: str, description: str, features: list[str],
             raise ValueError("unknown recipient role %r" % (role,))
 
     chunks = content_chunks(enc, "LumenFormat test vectors 1.0", display, layer_height,
-                            len(layers), meta_extra)
+                            len(layers), meta_extra, prof, lrov, prevs)
     sealed = seal_content_chunks(chunks, enc, session_key, cipher_id)
     auth = {"type": b"AUTH", "payload": auth_payload(cipher_id, mode, password_sec, machine_sec)}
-    ordered = [sealed[0], sealed[1], auth] + sealed[2:]
+    after = 3 if prof is not None else 2      # section 3 lists PROF before AUTH
+    ordered = sealed[:after] + [auth] + sealed[after:]
 
     header_flags = FLAG_ENCRYPTED | (FLAG_MULTI_SECTOR if enc["multi_sector"] else 0)
     raw, layout = build_file(ordered, header_flags)
@@ -752,7 +854,7 @@ def build_encrypted_vector(name: str, description: str, features: list[str],
         crypto["local_recipient_private_key"] = local_private.hex()
 
     meta = vector_meta(name, description, features, display, layer_height, block_size, enc,
-                       ordered, raw, layout, crypto=crypto)
+                       ordered, raw, layout, crypto=crypto, chunk_hashes=payload_hashes(chunks))
     return raw, meta, layout
 
 
@@ -856,6 +958,45 @@ def vector_multisector():
                                    "color_rgba": [128, 128, 128, 255]}]})
 
 
+def vector_print_profile():
+    """Encrypted, carrying a reusable print profile."""
+    return build_encrypted_vector(
+        "print-profile",
+        "Password-mode AES-256-GCM with a sealed PROF chunk: profile identity, a material library, and a settings block reusing META's field names, including the experimental cure curve.",
+        ["print-profile", "prof-chunk", "profile-materials", "profile-uuid", "cure-curve",
+         "sealed-content", "password-mode", "aes-256-gcm"],
+        (64, 48), 0.05, [[((0, 150, 255),)] for _ in range(4)], block_size=2,
+        cipher_id="A256", mode=1, prof=prof_payload())
+
+
+def vector_layer_overrides():
+    """Plaintext, per-layer and per-range overrides."""
+    overrides = [
+        {"layer": 2, "normal_exposure_sec": 2.8, "lift_distance_mm": 6.0},
+        {"layer_range": [3, 5], "sector_id": 0, "normal_exposure_sec": 2.2,
+         "wait_time_before_cure_sec": 0.5},
+        {"layer_range": [6, 8], "wait_time_after_lift_sec": 1.0},
+    ]
+    return build_vector(
+        "layer-overrides",
+        "Ten layers with an LROV chunk covering a single layer, an inclusive layer range scoped to sector 0, and a range that applies to every sector.",
+        ["lrov-chunk", "layer-override", "layer-range", "sector-scoped-override"],
+        (64, 48), 0.05, [[((0, 120, 255),)] for _ in range(10)], block_size=5,
+        use_dict=False, lrov=lrov_payload(overrides))
+
+
+def vector_previews():
+    """Encrypted, with one clear and one sealed preview."""
+    return build_encrypted_vector(
+        "previews",
+        "Password-mode AES-256-GCM with two PREV chunks: a large preview in the clear and a sealed icon. Preview sealing is optional even when the file is encrypted, so both forms are valid in the same file.",
+        ["previews", "prev-chunk", "clear-preview", "sealed-preview", "preview-role",
+         "password-mode", "aes-256-gcm"],
+        (64, 48), 0.05, [[((0, 100, 255),)] for _ in range(4)], block_size=2,
+        cipher_id="A256", mode=1,
+        prevs=[(png_preview(400, 300), 1, False), (png_preview(16, 16, (255, 0, 0)), 3, True)])
+
+
 def main() -> int:
     assert crc32c(b"123456789") == 0xE3069283, "CRC-32C self-test failed"
     os.makedirs(VALID_DIR, exist_ok=True)
@@ -878,7 +1019,8 @@ def main() -> int:
 
     for builder in (vector_binary_basic, vector_dict, vector_multisector,
                     vector_encrypted_password, vector_encrypted_machine,
-                    vector_encrypted_both):
+                    vector_encrypted_both, vector_print_profile, vector_layer_overrides,
+                    vector_previews):
         raw, meta, layout = builder()
         path = os.path.join(VALID_DIR, meta["name"] + ".lumen")
         with open(path, "wb") as fh:
@@ -1060,6 +1202,72 @@ def main() -> int:
                  "One ciphertext byte of LAYR block 0 is flipped, so its AEAD tag must fail; a reader must not decompress or parse a block it cannot authenticate.",
                  "crypt.tag_verify", repack(b, enc_layout), base="encrypted-password",
                  crypto=enc_meta["crypto"])
+
+    # ---------------- PROF / LROV / PREV invalid vectors ----------------
+
+    def emit_prof_invalid(name, expected, description, **prof_kwargs):
+        raw_p, _, _ = build_vector("x-prof", "source", [], (64, 48), 0.05,
+                                   [[((0, 200, 255),)] for _ in range(4)], block_size=2,
+                                   use_dict=False, prof=prof_payload(**prof_kwargs))
+        emit_invalid(name, description, expected, raw_p, base=None)
+
+    emit_prof_invalid("prof-type-unknown", "prof.profile_type",
+                      "PROF.profile_type is \"resin\", which is not one of the three defined types.",
+                      profile_type="resin")
+    emit_prof_invalid("prof-identity-empty", "prof.profile_identity",
+                      "PROF.profile_name is an empty string.",
+                      profile_name="")
+    emit_prof_invalid("prof-settings-exposure", "prof.settings_exposure",
+                      "PROF settings carry a zero normal exposure.",
+                      settings_extra={"normal_exposure_sec": 0.0})
+    emit_prof_invalid("prof-settings-layer-height", "prof.settings_layer_height",
+                      "PROF settings carry a zero layer height.",
+                      settings_extra={"layer_height_mm": 0.0})
+    emit_prof_invalid("prof-cure-curve", "prof.cure_curve",
+                      "PROF cure curve has dp_um = 0.0, which no resin can have.",
+                      settings_extra={"cure_curve": {"dp_um": 0.0, "ec_mj_cm2": 7.5,
+                                                     "e0_mj_cm2": 3.0}})
+    emit_prof_invalid("prof-uuid-malformed", "prof.profile_uuid",
+                      "PROF.profile_uuid is not a UUID.",
+                      profile_uuid="not-a-uuid")
+    emit_prof_invalid("prof-materials-shape", "prof.materials_shape",
+                      "PROF.materials is an empty array, which the META.materials shape rules forbid.",
+                      materials=[])
+
+    def emit_lrov_invalid(name, expected, description, overrides):
+        raw_l, _, _ = build_vector("x-lrov", "source", [], (64, 48), 0.05,
+                                   [[((0, 120, 255),)] for _ in range(10)], block_size=5,
+                                   use_dict=False, lrov=lrov_payload(overrides))
+        emit_invalid(name, description, expected, raw_l, base=None)
+
+    emit_lrov_invalid("lrov-entry-form-both", "lrov.entry_form",
+                      "An LROV entry carries both layer and layer_range, which the entry form forbids.",
+                      [{"layer": 2, "layer_range": [2, 4], "normal_exposure_sec": 2.8}])
+    emit_lrov_invalid("lrov-layer-out-of-range", "lrov.layer_index_range",
+                      "An LROV entry overrides layer 40 in a ten-layer file.",
+                      [{"layer": 40, "normal_exposure_sec": 2.8}])
+    emit_lrov_invalid("lrov-range-reversed", "lrov.layer_range_order",
+                      "An LROV layer_range ends before it begins.",
+                      [{"layer_range": [8, 3], "normal_exposure_sec": 2.8}])
+    emit_lrov_invalid("lrov-sector-undefined", "lrov.sector_id_defined",
+                      "An LROV entry targets sector 7, which no SECT chunk in this single-sector file defines.",
+                      [{"layer_range": [3, 5], "sector_id": 7, "normal_exposure_sec": 2.8}])
+
+    raw_pv, _, layout_pv = build_vector(
+        "x-prev", "source", [], (64, 48), 0.05, [[((0, 90, 255),)] for _ in range(4)],
+        block_size=2, use_dict=False, prevs=[(png_preview(24, 18), 1, False)])
+
+    b = patch_chunk_flags(raw_pv, layout_pv, b"PREV", 0x21)
+    emit_invalid("prev-flags",
+                 "A PREV chunk sets reserved flag bit 5 alongside role 1; only bits 0-3 carry the role.",
+                 "prev.flags", repack(b, layout_pv), base=None)
+
+    b = bytearray(raw_pv)
+    prev_off = layout_pv["PREV_off"]
+    b[prev_off:prev_off + 4] = b"NOTP"
+    emit_invalid("prev-not-png",
+                 "A PREV payload does not begin with the PNG signature. A loose reader ignores previews and must still accept the file; a strict validator rejects it.",
+                 "prev.png_signature", repack(b, layout_pv), strict_only=True, base=None)
 
     with open(os.path.join(HERE, "manifest.json"), "w", encoding="utf-8", newline="\n") as fh:
         json.dump(manifest, fh, indent=2, sort_keys=True)

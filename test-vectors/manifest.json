@@ -264,6 +264,136 @@
       "file_size": 11227,
       "name": "crypt-tag-corrupt",
       "strict_only": false
+    },
+    {
+      "base_vector": null,
+      "description": "PROF.profile_type is \"resin\", which is not one of the three defined types.",
+      "expected_failure": "prof.profile_type",
+      "file": "invalid/prof-type-unknown.lumen",
+      "file_sha256": "ba6bf6d4279fb4bfa933bd7864e0b26acd533a0c4ead528a4e4ac5c9198e89ec",
+      "file_size": 1482,
+      "name": "prof-type-unknown",
+      "strict_only": false
+    },
+    {
+      "base_vector": null,
+      "description": "PROF.profile_name is an empty string.",
+      "expected_failure": "prof.profile_identity",
+      "file": "invalid/prof-identity-empty.lumen",
+      "file_sha256": "8f6d8da6b2f9b6b3f21b5784dda85041427906083ea75471f8a7486568189986",
+      "file_size": 1474,
+      "name": "prof-identity-empty",
+      "strict_only": false
+    },
+    {
+      "base_vector": null,
+      "description": "PROF settings carry a zero normal exposure.",
+      "expected_failure": "prof.settings_exposure",
+      "file": "invalid/prof-settings-exposure.lumen",
+      "file_sha256": "0acfe8a20bdf0e5b67943ef9afbda68dd4d840010146ccd6e1e8324b302d5216",
+      "file_size": 1482,
+      "name": "prof-settings-exposure",
+      "strict_only": false
+    },
+    {
+      "base_vector": null,
+      "description": "PROF settings carry a zero layer height.",
+      "expected_failure": "prof.settings_layer_height",
+      "file": "invalid/prof-settings-layer-height.lumen",
+      "file_sha256": "9992da9a615c5a64815fc776aae7a1f6423ff2cec284e901ce06361bf9acf919",
+      "file_size": 1482,
+      "name": "prof-settings-layer-height",
+      "strict_only": false
+    },
+    {
+      "base_vector": null,
+      "description": "PROF cure curve has dp_um = 0.0, which no resin can have.",
+      "expected_failure": "prof.cure_curve",
+      "file": "invalid/prof-cure-curve.lumen",
+      "file_sha256": "675c20707d6e86e5ebbccba29aacc93a33daea199943ae5d6f409a392f5816c4",
+      "file_size": 1482,
+      "name": "prof-cure-curve",
+      "strict_only": false
+    },
+    {
+      "base_vector": null,
+      "description": "PROF.profile_uuid is not a UUID.",
+      "expected_failure": "prof.profile_uuid",
+      "file": "invalid/prof-uuid-malformed.lumen",
+      "file_sha256": "268ef96f8412dd79747459fa1bb5a8f065ea7900462c11ad45e6cc13adb6518a",
+      "file_size": 1466,
+      "name": "prof-uuid-malformed",
+      "strict_only": false
+    },
+    {
+      "base_vector": null,
+      "description": "PROF.materials is an empty array, which the META.materials shape rules forbid.",
+      "expected_failure": "prof.materials_shape",
+      "file": "invalid/prof-materials-shape.lumen",
+      "file_sha256": "afb5a9319c1cf34e20fe9c2fb9075d0fe00ae3e850c941d5f099fa214dbb5c85",
+      "file_size": 1362,
+      "name": "prof-materials-shape",
+      "strict_only": false
+    },
+    {
+      "base_vector": null,
+      "description": "An LROV entry carries both layer and layer_range, which the entry form forbids.",
+      "expected_failure": "lrov.entry_form",
+      "file": "invalid/lrov-entry-form-both.lumen",
+      "file_sha256": "b22c0460de03fb4969507b6018bc1a2ce0d7e08bf3ce78952acae5fdbf150e97",
+      "file_size": 1258,
+      "name": "lrov-entry-form-both",
+      "strict_only": false
+    },
+    {
+      "base_vector": null,
+      "description": "An LROV entry overrides layer 40 in a ten-layer file.",
+      "expected_failure": "lrov.layer_index_range",
+      "file": "invalid/lrov-layer-out-of-range.lumen",
+      "file_sha256": "7c148b4fd3fc7fb724594d821a28f212f31e5c9c0bdb0a26acf3761de52c5564",
+      "file_size": 1242,
+      "name": "lrov-layer-out-of-range",
+      "strict_only": false
+    },
+    {
+      "base_vector": null,
+      "description": "An LROV layer_range ends before it begins.",
+      "expected_failure": "lrov.layer_range_order",
+      "file": "invalid/lrov-range-reversed.lumen",
+      "file_sha256": "4de1430170b461e357635a2d8f87dc4d6df14b0aaadb64bb674bc1669c28283f",
+      "file_size": 1258,
+      "name": "lrov-range-reversed",
+      "strict_only": false
+    },
+    {
+      "base_vector": null,
+      "description": "An LROV entry targets sector 7, which no SECT chunk in this single-sector file defines.",
+      "expected_failure": "lrov.sector_id_defined",
+      "file": "invalid/lrov-sector-undefined.lumen",
+      "file_sha256": "21f32d90d550276c0756ebb9b7fa0b872ac8b582cbdac72c115210fd7b6052e5",
+      "file_size": 1266,
+      "name": "lrov-sector-undefined",
+      "strict_only": false
+    },
+    {
+      "base_vector": null,
+      "description": "A PREV chunk sets reserved flag bit 5 alongside role 1; only bits 0-3 carry the role.",
+      "expected_failure": "prev.flags",
+      "file": "invalid/prev-flags.lumen",
+      "file_sha256": "0f533f410628979af8a66c7d8a7e937e1c7fc5c7bc02bf99e4aaf77b4f73cd5e",
+      "file_size": 926,
+      "name": "prev-flags",
+      "strict_only": false
+    },
+    {
+      "base_vector": null,
+      "description": "A PREV payload does not begin with the PNG signature. A loose reader ignores previews and must still accept the file; a strict validator rejects it.",
+      "expected_failure": "prev.png_signature",
+      "file": "invalid/prev-not-png.lumen",
+      "file_sha256": "6b2de5606f74ab28a2b1fcc5d789f69c8ac031686cfa71d32b3b6a260c30c49b",
+      "file_size": 926,
+      "name": "prev-not-png",
+      "strict_only": true
     }
   ],
   "valid": [
@@ -2103,6 +2233,421 @@
       "total_layers": 6,
       "total_uncompressed_size": 1508,
       "trailer_crc32c": "0xE6FC511D"
+    },
+    {
+      "block_size_layers": 2,
+      "blocks": [
+        {
+          "frame_offset": 0,
+          "frame_size": 47,
+          "uncompressed_size": 10
+        },
+        {
+          "frame_offset": 47,
+          "frame_size": 47,
+          "uncompressed_size": 10
+        }
+      ],
+      "chunk_count": 7,
+      "chunk_payload_sha256": {
+        "PROF": "9c8fe854756ffc043a2262b15c0e25c028696d1082df33a4677d2e401fef4160"
+      },
+      "crypto": {
+        "argon2": {
+          "iterations": 1,
+          "memory_kib": 8,
+          "parallelism": 1,
+          "salt": "52e0225b1da749e05990e4f93faaecca"
+        },
+        "auth_version": 1,
+        "cipher_id": "A256",
+        "mode": 1,
+        "mode_names": [
+          "password"
+        ],
+        "password_utf8": "lumen-test-vector"
+      },
+      "description": "Password-mode AES-256-GCM with a sealed PROF chunk: profile identity, a material library, and a settings block reusing META's field names, including the experimental cure curve.",
+      "dict": {
+        "dict_id": 0,
+        "dict_size": 0,
+        "present": false
+      },
+      "dir_offset": 1490,
+      "display_height_px": 48,
+      "display_width_px": 64,
+      "features": [
+        "print-profile",
+        "prof-chunk",
+        "profile-materials",
+        "profile-uuid",
+        "cure-curve",
+        "sealed-content",
+        "password-mode",
+        "aes-256-gcm"
+      ],
+      "file": "valid/print-profile.lumen",
+      "file_sha256": "eef0057622e94fcbe64e019f8c1a0582dbe68b8626a90d698177af67514a36a0",
+      "file_size": 1722,
+      "header_flags": 8,
+      "layer_height_mm": 0.05,
+      "layers": [
+        {
+          "block_index": 0,
+          "data_offset": 0,
+          "data_size": 5,
+          "decompressed_sha256": "3209a7a0e0c3579af4037f900c386720b1beac7aab5131ac869214af2625295c",
+          "index": 0,
+          "lhas_leaf": "ac7452d38a5af3163a9f4d20623f14930090b2cfa8d37cee6b5ef127f1aa62c1",
+          "sector_count": 1,
+          "sector_tags": [
+            0
+          ],
+          "tag": 0
+        },
+        {
+          "block_index": 0,
+          "data_offset": 5,
+          "data_size": 5,
+          "decompressed_sha256": "3209a7a0e0c3579af4037f900c386720b1beac7aab5131ac869214af2625295c",
+          "index": 1,
+          "lhas_leaf": "ac7452d38a5af3163a9f4d20623f14930090b2cfa8d37cee6b5ef127f1aa62c1",
+          "sector_count": 1,
+          "sector_tags": [
+            0
+          ],
+          "tag": 0
+        },
+        {
+          "block_index": 1,
+          "data_offset": 0,
+          "data_size": 5,
+          "decompressed_sha256": "3209a7a0e0c3579af4037f900c386720b1beac7aab5131ac869214af2625295c",
+          "index": 2,
+          "lhas_leaf": "ac7452d38a5af3163a9f4d20623f14930090b2cfa8d37cee6b5ef127f1aa62c1",
+          "sector_count": 1,
+          "sector_tags": [
+            0
+          ],
+          "tag": 0
+        },
+        {
+          "block_index": 1,
+          "data_offset": 5,
+          "data_size": 5,
+          "decompressed_sha256": "3209a7a0e0c3579af4037f900c386720b1beac7aab5131ac869214af2625295c",
+          "index": 3,
+          "lhas_leaf": "ac7452d38a5af3163a9f4d20623f14930090b2cfa8d37cee6b5ef127f1aa62c1",
+          "sector_count": 1,
+          "sector_tags": [
+            0
+          ],
+          "tag": 0
+        }
+      ],
+      "merkle_root": "23cbc97a215f97290fa96339fa9f6c17bc320e826d27d46b6707bab7db2bedfb",
+      "multi_sector": false,
+      "name": "print-profile",
+      "total_layers": 4,
+      "total_uncompressed_size": 2365,
+      "trailer_crc32c": "0xD61D0F76"
+    },
+    {
+      "block_size_layers": 5,
+      "blocks": [
+        {
+          "frame_offset": 0,
+          "frame_size": 19,
+          "uncompressed_size": 20
+        },
+        {
+          "frame_offset": 19,
+          "frame_size": 19,
+          "uncompressed_size": 20
+        }
+      ],
+      "chunk_count": 6,
+      "chunk_payload_sha256": {
+        "LROV": "bb972133e6e9173217e1cbc5e5c0088439b535b05833a6bc35dfb10bd43af000"
+      },
+      "description": "Ten layers with an LROV chunk covering a single layer, an inclusive layer range scoped to sector 0, and a range that applies to every sector.",
+      "dict": {
+        "dict_id": 0,
+        "dict_size": 0,
+        "present": false
+      },
+      "dir_offset": 1138,
+      "display_height_px": 48,
+      "display_width_px": 64,
+      "features": [
+        "lrov-chunk",
+        "layer-override",
+        "layer-range",
+        "sector-scoped-override"
+      ],
+      "file": "valid/layer-overrides.lumen",
+      "file_sha256": "a861523042db1a9a46c84252915294cf9edb09f7a26d047b934f09a89ede8359",
+      "file_size": 1338,
+      "header_flags": 0,
+      "layer_height_mm": 0.05,
+      "layers": [
+        {
+          "block_index": 0,
+          "data_offset": 0,
+          "data_size": 4,
+          "decompressed_sha256": "4d12a0f5a07f2cd96d02b12d79ea5caf29be94d0d3b490b8d30307eabb53d9c3",
+          "index": 0,
+          "lhas_leaf": "dd46bcb27ef22666cb83357cb60720ef517fb471cd5fc12c4cc45fd312904d14",
+          "sector_count": 1,
+          "sector_tags": [
+            0
+          ],
+          "tag": 0
+        },
+        {
+          "block_index": 0,
+          "data_offset": 4,
+          "data_size": 4,
+          "decompressed_sha256": "4d12a0f5a07f2cd96d02b12d79ea5caf29be94d0d3b490b8d30307eabb53d9c3",
+          "index": 1,
+          "lhas_leaf": "dd46bcb27ef22666cb83357cb60720ef517fb471cd5fc12c4cc45fd312904d14",
+          "sector_count": 1,
+          "sector_tags": [
+            0
+          ],
+          "tag": 0
+        },
+        {
+          "block_index": 0,
+          "data_offset": 8,
+          "data_size": 4,
+          "decompressed_sha256": "4d12a0f5a07f2cd96d02b12d79ea5caf29be94d0d3b490b8d30307eabb53d9c3",
+          "index": 2,
+          "lhas_leaf": "dd46bcb27ef22666cb83357cb60720ef517fb471cd5fc12c4cc45fd312904d14",
+          "sector_count": 1,
+          "sector_tags": [
+            0
+          ],
+          "tag": 0
+        },
+        {
+          "block_index": 0,
+          "data_offset": 12,
+          "data_size": 4,
+          "decompressed_sha256": "4d12a0f5a07f2cd96d02b12d79ea5caf29be94d0d3b490b8d30307eabb53d9c3",
+          "index": 3,
+          "lhas_leaf": "dd46bcb27ef22666cb83357cb60720ef517fb471cd5fc12c4cc45fd312904d14",
+          "sector_count": 1,
+          "sector_tags": [
+            0
+          ],
+          "tag": 0
+        },
+        {
+          "block_index": 0,
+          "data_offset": 16,
+          "data_size": 4,
+          "decompressed_sha256": "4d12a0f5a07f2cd96d02b12d79ea5caf29be94d0d3b490b8d30307eabb53d9c3",
+          "index": 4,
+          "lhas_leaf": "dd46bcb27ef22666cb83357cb60720ef517fb471cd5fc12c4cc45fd312904d14",
+          "sector_count": 1,
+          "sector_tags": [
+            0
+          ],
+          "tag": 0
+        },
+        {
+          "block_index": 1,
+          "data_offset": 0,
+          "data_size": 4,
+          "decompressed_sha256": "4d12a0f5a07f2cd96d02b12d79ea5caf29be94d0d3b490b8d30307eabb53d9c3",
+          "index": 5,
+          "lhas_leaf": "dd46bcb27ef22666cb83357cb60720ef517fb471cd5fc12c4cc45fd312904d14",
+          "sector_count": 1,
+          "sector_tags": [
+            0
+          ],
+          "tag": 0
+        },
+        {
+          "block_index": 1,
+          "data_offset": 4,
+          "data_size": 4,
+          "decompressed_sha256": "4d12a0f5a07f2cd96d02b12d79ea5caf29be94d0d3b490b8d30307eabb53d9c3",
+          "index": 6,
+          "lhas_leaf": "dd46bcb27ef22666cb83357cb60720ef517fb471cd5fc12c4cc45fd312904d14",
+          "sector_count": 1,
+          "sector_tags": [
+            0
+          ],
+          "tag": 0
+        },
+        {
+          "block_index": 1,
+          "data_offset": 8,
+          "data_size": 4,
+          "decompressed_sha256": "4d12a0f5a07f2cd96d02b12d79ea5caf29be94d0d3b490b8d30307eabb53d9c3",
+          "index": 7,
+          "lhas_leaf": "dd46bcb27ef22666cb83357cb60720ef517fb471cd5fc12c4cc45fd312904d14",
+          "sector_count": 1,
+          "sector_tags": [
+            0
+          ],
+          "tag": 0
+        },
+        {
+          "block_index": 1,
+          "data_offset": 12,
+          "data_size": 4,
+          "decompressed_sha256": "4d12a0f5a07f2cd96d02b12d79ea5caf29be94d0d3b490b8d30307eabb53d9c3",
+          "index": 8,
+          "lhas_leaf": "dd46bcb27ef22666cb83357cb60720ef517fb471cd5fc12c4cc45fd312904d14",
+          "sector_count": 1,
+          "sector_tags": [
+            0
+          ],
+          "tag": 0
+        },
+        {
+          "block_index": 1,
+          "data_offset": 16,
+          "data_size": 4,
+          "decompressed_sha256": "4d12a0f5a07f2cd96d02b12d79ea5caf29be94d0d3b490b8d30307eabb53d9c3",
+          "index": 9,
+          "lhas_leaf": "dd46bcb27ef22666cb83357cb60720ef517fb471cd5fc12c4cc45fd312904d14",
+          "sector_count": 1,
+          "sector_tags": [
+            0
+          ],
+          "tag": 0
+        }
+      ],
+      "merkle_root": "572c541ea81e0af2439244ee8ee259fe67841b5a937783b8f9e9f3579e1d7944",
+      "multi_sector": false,
+      "name": "layer-overrides",
+      "total_layers": 10,
+      "total_uncompressed_size": 1419,
+      "trailer_crc32c": "0xEEA2724B"
+    },
+    {
+      "block_size_layers": 2,
+      "blocks": [
+        {
+          "frame_offset": 0,
+          "frame_size": 45,
+          "uncompressed_size": 8
+        },
+        {
+          "frame_offset": 45,
+          "frame_size": 45,
+          "uncompressed_size": 8
+        }
+      ],
+      "chunk_count": 8,
+      "chunk_payload_sha256": {
+        "PREV": [
+          "1ae622d736a893ad07c7ee2eac234c9c9703a81a788f8ddf1f8360be5e71f497",
+          "204f864f62153665a75f20ece9f0fd4ece67de16f87a63690a96898ebb1eef9c"
+        ]
+      },
+      "crypto": {
+        "argon2": {
+          "iterations": 1,
+          "memory_kib": 8,
+          "parallelism": 1,
+          "salt": "c6165b66c38379dda9e719652c8057aa"
+        },
+        "auth_version": 1,
+        "cipher_id": "A256",
+        "mode": 1,
+        "mode_names": [
+          "password"
+        ],
+        "password_utf8": "lumen-test-vector"
+      },
+      "description": "Password-mode AES-256-GCM with two PREV chunks: a large preview in the clear and a sealed icon. Preview sealing is optional even when the file is encrypted, so both forms are valid in the same file.",
+      "dict": {
+        "dict_id": 0,
+        "dict_size": 0,
+        "present": false
+      },
+      "dir_offset": 1742,
+      "display_height_px": 48,
+      "display_width_px": 64,
+      "features": [
+        "previews",
+        "prev-chunk",
+        "clear-preview",
+        "sealed-preview",
+        "preview-role",
+        "password-mode",
+        "aes-256-gcm"
+      ],
+      "file": "valid/previews.lumen",
+      "file_sha256": "f91422032f91d29435da600b728276d11fa6f28b13ecf6c9361ab7f250adbb8a",
+      "file_size": 2006,
+      "header_flags": 8,
+      "layer_height_mm": 0.05,
+      "layers": [
+        {
+          "block_index": 0,
+          "data_offset": 0,
+          "data_size": 4,
+          "decompressed_sha256": "a6a9d1e154b77f0eaec28a54fb183df6e3f0f603ffc4d4204e658244cd9eac1e",
+          "index": 0,
+          "lhas_leaf": "ee32b081d3c5a51c86ce6ece0fc5c925ac6bb76ef8a12e196aeb97b50c121c39",
+          "sector_count": 1,
+          "sector_tags": [
+            0
+          ],
+          "tag": 0
+        },
+        {
+          "block_index": 0,
+          "data_offset": 4,
+          "data_size": 4,
+          "decompressed_sha256": "a6a9d1e154b77f0eaec28a54fb183df6e3f0f603ffc4d4204e658244cd9eac1e",
+          "index": 1,
+          "lhas_leaf": "ee32b081d3c5a51c86ce6ece0fc5c925ac6bb76ef8a12e196aeb97b50c121c39",
+          "sector_count": 1,
+          "sector_tags": [
+            0
+          ],
+          "tag": 0
+        },
+        {
+          "block_index": 1,
+          "data_offset": 0,
+          "data_size": 4,
+          "decompressed_sha256": "a6a9d1e154b77f0eaec28a54fb183df6e3f0f603ffc4d4204e658244cd9eac1e",
+          "index": 2,
+          "lhas_leaf": "ee32b081d3c5a51c86ce6ece0fc5c925ac6bb76ef8a12e196aeb97b50c121c39",
+          "sector_count": 1,
+          "sector_tags": [
+            0
+          ],
+          "tag": 0
+        },
+        {
+          "block_index": 1,
+          "data_offset": 4,
+          "data_size": 4,
+          "decompressed_sha256": "a6a9d1e154b77f0eaec28a54fb183df6e3f0f603ffc4d4204e658244cd9eac1e",
+          "index": 3,
+          "lhas_leaf": "ee32b081d3c5a51c86ce6ece0fc5c925ac6bb76ef8a12e196aeb97b50c121c39",
+          "sector_count": 1,
+          "sector_tags": [
+            0
+          ],
+          "tag": 0
+        }
+      ],
+      "merkle_root": "8496a8f29692e962cf7f3aa66145a8bead7408d3bcfb6d8b7153df060b1081cb",
+      "multi_sector": false,
+      "name": "previews",
+      "total_layers": 4,
+      "total_uncompressed_size": 1750,
+      "trailer_crc32c": "0xDAC98F50"
     }
   ]
 }

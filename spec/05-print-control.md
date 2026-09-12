@@ -66,6 +66,8 @@ Per-layer timing parameter overrides.
 
 - Layer indices are 0-based (layer 0 = closest to build plate).
 - `layer_range` is inclusive `[start, end]`.
+- An entry MUST carry exactly one of `layer` or `layer_range`; an entry with both or
+  neither is malformed.
 - `sector_id` is optional. When present, the entry applies only to that sector on the
   matched layer(s); when absent, it applies to every sector.
 - When several entries match a given `(layer, sector)` pair, the **last** matching
@@ -85,7 +87,7 @@ A PNG image as raw bytes (no additional framing).
 
 | Bit | Name | Description |
 |-----|------|-------------|
-| 0–3 | `preview_role` | 0 = unspecified, 1 = large (rec. 400×300), 2 = small (rec. 200×125), 3 = icon (≤64×64). 4–15 reserved. |
+| 0–3 | `preview_role` | 0 = unspecified, 1 = large (rec. 400×300), 2 = small (rec. 200×125), 3 = icon (≤64×64). Role values 4–15 are reserved. |
 | 4 | `ENCRYPTED` | May be set if preview confidentiality is desired. |
 | 5–31 | - | Reserved. Must be 0. |
 

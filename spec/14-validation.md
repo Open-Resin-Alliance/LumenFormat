@@ -57,11 +57,13 @@
 - [ ] If `PROF` chunk present, `settings.layer_height_mm > 0.0`.
 - [ ] If `PROF.settings.cure_curve` present, `dp_um > 0.0`, `ec_mj_cm2 > 0.0`, `e0_mj_cm2 >= 0.0`.
 - [ ] If `PROF` chunk present with `profile_uuid`, the UUID string is well-formed (36 characters, 8-4-4-4-12 hex pattern).
+- [ ] Every `LROV` entry carries exactly one of `layer` or `layer_range` ([§4.6](05-print-control.md#46-lrov---layer-override-chunk)).
+- [ ] If `PREV` chunk present, `preview_role` is 0–3 and reserved flag bits 5–31 are 0 ([§4.7](05-print-control.md#47-prev---preview-image-chunk)).
+- [ ] (Strict mode) If `PREV` chunk present, its payload begins with the PNG signature and its `IHDR` is well-formed ([§4.7](05-print-control.md#47-prev---preview-image-chunk)).
 - [ ] If `META.cure_curve` present, `dp_um > 0.0`, `ec_mj_cm2 > 0.0`, `e0_mj_cm2 >= 0.0`.
 - [ ] If `META.chamber_temperature_c` or `vat_temperature_c` present, values are in range `[0.0, 120.0]`.
 - [ ] If `LHAS` chunk present, recompute Merkle root from `layer_hashes` and verify it matches `merkle_root`.
 - [ ] (Strict mode) If `LHAS` chunk present, decompress and hash each layer; verify against `layer_hashes`.
-- [ ] If `PREV` chunk present, its payload parses as a PNG image.
 - [ ] If `VOXL` chunk present, payload is a valid VOXL file (parseable, recognized version, passes VOXL validation rules).
 - [ ] (Strict mode) If `VOXL` chunk present, scene metadata (printer name, resolution) is consistent with `HDR` fields.
 
@@ -125,7 +127,7 @@ test password and recipient key in the manifest.
 
 Coverage is not exhaustive. The corpus exercises single- and multi-sector layer data,
 the empty-layer form, all three encoding tags, dictionary compression, multi-block
-framing, both encryption modes and both ciphers. It does **not** cover previews
-(`PREV`), profiles (`PROF`), per-layer overrides (`LROV`) or embedded scenes (`VOXL`),
-so those chunks have no executable check. See `test-vectors/README.md` for the
+framing, both encryption modes and both ciphers, and the `PROF`, `LROV` and `PREV`
+chunks. It does **not** cover embedded scenes (`VOXL`), a preliminary companion
+format, so that chunk has no executable check. See `test-vectors/README.md` for the
 check-name convention and the full scope.

@@ -47,8 +47,9 @@ So this corpus pins:
 
 - **Exactly** - the file header, `HDR`, `AUTH`, `LTBL`, the `LAYR` header and block
   table, `LHAS`, every REE stream, the chunk directory and the trailer CRC-32C,
-  plus the decompressed bytes of every layer, the Merkle root over them, and every
-  sealed unit (nonce, ciphertext and tag).
+  plus the decompressed bytes of every layer, the Merkle root over them, every
+  sealed unit (nonce, ciphertext and tag), and the plaintext payload bytes of every
+  `PROF`, `LROV` and `PREV` chunk (`chunk_payload_sha256` in the manifest).
 - **By property** - compressed payload bytes. The manifest records the
   zstandard version and level, the frame's dictionary ID and the decompressed
   size; `verify_vectors.py` asserts those instead of byte equality.
@@ -69,6 +70,9 @@ nonce, salt and key is derived from a fixed seed (see *Test credentials*).
 | `encrypted-password` | 32 | 2 | AES-256-GCM, password | the `AUTH` chunk and its fixed 65-byte password section, Argon2id and AES-256-KW unwrapping to the session key, a sealed dictionary, sealed metadata, two blocks of individually sealed layer frames with their per-block AAD, and dictionary-ID agreement across sealed frames |
 | `encrypted-machine` | 4 | 1 | ChaCha20-Poly1305, machine binding | three recipient entries, matching by `machine_fp` without contacting the other recipients, X25519 and HKDF-SHA-256 and AES-256-KW unwrapping, the low-order-point entry that must be rejected, the second cipher, a single sealed block |
 | `encrypted-both` | 6 | 3 | AES-256-GCM, both modes | mode bits 0 and 1 in one `AUTH`, one session key wrapped both ways, sealed `SECT` and sealed layer frames in a multi-sector file |
+| `print-profile` | 4 | 2 | AES-256-GCM, password | a sealed `PROF`: profile identity and UUID, a material library, and a `settings` block reusing META's field names including the experimental cure curve |
+| `layer-overrides` | 10 | 2 | - | `LROV`: a single-layer override, an inclusive `layer_range` scoped to sector 0, and a range that applies to every sector |
+| `previews` | 4 | 2 | AES-256-GCM, password | two `PREV` chunks in one file - a large preview in the clear and a sealed icon - with the role in the descriptor's flags. Preview sealing is optional even when the file is encrypted |
 
 The encrypted vectors also pin the two encryption flags that the spec assigns
 different bit numbers: the file header's bit 3 (`ENCRYPTED`, "an `AUTH` chunk is
@@ -100,6 +104,19 @@ check rather than stopping at the file-completeness check first.
 | `crypt-argon2-budget` | a coherent password section declaring Argon2id `iterations = 99`, past the ceiling of 10 | `crypt.argon2_budget` |
 | `crypt-plaintext-content` | `ZDIC`'s descriptor does not set the encrypted flag although the file is encrypted | `crypt.chunk_flags` |
 | `crypt-tag-corrupt` | one ciphertext byte of LAYR block 0 flipped, which its tag must reject | `crypt.tag_verify` |
+| `prof-type-unknown` | `PROF.profile_type` is `"resin"` | `prof.profile_type` |
+| `prof-identity-empty` | `PROF.profile_name` is empty | `prof.profile_identity` |
+| `prof-settings-exposure` | `PROF` settings carry a zero normal exposure | `prof.settings_exposure` |
+| `prof-settings-layer-height` | `PROF` settings carry a zero layer height | `prof.settings_layer_height` |
+| `prof-cure-curve` | `PROF` cure curve has `dp_um = 0.0` | `prof.cure_curve` |
+| `prof-uuid-malformed` | `PROF.profile_uuid` is not a UUID | `prof.profile_uuid` |
+| `prof-materials-shape` | `PROF.materials` is an empty array | `prof.materials_shape` |
+| `lrov-entry-form-both` | an `LROV` entry carries both `layer` and `layer_range` | `lrov.entry_form` |
+| `lrov-layer-out-of-range` | an `LROV` entry overrides layer 40 of a ten-layer file | `lrov.layer_index_range` |
+| `lrov-range-reversed` | an `LROV` `layer_range` ends before it begins | `lrov.layer_range_order` |
+| `lrov-sector-undefined` | an `LROV` entry targets a sector no `SECT` defines | `lrov.sector_id_defined` |
+| `prev-flags` | a `PREV` chunk sets reserved flag bit 5 alongside its role | `prev.flags` |
+| `prev-not-png` | a `PREV` payload does not begin with the PNG signature | `prev.png_signature` *(strict)* |
 
 Two vectors are marked *(strict)*: the defect is invisible to a loose-mode reader
 (section 11.5) and must only be caught by a strict-mode validator. The manifest
@@ -116,8 +133,8 @@ that the refusal happens before any crypto work.
 
 Checks are named `<group>.<rule>`, mirroring section 11:
 `trailer.*`, `header.*`, `dir.*`, `chunk.*`, `presence.*`, `hdr.*`, `auth.*`,
-`meta.*`, `sect.*`, `ltbl.*`, `layr.*`, `zdic.*`, `lhas.*`, `ree.*`, `sector.*`,
-`crypt.*`.
+`meta.*`, `sect.*`, `prof.*`, `lrov.*`, `prev.*`, `ltbl.*`, `layr.*`, `zdic.*`,
+`lhas.*`, `ree.*`, `sector.*`, `crypt.*`.
 
 Implementations are encouraged to use the same names when reporting which rule
 failed. Use them verbatim as `expected_failure` when adding vectors.
@@ -181,6 +198,10 @@ decrypt the file at all. Only entry 2 recovers the real key.
   `encrypted-password`, which use 256×192 (49 152 pixels) so that the zstd
   dictionary has enough sample data to train on. Display size is irrelevant to
   every rule the vectors exercise.
-- The vectors still do not cover previews (`PREV`), profiles (`PROF`), per-layer
-  overrides (`LROV`) or embedded scenes (`VOXL`). Those need a PNG encoder, a
-  profile schema and a VOXL writer respectively.
+- `LROV` entries carry exactly one of `layer` or `layer_range`; the corpus pins that
+  form. A `PREV` chunk carries its role in its descriptor's flag bits 0-3, with bits
+  5-31 reserved, and there may be several `PREV` chunks in a file.
+- The only chunk without a vector is `VOXL` (embedded scene). Its payload is a
+  separate preliminary format, and the only LUMEN-side contract left unpinned is that
+  the bytes come back out unchanged, which needs a VOXL writer to exercise
+  interestingly.
