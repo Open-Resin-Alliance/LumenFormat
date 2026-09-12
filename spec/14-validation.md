@@ -100,6 +100,7 @@
 
 - [ ] If `ENCRYPTED` flag set, all LAYR/META/PROF/SECT/LROV/VOXL/ZDIC chunks have the encrypted flag set, every LAYR block frame is at least 28 bytes (one sealed unit), and LAYR block frames are individually sealed ([§9.3](12-encryption.md#93-encryption-format)).
 - [ ] If `ENCRYPTED` flag set, `HDR`, `AUTH` and `LTBL` do **not** have the encrypted flag set, and neither do the LAYR header and block table ([§9.1](12-encryption.md#91-design-principles)).
+- [ ] If the `ENCRYPTED` flag is clear, no chunk descriptor sets the encrypted bit: there is no key in the file that could open such a chunk ([§9.1](12-encryption.md#91-design-principles)).
 - [ ] Auth tag verifies for each encrypted chunk (decryption integrity check).
 - [ ] `AUTH.mode` has at least one bit set.
 - [ ] If `AUTH.mode` bit 0 is set, `password_section_len >= 65` (the fixed password section size; see [§4.4.1](04-chunk-auth.md#441-password-section)).

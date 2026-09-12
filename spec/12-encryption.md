@@ -12,9 +12,13 @@
   frame is encrypted.
 - **Content-scoped encryption.** The directory, HDR, AUTH, LTBL, and the LAYR header
   and block table remain plaintext. Everything that carries content or content-derived
-  data (LAYR block frames, ZDIC, META, PROF, SECT, LROV, VOXL) is encrypted. PREV is
-  optionally encrypted. When `AUTH` is present every content chunk MUST be encrypted;
-  v1 has no partial-encryption mode, so the `ENCRYPTED` flag is set on all of them.
+  data (LAYR block frames, ZDIC, META, PROF, SECT, LROV, VOXL) is encrypted. PREV and
+  EXTD are optionally encrypted: a file may carry either sealed or in the clear, and a
+  reader that skips them never needs the key. When `AUTH` is present every content chunk
+  MUST be encrypted; v1 has no partial-encryption mode, so the `ENCRYPTED` flag is set on
+  all of them. Conversely the chunk-level `ENCRYPTED` flag requires `AUTH` in the same
+  file: a chunk MUST NOT set it when the file header does not, because no key exists to
+  open it.
 - **Confidentiality and per-chunk integrity, not authenticity.** Encryption hides
   content and detects modification of each sealed unit, and the AAD binds a unit to its
   chunk type and index ([§9.3](#93-encryption-format)). It does **not** authenticate the file: the fixed header,

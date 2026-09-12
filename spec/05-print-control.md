@@ -44,7 +44,8 @@ exactly one sector, and the union of the sector masks is the full layer image ([
 
 **Flags:** zstd-compressed. Encrypted if `AUTH` present.
 
-Per-layer timing parameter overrides.
+Per-layer timing parameter overrides. A file carries at most one `LROV` chunk; if more
+than one is present, readers use the first.
 
 ```jsonc
 {

@@ -444,6 +444,16 @@
       "file_size": 862,
       "name": "extd-type-nonascii",
       "strict_only": false
+    },
+    {
+      "base_vector": "binary-basic",
+      "description": "META's descriptor sets the encrypted bit while the file header does not, so the file carries no AUTH chunk and no key could open it.",
+      "expected_failure": "crypt.chunk_flags",
+      "file": "invalid/sealed-without-auth.lumen",
+      "file_sha256": "de69b609685c1ce54ca7b2142c86590eedb051a863a95a67ded1b5174e9f9a6d",
+      "file_size": 979,
+      "name": "sealed-without-auth",
+      "strict_only": false
     }
   ],
   "valid": [

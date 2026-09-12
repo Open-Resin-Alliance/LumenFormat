@@ -227,6 +227,9 @@ When a LUMEN-capable printer receives a file with a `PROF` chunk, it may:
 - Import the PROF profile into its local profile store for future use.
 - Apply a printer-side override profile instead of either.
 
+A file carries at most one `PROF` chunk; if more than one is present, readers use the
+first.
+
 **PROF JSON schema:**
 
 ```jsonc

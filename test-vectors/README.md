@@ -111,6 +111,7 @@ stopping at the file-completeness check first.
 | `crypt-machine-len-empty` | machine mode with an empty machine section | `crypt.machine_section_len` |
 | `crypt-argon2-budget` | a coherent password section declaring Argon2id `iterations = 99`, past the ceiling of 10 | `crypt.argon2_budget` |
 | `crypt-plaintext-content` | `ZDIC`'s descriptor does not set the encrypted flag although the file is encrypted | `crypt.chunk_flags` |
+| `sealed-without-auth` | `META`'s descriptor sets the encrypted flag although the file has no `AUTH` chunk, so no key exists | `crypt.chunk_flags` |
 | `crypt-tag-corrupt` | one ciphertext byte of LAYR block 0 flipped, which its tag must reject | `crypt.tag_verify` |
 | `prof-type-unknown` | `PROF.profile_type` is `"resin"` | `prof.profile_type` |
 | `prof-identity-empty` | `PROF.profile_name` is empty | `prof.profile_identity` |

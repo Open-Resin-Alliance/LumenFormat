@@ -309,7 +309,11 @@ def recover_session_key(auth: bytes, crypto, cipher_id: bytes, mode: int,
 def chunk_flag_report(real, blocks, encrypted_flag: bool, sealed_layr: bool):
     """(ok, detail) for crypt.chunk_flags — §11.4 / §9.1."""
     if not encrypted_flag:
-        return True, ""
+        # §9.1: the chunk-level flag requires AUTH in the same file. Without it there is
+        # no key, so a sealed unit is unreadable rather than merely unchecked.
+        sealed = [e["type"].rstrip(b"\x00").decode("ascii", "replace")
+                  for e in real if e["flags"] & SEALED_FLAG]
+        return (not sealed), ("%s sealed without AUTH" % ", ".join(sealed)) if sealed else ""
     bad = []
     for e in real:
         name = e["type"].rstrip(b"\x00").decode("ascii", "replace")
@@ -571,7 +575,8 @@ def validate(path: str, strict: bool, verbose: bool = False, crypto: dict | None
     # ============================================================== phase 3
     # Chunk flags are directory metadata: checked before any decryption.
     sealed_layr = bool(find(b"LAYR")[0]["flags"] & SEALED_FLAG)
-    if crypto_engaged and not halt_crypto:
+    any_sealed = any(e["flags"] & SEALED_FLAG for e in real)
+    if (crypto_engaged or any_sealed) and not halt_crypto:
         ok_flags, flag_detail = chunk_flag_report(real, blocks, encrypted_flag, sealed_layr)
         chk("crypt.chunk_flags", ok_flags, flag_detail)
         if not ok_flags:

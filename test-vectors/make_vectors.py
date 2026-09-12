@@ -1360,6 +1360,12 @@ def main() -> int:
                       "An EXTD ext_type is four non-ASCII bytes, so no reader can name the extension.",
                       [extd_payload(b"\x80\x81\x82\x83", b"x")])
 
+    # a chunk that claims to be sealed in a file that carries no AUTH at all
+    b = patch_chunk_flags(raw, layout, b"META", 0x10)
+    emit_invalid("sealed-without-auth",
+                 "META's descriptor sets the encrypted bit while the file header does not, so the file carries no AUTH chunk and no key could open it.",
+                 "crypt.chunk_flags", repack(b, layout), base="binary-basic")
+
     with open(os.path.join(HERE, "manifest.json"), "w", encoding="utf-8", newline="\n") as fh:
         json.dump(manifest, fh, indent=2, sort_keys=True)
         fh.write("\n")
