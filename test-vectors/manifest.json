@@ -1,0 +1,1203 @@
+{
+  "generator": {
+    "note": "Compressed payload bytes depend on the zstd version and level. Uncompressed structures (HDR, LTBL, LAYR header and block table, LHAS, REE streams, directory, trailer) are exact.",
+    "python": "3.11.9",
+    "zstandard": "0.25.0",
+    "zstd_layer_level": 6,
+    "zstd_small_level": 3
+  },
+  "invalid": [
+    {
+      "base_vector": "binary-basic",
+      "description": "LTBL entry 0 has sector_count 0 but data_size 2.",
+      "expected_failure": "ltbl.empty_layer_no_bytes",
+      "file": "invalid/empty-layer-with-bytes.lumen",
+      "file_sha256": "f4243608d632e5c6be1ac97c1dd17d29e3955b4239ae2217a591b4e193f10b1f",
+      "file_size": 979,
+      "name": "empty-layer-with-bytes",
+      "strict_only": false
+    },
+    {
+      "base_vector": null,
+      "description": "Layer 0 stores all-black as tag 0x00 with run_count 0 instead of the empty-layer form.",
+      "expected_failure": "ree.no_run_count_zero",
+      "file": "invalid/run-count-zero-all-black.lumen",
+      "file_sha256": "a910c47361b1d64aa22641da4b507caf6c43142dfc12393d25eaf8dd3ef5b170",
+      "file_size": 793,
+      "name": "run-count-zero-all-black",
+      "strict_only": true
+    },
+    {
+      "base_vector": "binary-basic",
+      "description": "LTBL entry 1 points at block 99 when the file has three blocks.",
+      "expected_failure": "ltbl.block_index_in_range",
+      "file": "invalid/block-index-out-of-range.lumen",
+      "file_sha256": "c7b774f8f86aa4e34b6b11bd32b7940c4c796b30e22f5563f3f830e7d0de8aa4",
+      "file_size": 979,
+      "name": "block-index-out-of-range",
+      "strict_only": false
+    },
+    {
+      "base_vector": "binary-basic",
+      "description": "Block 1 frame_offset leaves a one-byte gap, breaking contiguity.",
+      "expected_failure": "layr.block_table_contiguous",
+      "file": "invalid/block-table-gap.lumen",
+      "file_sha256": "4b81dc9d1536fe46384be7dcaae96537c796df41bbb024610c549870fb07a7f8",
+      "file_size": 979,
+      "name": "block-table-gap",
+      "strict_only": false
+    },
+    {
+      "base_vector": "binary-basic",
+      "description": "One byte of merkle_root is flipped, so recomputation from layer_hashes disagrees.",
+      "expected_failure": "lhas.root_recompute",
+      "file": "invalid/merkle-root-mismatch.lumen",
+      "file_sha256": "555af4a8e7c311c7d4b787c12d895ac813d1476cf3a37f59e6a97aaeac3b0530",
+      "file_size": 979,
+      "name": "merkle-root-mismatch",
+      "strict_only": false
+    },
+    {
+      "base_vector": "binary-basic",
+      "description": "Layer 0's stored leaf hash is altered and merkle_root recomputed to match, so only hashing the actual bytes catches it.",
+      "expected_failure": "lhas.leaf_match",
+      "file": "invalid/layer-hash-mismatch.lumen",
+      "file_sha256": "5ab4b449bd4a72fa7a0d33769941c0b5eddee3837781576e5763e945e2b419a3",
+      "file_size": 979,
+      "name": "layer-hash-mismatch",
+      "strict_only": true
+    },
+    {
+      "base_vector": "binary-basic",
+      "description": "LTBL entry 2 claims a data_size far beyond its block's decompressed size.",
+      "expected_failure": "ltbl.offsets_within_block",
+      "file": "invalid/layer-range-past-block.lumen",
+      "file_sha256": "c73a5a010f27738ffd9f4076e89939571daaddc1852c36b8806da8d1e690920c",
+      "file_size": 979,
+      "name": "layer-range-past-block",
+      "strict_only": false
+    },
+    {
+      "base_vector": "binary-basic",
+      "description": "The trailer CRC-32C does not match the file bytes.",
+      "expected_failure": "trailer.crc32c",
+      "file": "invalid/trailer-crc-mismatch.lumen",
+      "file_sha256": "fc491ea85408414e3b7a1b19005f89dc8710b2ca779cd237b6e51c58a9dfb97f",
+      "file_size": 979,
+      "name": "trailer-crc-mismatch",
+      "strict_only": false
+    }
+  ],
+  "valid": [
+    {
+      "block_size_layers": 2,
+      "blocks": [
+        {
+          "frame_offset": 0,
+          "frame_size": 15,
+          "uncompressed_size": 6
+        },
+        {
+          "frame_offset": 15,
+          "frame_size": 31,
+          "uncompressed_size": 22
+        },
+        {
+          "frame_offset": 46,
+          "frame_size": 33,
+          "uncompressed_size": 73
+        }
+      ],
+      "chunk_count": 5,
+      "description": "Six layers covering the empty-layer form, binary REE, grayscale REE and split REE, across three blocks with no dictionary.",
+      "dict": {
+        "dict_id": 0,
+        "dict_size": 0,
+        "present": false
+      },
+      "dir_offset": 811,
+      "display_height_px": 48,
+      "display_width_px": 64,
+      "features": [
+        "empty-layer",
+        "binary-ree",
+        "grayscale-ree",
+        "split-ree",
+        "multi-block",
+        "no-dictionary"
+      ],
+      "file": "valid/binary-basic.lumen",
+      "file_sha256": "9b30e8b4271eef6e4b6212c67eea08660cc749d34ff43c0b3037353e85f0740c",
+      "file_size": 979,
+      "header_flags": 0,
+      "layer_height_mm": 0.05,
+      "layers": [
+        {
+          "block_index": 0,
+          "data_offset": 0,
+          "data_size": 0,
+          "decompressed_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "index": 0,
+          "lhas_leaf": "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d",
+          "sector_count": 0,
+          "sector_tags": [],
+          "tag": null
+        },
+        {
+          "block_index": 0,
+          "data_offset": 0,
+          "data_size": 6,
+          "decompressed_sha256": "a1b583bf00f453b9e52e82b1623d4b60e464196e44bfea9a5deb3f2a47d05666",
+          "index": 1,
+          "lhas_leaf": "9683e5673ab539bdc59e60058d049e0e4b889c543a00ac407e42328337feb6c7",
+          "sector_count": 1,
+          "sector_tags": [
+            0
+          ],
+          "tag": 0
+        },
+        {
+          "block_index": 1,
+          "data_offset": 0,
+          "data_size": 7,
+          "decompressed_sha256": "1c2c299e13cfc275dff741413853cd8ef3b75fd738e85ce325af3f6614810f10",
+          "index": 2,
+          "lhas_leaf": "0a75ff57a15b4c236888554857c736aae949b40041e155bbf2f28cd0e8bb9b80",
+          "sector_count": 1,
+          "sector_tags": [
+            0
+          ],
+          "tag": 0
+        },
+        {
+          "block_index": 1,
+          "data_offset": 7,
+          "data_size": 15,
+          "decompressed_sha256": "a8c4789dd86c669d8d234aed6bddc5da3678ff3c8b539e8e030edc5f47299aac",
+          "index": 3,
+          "lhas_leaf": "991ff83b7f2001b74b45833fc6715ed7f6edf2a38c21c87d0020aac61263832e",
+          "sector_count": 1,
+          "sector_tags": [
+            1
+          ],
+          "tag": 1
+        },
+        {
+          "block_index": 2,
+          "data_offset": 0,
+          "data_size": 68,
+          "decompressed_sha256": "0c165c76b8517b8e1c58d7d82ec09e8bd6a7f3138f233c1aa9bed1193a044c81",
+          "index": 4,
+          "lhas_leaf": "0a8fb73317182b9fb29cb15111ded8667fe076412cb371c59c1d1a7500b5f127",
+          "sector_count": 1,
+          "sector_tags": [
+            2
+          ],
+          "tag": 2
+        },
+        {
+          "block_index": 2,
+          "data_offset": 68,
+          "data_size": 5,
+          "decompressed_sha256": "0c4171601105ef00f07912fbbd7c843261e766fab85a279a93a66d4ecc5530ab",
+          "index": 5,
+          "lhas_leaf": "798b978a41761e369368117fd591ccd921be2c8155d478b9d9dac802c32ce51a",
+          "sector_count": 1,
+          "sector_tags": [
+            0
+          ],
+          "tag": 0
+        }
+      ],
+      "merkle_root": "d58181d603793f6849f422ed55b101480aa3292e8c4d9948005df75da574709b",
+      "multi_sector": false,
+      "name": "binary-basic",
+      "total_layers": 6,
+      "total_uncompressed_size": 893,
+      "trailer_crc32c": "0x7D028068"
+    },
+    {
+      "block_size_layers": 16,
+      "blocks": [
+        {
+          "frame_offset": 0,
+          "frame_size": 3942,
+          "uncompressed_size": 16589
+        },
+        {
+          "frame_offset": 3942,
+          "frame_size": 3936,
+          "uncompressed_size": 17512
+        },
+        {
+          "frame_offset": 7878,
+          "frame_size": 3981,
+          "uncompressed_size": 16191
+        },
+        {
+          "frame_offset": 11859,
+          "frame_size": 3958,
+          "uncompressed_size": 17151
+        }
+      ],
+      "chunk_count": 6,
+      "description": "64 layers with a trained ZDIC dictionary, four blocks of sixteen layers.",
+      "dict": {
+        "dict_id": 59649903,
+        "dict_size": 1024,
+        "present": true
+      },
+      "dir_offset": 20629,
+      "display_height_px": 192,
+      "display_width_px": 256,
+      "features": [
+        "dictionary",
+        "dictionary-id",
+        "multi-block",
+        "grayscale-ree",
+        "split-ree"
+      ],
+      "file": "valid/dict-multi-block.lumen",
+      "file_sha256": "d41f746ec5689cfa3cd6ab8c4ec88bd226f58c5c3e68f892d7da53f97d881b2c",
+      "file_size": 20829,
+      "header_flags": 0,
+      "layer_height_mm": 0.05,
+      "layers": [
+        {
+          "block_index": 0,
+          "data_offset": 0,
+          "data_size": 1604,
+          "decompressed_sha256": "cfdced78e46ac0ab7c34cfe90c7925efea485c0c680a90a6b6e17bae9d549107",
+          "index": 0,
+          "lhas_leaf": "aa72f59f714ede88f636733c655e1681b299736335d3185c0b2ea7f4631648e8",
+          "sector_count": 1,
+          "sector_tags": [
+            2
+          ],
+          "tag": 2
+        },
+        {
+          "block_index": 0,
+          "data_offset": 1604,
+          "data_size": 364,
+          "decompressed_sha256": "d416e7df52b71cc8e2c60a0fd0bbf2403bb50132c05a1fec26b8ccb2e08d8c2e",
+          "index": 1,
+          "lhas_leaf": "7e5abf0f39fd2f2d60fc9e8b8421ca827181a8fcd68cfeccbb874523e086a29c",
+          "sector_count": 1,
+          "sector_tags": [
+            1
+          ],
+          "tag": 1
+        },
+        {
+          "block_index": 0,
+          "data_offset": 1968,
+          "data_size": 1645,
+          "decompressed_sha256": "2434f8ff44d596bf37b04c2d5e6b68e1bba7c388aa8fa94efffeee3ac82210ed",
+          "index": 2,
+          "lhas_leaf": "c98d3dbc2f97d20197d4a889e73a95c6e514e97825ceabc5ec7af1c0771d0e29",
+          "sector_count": 1,
+          "sector_tags": [
+            2
+          ],
+          "tag": 2
+        },
+        {
+          "block_index": 0,
+          "data_offset": 3613,
+          "data_size": 364,
+          "decompressed_sha256": "43023798b3ec3f10f573b060f7e9b47eca06e801f4750d1ec4402bd6020413bd",
+          "index": 3,
+          "lhas_leaf": "caaf561924b8f8a1e3140fc3618f8710c727865dd09a044359c307ef8bcbfcdf",
+          "sector_count": 1,
+          "sector_tags": [
+            1
+          ],
+          "tag": 1
+        },
+        {
+          "block_index": 0,
+          "data_offset": 3977,
+          "data_size": 1685,
+          "decompressed_sha256": "6ae19e1387553ce3d0d6309feac500125798d83d7a6d9c807dac7693e6012fab",
+          "index": 4,
+          "lhas_leaf": "03bf010e070b6e6d2fbbdf62ed90652a38cd23275d9f617c8a86b6dbdc01c442",
+          "sector_count": 1,
+          "sector_tags": [
+            2
+          ],
+          "tag": 2
+        },
+        {
+          "block_index": 0,
+          "data_offset": 5662,
+          "data_size": 364,
+          "decompressed_sha256": "178b3c9f2d8539d7841b9136ff6597cb3e0d32e749024b6b01921035377152d4",
+          "index": 5,
+          "lhas_leaf": "87476cffea8526efa44565aa2382e20c2b4db5faf050ccc1fbcc51c05dafbbca",
+          "sector_count": 1,
+          "sector_tags": [
+            1
+          ],
+          "tag": 1
+        },
+        {
+          "block_index": 0,
+          "data_offset": 6026,
+          "data_size": 1684,
+          "decompressed_sha256": "d863cb17429884ee266e4aa6bef95d5596a97239e6e50a1a5084dfb0eeabd730",
+          "index": 6,
+          "lhas_leaf": "a2bf9c17f4ebb77bb55dd504d011bb9a723c10e0292fa609bdc0530b12cf11b9",
+          "sector_count": 1,
+          "sector_tags": [
+            2
+          ],
+          "tag": 2
+        },
+        {
+          "block_index": 0,
+          "data_offset": 7710,
+          "data_size": 364,
+          "decompressed_sha256": "3f37dde9d6136372f5ee5f723c591f75f9256474fc686dd8a430337a3f3b9e99",
+          "index": 7,
+          "lhas_leaf": "07faf135b603cd2e58776fb02694e7b122a4f22fb2fe90c966da1c7e0e9aecef",
+          "sector_count": 1,
+          "sector_tags": [
+            1
+          ],
+          "tag": 1
+        },
+        {
+          "block_index": 0,
+          "data_offset": 8074,
+          "data_size": 1725,
+          "decompressed_sha256": "73dcd3c15f108fcf218e4c84f28875ff93a06ec220ad8cdaf27301054d8f92bc",
+          "index": 8,
+          "lhas_leaf": "37aa55f86cc685f5691828dab3c880c3aaec5e3d57cc8055c1aa37bc8ffc7edd",
+          "sector_count": 1,
+          "sector_tags": [
+            2
+          ],
+          "tag": 2
+        },
+        {
+          "block_index": 0,
+          "data_offset": 9799,
+          "data_size": 364,
+          "decompressed_sha256": "4c11eea73f3c21a0c8c0c8af0e82834139ea82123b12e79ecb3395e1e6353483",
+          "index": 9,
+          "lhas_leaf": "765b8e16ae8097ebbf392dd047707e9c22b6698ff642d999eeaf3f8085d09d25",
+          "sector_count": 1,
+          "sector_tags": [
+            1
+          ],
+          "tag": 1
+        },
+        {
+          "block_index": 0,
+          "data_offset": 10163,
+          "data_size": 1765,
+          "decompressed_sha256": "d461c126ab7597cc523d70ebf0a0f09fcc1c8ddd8c9d9aae05aed85e8b664440",
+          "index": 10,
+          "lhas_leaf": "2218ca88fbb48dc1455afd010ba000f4a1398b0ad2399f5f58b16b3512cb59ba",
+          "sector_count": 1,
+          "sector_tags": [
+            2
+          ],
+          "tag": 2
+        },
+        {
+          "block_index": 0,
+          "data_offset": 11928,
+          "data_size": 364,
+          "decompressed_sha256": "6757d7c1334570f1d1159319b7c16d446f1fddd019e228995342a71946a03ee0",
+          "index": 11,
+          "lhas_leaf": "9740facbd632e436d2d8ee1a43aecdb9352ddf63aedd6368d05ca742e06cef7e",
+          "sector_count": 1,
+          "sector_tags": [
+            1
+          ],
+          "tag": 1
+        },
+        {
+          "block_index": 0,
+          "data_offset": 12292,
+          "data_size": 1764,
+          "decompressed_sha256": "d705e4dddcc06bb2f7cc7fad033ef6a900c6fc2d56fabffe8ca0b30b16581cc9",
+          "index": 12,
+          "lhas_leaf": "53ce09a361ea9258a85d4a5bfa7808247cb0c86b46f005021a070ec1a1667480",
+          "sector_count": 1,
+          "sector_tags": [
+            2
+          ],
+          "tag": 2
+        },
+        {
+          "block_index": 0,
+          "data_offset": 14056,
+          "data_size": 364,
+          "decompressed_sha256": "5e594d1ee6d059fdcf942323a452061435f039955dae80046a86960501cfeea4",
+          "index": 13,
+          "lhas_leaf": "0e6bb0892d30247da81ebc9787e2b79212fb39ab155a4d73d87767bfb98b7a56",
+          "sector_count": 1,
+          "sector_tags": [
+            1
+          ],
+          "tag": 1
+        },
+        {
+          "block_index": 0,
+          "data_offset": 14420,
+          "data_size": 1805,
+          "decompressed_sha256": "057bbe0fcacf92199bfdfb20b5a34840791001505deb73e8d821dc3812b69c4c",
+          "index": 14,
+          "lhas_leaf": "c359470372128f2a8ba7096811bb25b9698a9256d5a12e5bf914519e5f5d6755",
+          "sector_count": 1,
+          "sector_tags": [
+            2
+          ],
+          "tag": 2
+        },
+        {
+          "block_index": 0,
+          "data_offset": 16225,
+          "data_size": 364,
+          "decompressed_sha256": "be5d18d505350881c2cd4b958204d4ffc5ca5ddbb725b4a4686791d00fe2aade",
+          "index": 15,
+          "lhas_leaf": "34abcd8a6b42a5491084f28520e3ec9063c45726e20954ee332d4b785c922511",
+          "sector_count": 1,
+          "sector_tags": [
+            1
+          ],
+          "tag": 1
+        },
+        {
+          "block_index": 1,
+          "data_offset": 0,
+          "data_size": 1845,
+          "decompressed_sha256": "13c11af7780567973e1b444eece8602f19142e1748dc7860d079df7639cc66b9",
+          "index": 16,
+          "lhas_leaf": "4e381c4386dd73453eb8e08b62f042ca8db93046dd67a7f0d0c4839b9a9f5ef9",
+          "sector_count": 1,
+          "sector_tags": [
+            2
+          ],
+          "tag": 2
+        },
+        {
+          "block_index": 1,
+          "data_offset": 1845,
+          "data_size": 365,
+          "decompressed_sha256": "317d7a1a07342b9fe162afa899b6a8bbe762c4b53b7a428c987209f88c90db28",
+          "index": 17,
+          "lhas_leaf": "6d688633998ef671594d6dea75a5a73f618c1891ae3d9e83d7f4f0f8be9d3a77",
+          "sector_count": 1,
+          "sector_tags": [
+            1
+          ],
+          "tag": 1
+        },
+        {
+          "block_index": 1,
+          "data_offset": 2210,
+          "data_size": 1844,
+          "decompressed_sha256": "64c15583db798d1dd573bc590cc970772396e4b1564949f120be8182e330293c",
+          "index": 18,
+          "lhas_leaf": "7741dc3429f841c6d457d16a2f320ab3bb3c395b89f7c4af2accd4ede68eb581",
+          "sector_count": 1,
+          "sector_tags": [
+            2
+          ],
+          "tag": 2
+        },
+        {
+          "block_index": 1,
+          "data_offset": 4054,
+          "data_size": 364,
+          "decompressed_sha256": "da6cac9ab01a65aacd50f6cac868ff636264f11fe0aacb670dd9b04b01150f63",
+          "index": 19,
+          "lhas_leaf": "dc5bdf5d696417060417ae6c7a63cc571a9eb94f475fe6d96acbba9239dfd1bb",
+          "sector_count": 1,
+          "sector_tags": [
+            1
+          ],
+          "tag": 1
+        },
+        {
+          "block_index": 1,
+          "data_offset": 4418,
+          "data_size": 1885,
+          "decompressed_sha256": "c41f4e6119e312c3692e4844bb84cb0e25c13b8ffea2efa21235ad2ca082d156",
+          "index": 20,
+          "lhas_leaf": "27b37cec7da40176ad076abe5225343a4c649dce3fdbf572e51f617c6e91aa54",
+          "sector_count": 1,
+          "sector_tags": [
+            2
+          ],
+          "tag": 2
+        },
+        {
+          "block_index": 1,
+          "data_offset": 6303,
+          "data_size": 364,
+          "decompressed_sha256": "759b0108708ef6fe4783ece16304556423ca9ed688c6e474462d68edeb83bd4c",
+          "index": 21,
+          "lhas_leaf": "bba6608d2cdd4b29a75a5a49700b52bedec7a7aee1c64b35125627fa12b5bce8",
+          "sector_count": 1,
+          "sector_tags": [
+            1
+          ],
+          "tag": 1
+        },
+        {
+          "block_index": 1,
+          "data_offset": 6667,
+          "data_size": 1845,
+          "decompressed_sha256": "3b914b9a4ce89682e5e970b2dd3d645d74ebaa7dfc3413a6333d4181486fb697",
+          "index": 22,
+          "lhas_leaf": "544e86f626a06ecd29674b7e25bb8906e2fc876a4fe679d2cf65f2290db5c998",
+          "sector_count": 1,
+          "sector_tags": [
+            2
+          ],
+          "tag": 2
+        },
+        {
+          "block_index": 1,
+          "data_offset": 8512,
+          "data_size": 364,
+          "decompressed_sha256": "0119b13aabbafb9428275d884cd78acf5e5d8ac1ec488d44158dd0bec8c04801",
+          "index": 23,
+          "lhas_leaf": "983182a8b63d3c2599f2b8bd292fa24d6c1e082e5441ecdb59c65dc554fe1a09",
+          "sector_count": 1,
+          "sector_tags": [
+            1
+          ],
+          "tag": 1
+        },
+        {
+          "block_index": 1,
+          "data_offset": 8876,
+          "data_size": 1844,
+          "decompressed_sha256": "eb09315fcdd6bed30cae9b2d2db3a978f99d07db170a10361e62bc7c1839a200",
+          "index": 24,
+          "lhas_leaf": "462b2760720abd0c378c38ff3f47226fb4e38f35784d29e446faff108648cde2",
+          "sector_count": 1,
+          "sector_tags": [
+            2
+          ],
+          "tag": 2
+        },
+        {
+          "block_index": 1,
+          "data_offset": 10720,
+          "data_size": 365,
+          "decompressed_sha256": "cf287346adb384d4618b09bfaae48689211117f7f621491e2a7a026ddee2344a",
+          "index": 25,
+          "lhas_leaf": "3217b14b14aee6562c594bdf0691cd324959ca2e4148ef5d196faee108a23fab",
+          "sector_count": 1,
+          "sector_tags": [
+            1
+          ],
+          "tag": 1
+        },
+        {
+          "block_index": 1,
+          "data_offset": 11085,
+          "data_size": 1805,
+          "decompressed_sha256": "7613dfe569fcc6a51c3118ada807b154be0879fc86575ca974fc1a1cb3e1fceb",
+          "index": 26,
+          "lhas_leaf": "fb2d1364706ba1a1c42994b356b3f3c76b9259cdfbe9498ea18f4d3040e27a8a",
+          "sector_count": 1,
+          "sector_tags": [
+            2
+          ],
+          "tag": 2
+        },
+        {
+          "block_index": 1,
+          "data_offset": 12890,
+          "data_size": 364,
+          "decompressed_sha256": "15f0e3ea34523e654925591d3771bea4ebbbd1283d729708bf37ce2263a3542c",
+          "index": 27,
+          "lhas_leaf": "580e35317eeb5286921198e4aca6a8317b6b74fac17001f3ad95d6cc6aee7669",
+          "sector_count": 1,
+          "sector_tags": [
+            1
+          ],
+          "tag": 1
+        },
+        {
+          "block_index": 1,
+          "data_offset": 13254,
+          "data_size": 1765,
+          "decompressed_sha256": "64846b8fe8f9e2af714847af14dc57abab46af9d26c3a2bd0bda7103757bcb84",
+          "index": 28,
+          "lhas_leaf": "d33e01e43acb1ffd5bd2b01405eeb3eef403a6a838e511192d13df1a0a262054",
+          "sector_count": 1,
+          "sector_tags": [
+            2
+          ],
+          "tag": 2
+        },
+        {
+          "block_index": 1,
+          "data_offset": 15019,
+          "data_size": 364,
+          "decompressed_sha256": "8a879445cfa373984dd7c584f54e2d2ba875cb8ef46db557e0cf47209e888616",
+          "index": 29,
+          "lhas_leaf": "a42b9baed73b25c1607f3c07ecd410dd424758a656d7bc8e1127ac1d5cf8ae07",
+          "sector_count": 1,
+          "sector_tags": [
+            1
+          ],
+          "tag": 1
+        },
+        {
+          "block_index": 1,
+          "data_offset": 15383,
+          "data_size": 1764,
+          "decompressed_sha256": "a7f375aa7b1ee4aa93884fea41f40ec582f79349fb367d2c14fb9d28b090d8aa",
+          "index": 30,
+          "lhas_leaf": "9c509891691c655e43a898094c88a57029161ed55a061a5de53947494eb135a0",
+          "sector_count": 1,
+          "sector_tags": [
+            2
+          ],
+          "tag": 2
+        },
+        {
+          "block_index": 1,
+          "data_offset": 17147,
+          "data_size": 365,
+          "decompressed_sha256": "94c6dc827fc6b94fcb0f2d044e11c3fbca516c26ab8fecb2a6ae378fca5e18da",
+          "index": 31,
+          "lhas_leaf": "43105e2a8f7265abb7d853424613e9cde60580714cbdf7ccf8d4b316c3e16316",
+          "sector_count": 1,
+          "sector_tags": [
+            1
+          ],
+          "tag": 1
+        },
+        {
+          "block_index": 2,
+          "data_offset": 0,
+          "data_size": 1725,
+          "decompressed_sha256": "cedd7885b9e84c041620966e6968b4741f42906c71ea15320a3dbd02393e2f1c",
+          "index": 32,
+          "lhas_leaf": "e2a3de9a9b159da00d6f74f3fe7af46d4f3a7ac348e3841d11190e583d79e569",
+          "sector_count": 1,
+          "sector_tags": [
+            2
+          ],
+          "tag": 2
+        },
+        {
+          "block_index": 2,
+          "data_offset": 1725,
+          "data_size": 365,
+          "decompressed_sha256": "9d9b41e4b04bf462c20b7ef4a6ecc058e1929eda1ecd063572e17a975f5fcebb",
+          "index": 33,
+          "lhas_leaf": "d11f61cf9ca974fc92c98750ee2226cbbb22b07869d7b54f38c0e468e28e29b1",
+          "sector_count": 1,
+          "sector_tags": [
+            1
+          ],
+          "tag": 1
+        },
+        {
+          "block_index": 2,
+          "data_offset": 2090,
+          "data_size": 1685,
+          "decompressed_sha256": "931215ac0278dd90ecb351688eaedd7793f27682645e73c3ec01e2011102c0ce",
+          "index": 34,
+          "lhas_leaf": "23f026279d067af39bfec5534a8c0a6c6f4fff65c0dccf279d695a40eb106ace",
+          "sector_count": 1,
+          "sector_tags": [
+            2
+          ],
+          "tag": 2
+        },
+        {
+          "block_index": 2,
+          "data_offset": 3775,
+          "data_size": 364,
+          "decompressed_sha256": "3c67622d4a04baa559cd645c8d925b19d6930b4fbbd240fd0aa3b70919da5049",
+          "index": 35,
+          "lhas_leaf": "753d41fc643b24465d523993d20fec3e26455d18039789b150ac05d18fa2b24b",
+          "sector_count": 1,
+          "sector_tags": [
+            1
+          ],
+          "tag": 1
+        },
+        {
+          "block_index": 2,
+          "data_offset": 4139,
+          "data_size": 1684,
+          "decompressed_sha256": "f5b37fff4d6774267afc0c48f70e43fd9bb2ff9905c678580f48f245a592f2c2",
+          "index": 36,
+          "lhas_leaf": "eb71b046528e90231490bb84222887b9362a4068cf1b4386b03259ab61e27005",
+          "sector_count": 1,
+          "sector_tags": [
+            2
+          ],
+          "tag": 2
+        },
+        {
+          "block_index": 2,
+          "data_offset": 5823,
+          "data_size": 364,
+          "decompressed_sha256": "ccd7dbbb18f18e78a4309ccaccb062112f0711ef41049ccc4c74ac84e04940b5",
+          "index": 37,
+          "lhas_leaf": "47d98b3cd0737e264e754a82550814c300b479455a54c82b43152b3cf1b56cf8",
+          "sector_count": 1,
+          "sector_tags": [
+            1
+          ],
+          "tag": 1
+        },
+        {
+          "block_index": 2,
+          "data_offset": 6187,
+          "data_size": 1645,
+          "decompressed_sha256": "9a01d38222caa2d14b954d592fa760d7f8dff8f28c8be0c4ca81715a741c065f",
+          "index": 38,
+          "lhas_leaf": "dd67034e7e76ace4c4ab3424e2d9f9b491e59cb04c83a9bbeed994e709a3ec37",
+          "sector_count": 1,
+          "sector_tags": [
+            2
+          ],
+          "tag": 2
+        },
+        {
+          "block_index": 2,
+          "data_offset": 7832,
+          "data_size": 365,
+          "decompressed_sha256": "9f63a61d812ee2a9046f369624bd735df0d5141b03132f7f598494ec28a215aa",
+          "index": 39,
+          "lhas_leaf": "2162447b31bc23649aee5c457575c43bce7b32b976be4e25d90b0f885bd17a65",
+          "sector_count": 1,
+          "sector_tags": [
+            1
+          ],
+          "tag": 1
+        },
+        {
+          "block_index": 2,
+          "data_offset": 8197,
+          "data_size": 1605,
+          "decompressed_sha256": "2138645e10c224a4ec603bc0d5d8cc8df2c08534264efb5a2486e8c4523d381d",
+          "index": 40,
+          "lhas_leaf": "b3a7ed474be5dcdc46dfeba60854b72722f1450ae50af8738b8460d7daa3937c",
+          "sector_count": 1,
+          "sector_tags": [
+            2
+          ],
+          "tag": 2
+        },
+        {
+          "block_index": 2,
+          "data_offset": 9802,
+          "data_size": 364,
+          "decompressed_sha256": "ce488bf148026699a838f60ebb1ce5863611d2c6421cccfc068835216ff1499f",
+          "index": 41,
+          "lhas_leaf": "cad5fc856ebcd4ac952f80548d9efe45d59a63759c9bf18b5a34965129ca960b",
+          "sector_count": 1,
+          "sector_tags": [
+            1
+          ],
+          "tag": 1
+        },
+        {
+          "block_index": 2,
+          "data_offset": 10166,
+          "data_size": 1604,
+          "decompressed_sha256": "470bb76867ff53b31f38be1c37f1f087e4b6ed48b489ee463bebdbae63f27f0b",
+          "index": 42,
+          "lhas_leaf": "f5772bf3ae2845001a4267a9e9d98144883d24294858faea53bd15325457d973",
+          "sector_count": 1,
+          "sector_tags": [
+            2
+          ],
+          "tag": 2
+        },
+        {
+          "block_index": 2,
+          "data_offset": 11770,
+          "data_size": 363,
+          "decompressed_sha256": "87deeef941870bde397591c69818bbc21eddb3e55307a16dd6fef02e91d817ec",
+          "index": 43,
+          "lhas_leaf": "8233944280c59a0bcb0288b7a5a1ddf99764d9114766debb970823ca88833687",
+          "sector_count": 1,
+          "sector_tags": [
+            1
+          ],
+          "tag": 1
+        },
+        {
+          "block_index": 2,
+          "data_offset": 12133,
+          "data_size": 1645,
+          "decompressed_sha256": "e83aea0885eec59a374c284845da7e490f4c83b0f47ea38f4fe0a479fe415e32",
+          "index": 44,
+          "lhas_leaf": "95c1ea1fafd0c8ef167e41f0a247576a533c6a86ee506cee42a84dcb720da200",
+          "sector_count": 1,
+          "sector_tags": [
+            2
+          ],
+          "tag": 2
+        },
+        {
+          "block_index": 2,
+          "data_offset": 13778,
+          "data_size": 364,
+          "decompressed_sha256": "55a6a883965d04725de48dd2093cbab31cc9cc9d5defd932c44eaecf2c5864fd",
+          "index": 45,
+          "lhas_leaf": "a825bdc6f5b0295dea3b4d6060e4fc397bc0b9fc9202eb1b8580f7cb91738e5f",
+          "sector_count": 1,
+          "sector_tags": [
+            1
+          ],
+          "tag": 1
+        },
+        {
+          "block_index": 2,
+          "data_offset": 14142,
+          "data_size": 1685,
+          "decompressed_sha256": "7ca34b79221e3c58497c8ec37777fa9183a39e01856e34f25fe7a9d749a4897a",
+          "index": 46,
+          "lhas_leaf": "4365f3b42b83e9cba62743a3d99736f213a0c38103d112c1829cd34bd39b3cc6",
+          "sector_count": 1,
+          "sector_tags": [
+            2
+          ],
+          "tag": 2
+        },
+        {
+          "block_index": 2,
+          "data_offset": 15827,
+          "data_size": 364,
+          "decompressed_sha256": "396dfce20d2934223e8f9d9dc0f61f9ec6020e16404a01a317e733527767a231",
+          "index": 47,
+          "lhas_leaf": "6567e6304b1e8573f55805533c61bd0ddf3bfeb36983180e701e9d5f85e7dd68",
+          "sector_count": 1,
+          "sector_tags": [
+            1
+          ],
+          "tag": 1
+        },
+        {
+          "block_index": 3,
+          "data_offset": 0,
+          "data_size": 1684,
+          "decompressed_sha256": "4165a2b02dd989275a150b11cb2a259afbe70ff18b7ab2c1d997b5d572a46b17",
+          "index": 48,
+          "lhas_leaf": "582277e9bd449609ec6fda6756c81c76158b99b760eccebc238718d2fa85e0e9",
+          "sector_count": 1,
+          "sector_tags": [
+            2
+          ],
+          "tag": 2
+        },
+        {
+          "block_index": 3,
+          "data_offset": 1684,
+          "data_size": 364,
+          "decompressed_sha256": "e547bc29f91163db403623a4e96f6691fe0e01e77f5b824062b12294028630d5",
+          "index": 49,
+          "lhas_leaf": "45a156d7d9697ea24cf4f5282e1892acdca726fc06a63647a308b14ac7c174fe",
+          "sector_count": 1,
+          "sector_tags": [
+            1
+          ],
+          "tag": 1
+        },
+        {
+          "block_index": 3,
+          "data_offset": 2048,
+          "data_size": 1725,
+          "decompressed_sha256": "cbf1574f20877fe413ac6ee90cb8dfcdba065d3612939afeb8bd97ae72fdd90b",
+          "index": 50,
+          "lhas_leaf": "445f237f42bfa8184fed040effc81a76d63e4859e62f80264870d24afba2cf9f",
+          "sector_count": 1,
+          "sector_tags": [
+            2
+          ],
+          "tag": 2
+        },
+        {
+          "block_index": 3,
+          "data_offset": 3773,
+          "data_size": 365,
+          "decompressed_sha256": "3af74c0bbda40fe0d29d25138995a6fd2ab2451d0a4e27db0e3a8f6e7095e5b7",
+          "index": 51,
+          "lhas_leaf": "9a11df810bb5f12b3ca410dc159636ddab7820d19e9e80505d1da2472d05670c",
+          "sector_count": 1,
+          "sector_tags": [
+            1
+          ],
+          "tag": 1
+        },
+        {
+          "block_index": 3,
+          "data_offset": 4138,
+          "data_size": 1765,
+          "decompressed_sha256": "6faaba2c1db111eac013fc8d74cdcd0d836e6a3be5e1c938769a8990950d0f5a",
+          "index": 52,
+          "lhas_leaf": "336d92847b309f9bb6ccf34179647c99418737df84ff28078c75dab18e30f0fc",
+          "sector_count": 1,
+          "sector_tags": [
+            2
+          ],
+          "tag": 2
+        },
+        {
+          "block_index": 3,
+          "data_offset": 5903,
+          "data_size": 364,
+          "decompressed_sha256": "198adfe407b478ef8e1affbbd9d9900bf9adb534079107179f94a1402ea493a9",
+          "index": 53,
+          "lhas_leaf": "369f564e7d364d1f988e1f6ae2a26805158afef20915f1dcb405830eea3ab7c9",
+          "sector_count": 1,
+          "sector_tags": [
+            1
+          ],
+          "tag": 1
+        },
+        {
+          "block_index": 3,
+          "data_offset": 6267,
+          "data_size": 1764,
+          "decompressed_sha256": "234f0da93e96848c5f444c94970237e0aa3d2b65408cca0dbeae98b942d04a09",
+          "index": 54,
+          "lhas_leaf": "88a6e242a5c03266ead737825954095cb594ac522c6a5636b4f10a6f5ede6a61",
+          "sector_count": 1,
+          "sector_tags": [
+            2
+          ],
+          "tag": 2
+        },
+        {
+          "block_index": 3,
+          "data_offset": 8031,
+          "data_size": 364,
+          "decompressed_sha256": "2a54379e99f7bbbc40d54a9df449d20d1d3d94520c95f328798397e31fae995d",
+          "index": 55,
+          "lhas_leaf": "8837fbbbc5f8eda94c1c046ab639dae26bf59d94ceb6c28ce517cda488b5eca2",
+          "sector_count": 1,
+          "sector_tags": [
+            1
+          ],
+          "tag": 1
+        },
+        {
+          "block_index": 3,
+          "data_offset": 8395,
+          "data_size": 1805,
+          "decompressed_sha256": "bb080f7cd75f82354a540ca3578c145b275da59c936404331b975692356dfee3",
+          "index": 56,
+          "lhas_leaf": "bd8026738da1a01df986bf962b23a7077ca0eca08f64fbd837dadd50f55417e2",
+          "sector_count": 1,
+          "sector_tags": [
+            2
+          ],
+          "tag": 2
+        },
+        {
+          "block_index": 3,
+          "data_offset": 10200,
+          "data_size": 364,
+          "decompressed_sha256": "a7084067411f1f29633c4ae266d51eb3e113adba14c89daadbebe93899cecde3",
+          "index": 57,
+          "lhas_leaf": "1af28c2942f6f8545f2a42db44e49b10eb5563a8ba23a4538e0c9f60c1f1f911",
+          "sector_count": 1,
+          "sector_tags": [
+            1
+          ],
+          "tag": 1
+        },
+        {
+          "block_index": 3,
+          "data_offset": 10564,
+          "data_size": 1845,
+          "decompressed_sha256": "7dfe7c3e2fa47fec35d0dfa3470b50b17f34c541cb518debbe49fb656b638543",
+          "index": 58,
+          "lhas_leaf": "2c705f154e39c3653da0d275c479c5402a8c4424ccc15a12cd442d9fcfc592f9",
+          "sector_count": 1,
+          "sector_tags": [
+            2
+          ],
+          "tag": 2
+        },
+        {
+          "block_index": 3,
+          "data_offset": 12409,
+          "data_size": 365,
+          "decompressed_sha256": "d30ac05d0f26d9625100012c6f9ee93b59ea38423b65b00acd64cbed24240374",
+          "index": 59,
+          "lhas_leaf": "e8139098735ac9df091909aed5f54c92e615e9380d6996ab2a16d3d580c6e34f",
+          "sector_count": 1,
+          "sector_tags": [
+            1
+          ],
+          "tag": 1
+        },
+        {
+          "block_index": 3,
+          "data_offset": 12774,
+          "data_size": 1844,
+          "decompressed_sha256": "963859256d74ad3fc66550668f03abad3a9685fd217055f8a104651887c9f1e0",
+          "index": 60,
+          "lhas_leaf": "58972fd9438c718ee46975bbe3a9749bbe5b94af49ad6a97b49d85298588af8f",
+          "sector_count": 1,
+          "sector_tags": [
+            2
+          ],
+          "tag": 2
+        },
+        {
+          "block_index": 3,
+          "data_offset": 14618,
+          "data_size": 364,
+          "decompressed_sha256": "97c8f6f12d03fc0917cdd52d42527d36b732117642203b0a8a5054fa9b59719f",
+          "index": 61,
+          "lhas_leaf": "a36a71dfa3bc35cb15a00b0f4033080978d8bd89e34436fe8155af843fe300a0",
+          "sector_count": 1,
+          "sector_tags": [
+            1
+          ],
+          "tag": 1
+        },
+        {
+          "block_index": 3,
+          "data_offset": 14982,
+          "data_size": 1805,
+          "decompressed_sha256": "9e462507d068aff5c76317f78c0af8f05bc6a0de4f9ecb2e6442037950aeec97",
+          "index": 62,
+          "lhas_leaf": "c5ba5e0dd33a0979909b883a31a57b0647eab88eb82fbf95450d584a445ebb7c",
+          "sector_count": 1,
+          "sector_tags": [
+            2
+          ],
+          "tag": 2
+        },
+        {
+          "block_index": 3,
+          "data_offset": 16787,
+          "data_size": 364,
+          "decompressed_sha256": "eedcdbb0fa34cf1f0aad07d4e23ab24da0a7cfe66ca4777bdf1f3f68bb349948",
+          "index": 63,
+          "lhas_leaf": "5f5bb8ca950012ef41449a7f90602c0e4099e6ea264b01cf17da678dbf00ab55",
+          "sector_count": 1,
+          "sector_tags": [
+            1
+          ],
+          "tag": 1
+        }
+      ],
+      "merkle_root": "f628215d289fdeff37d927f6417abb8f64017560f7146f8f15df79e6acc944d2",
+      "multi_sector": false,
+      "name": "dict-multi-block",
+      "total_layers": 64,
+      "total_uncompressed_size": 20707,
+      "trailer_crc32c": "0x9D7F7E04"
+    },
+    {
+      "block_size_layers": 2,
+      "blocks": [
+        {
+          "frame_offset": 0,
+          "frame_size": 31,
+          "uncompressed_size": 22
+        },
+        {
+          "frame_offset": 31,
+          "frame_size": 26,
+          "uncompressed_size": 17
+        }
+      ],
+      "chunk_count": 6,
+      "description": "Four layers with two non-overlapping sectors, exercising the multi-sector varint framing and the sector partition invariant.",
+      "dict": {
+        "dict_id": 0,
+        "dict_size": 0,
+        "present": false
+      },
+      "dir_offset": 869,
+      "display_height_px": 48,
+      "display_width_px": 64,
+      "features": [
+        "multi-sector",
+        "sector-framing",
+        "empty-layer",
+        "binary-ree"
+      ],
+      "file": "valid/multi-sector.lumen",
+      "file_sha256": "2665cf8e563a4bc41fcd339f7aa2a30218c34567d7987b8fef65d253d1239c0e",
+      "file_size": 1069,
+      "header_flags": 2,
+      "layer_height_mm": 0.05,
+      "layers": [
+        {
+          "block_index": 0,
+          "data_offset": 0,
+          "data_size": 15,
+          "decompressed_sha256": "74b7c16695df412942b913583b2a0bbff04bf3909d84f9d35715ebde39fd4181",
+          "index": 0,
+          "lhas_leaf": "8cc6f60f7792eff314594f6aaf85a1c4f7f84bcdd8b94f9f10502f07ec743bb1",
+          "sector_count": 2,
+          "sector_tags": [
+            0,
+            0
+          ],
+          "tag": null
+        },
+        {
+          "block_index": 0,
+          "data_offset": 15,
+          "data_size": 7,
+          "decompressed_sha256": "a1123094b593c1c400154415f0958737a924ad20a609eb298e53e38b0f2ed0c0",
+          "index": 1,
+          "lhas_leaf": "82a92b6abc4fe8be91532fbcaae7ca4f4eca8676e0992965ff6b054b77f5c897",
+          "sector_count": 1,
+          "sector_tags": [
+            0
+          ],
+          "tag": null
+        },
+        {
+          "block_index": 1,
+          "data_offset": 0,
+          "data_size": 0,
+          "decompressed_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "index": 2,
+          "lhas_leaf": "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d",
+          "sector_count": 0,
+          "sector_tags": [],
+          "tag": null
+        },
+        {
+          "block_index": 1,
+          "data_offset": 0,
+          "data_size": 17,
+          "decompressed_sha256": "5e0e4f9b411719bbc4f319a1347ece47615f2d33d89a560cecc23f2af14221e2",
+          "index": 3,
+          "lhas_leaf": "2b8b3434515c4472be075104dfa6aaf63330f2c80645ba083e96d70c54119efa",
+          "sector_count": 2,
+          "sector_tags": [
+            0,
+            0
+          ],
+          "tag": null
+        }
+      ],
+      "merkle_root": "1e84ef60b05ed292faf60cfc9b1226f8703f233d919673c1af0a119671721eb2",
+      "multi_sector": true,
+      "name": "multi-sector",
+      "total_layers": 4,
+      "total_uncompressed_size": 1068,
+      "trailer_crc32c": "0xB56E93E0"
+    }
+  ]
+}

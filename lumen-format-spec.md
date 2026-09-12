@@ -1726,7 +1726,7 @@ prefer the newer one.
 - [ ] `LTBL.entry_size >= 20`. The layout is fixed through offset 20; future versions may append fields after offset 20, and readers stride by `entry_size` to skip unknown trailing fields.
 - [ ] `HDR.layer_height_mm > 0.0`.
 - [ ] `HDR.build_width_mm > 0.0`, `HDR.build_depth_mm > 0.0`, `HDR.build_height_mm > 0.0`.
-- [ ] `HDR.encoder_name_len <= 256`, and `8 + encoder_name_len + 48 <= HDR.size_uncompressed` so that the name plus the trailing fixed fields fit inside the chunk.
+- [ ] `HDR.encoder_name_len <= 256`, and `HDR.size_uncompressed >= 52 + encoder_name_len` - the fixed fields before and after the name total 52 bytes, so a v1 `HDR` chunk is exactly `52 + encoder_name_len` bytes.
 - [ ] Every `LTBL.entries[i].block_index` is less than `LAYR.block_count`, and the sequence of `block_index` values is non-decreasing in `i`.
 - [ ] (Multi-sector only) For every layer `i` with `LTBL.entries[i].sector_count > 0`, the `sector_count` varint at the start of that layer's data within its block equals `LTBL.entries[i].sector_count` (the LAYR value is authoritative for decoding). Layers with `sector_count == 0` store no bytes at all. In single-sector mode, layer data starts with the encoding tag byte, not a `sector_count` varint.
 - [ ] `HDR.display_width_px × display_height_px > 0`.
@@ -1799,6 +1799,17 @@ prefer the newer one.
   chunks/fields.
 - **Strict** (file verification tools): Enforce all semantic validations. Warn on
   non-critical issues, error on critical ones.
+
+Checks marked *strict mode* above MUST NOT fail a loose-mode read: a loose reader
+accepts them, a strict validator rejects them.
+
+### 11.6 Conformance Corpus
+
+The repository carries byte-exact test vectors and an independent validator under
+`test-vectors/`. Implementations SHOULD validate against them: the valid vectors
+pin every uncompressed structure exactly, and each invalid vector fails exactly one
+named check from this section. See `test-vectors/README.md` for the check-name
+convention and for what is pinned exactly versus by property.
 
 ---
 
@@ -1912,6 +1923,7 @@ Key integration points:
 | Reference | Topic |
 |-----------|-------|
 | [`docs/dev/voxl-format-spec.md`](voxl-format-spec.md) | VOXL native scene container specification (embedded via VOXL chunk, §4.12) |
+| [`test-vectors/`](test-vectors/) | Conformance corpus: byte-exact vectors and an independent validator (§11.6) |
 | [`rust/dragonfruit-slicing-engine/src/encoders/mod.rs`](../../rust/dragonfruit-slicing-engine/src/encoders/mod.rs) | `FormatEncoder` and `RleStreamEncoder` trait contracts |
 | [`rust/dragonfruit-slicing-engine/docs/ARCHITECTURE.md`](../../rust/dragonfruit-slicing-engine/docs/ARCHITECTURE.md) | Slicing engine architecture overview |
 | [`rust/dragonfruit-slicing-engine/src/rle.rs`](../../rust/dragonfruit-slicing-engine/src/rle.rs) | Core RLE types consumed by the Lumen REE encoder |
