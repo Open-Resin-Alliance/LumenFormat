@@ -106,14 +106,13 @@ correct tree until that changes.
 
 ### D.2 Submission checklist
 
-1. **Make the specification reachable.** The repository is private today. Either
-   make `Open-Resin-Alliance/LumenFormat` public, or publish the document at a
-   stable URL such as `openresin.org/specs/lumen`. Note that the website currently
-   carries only a `blog` collection, so a specifications section would be new work.
+1. **The specification is reachable.** It is published at
+   `https://openresin.org/specs/lumen`, rendered in parts from the public
+   `Open-Resin-Alliance/LumenFormat` repository.
 2. **Submit** by pasting this appendix into
    `https://www.iana.org/form/media-types`, or by emailing it to `iana@iana.org`.
 3. **Optional pre-review.** Post the template to `media-types@iana.org` first
-   ([§5.2](08-layer-encoding.md#52-varint-encoding)); comments there are cheaper than a returned submission.
+   (RFC 6838 §5.2); comments there are cheaper than a returned submission.
 4. **Expect one revision round.** The reviewer returns submissions that do not meet
    RFC 6838's requirements. The two easiest fields to get wrong are the contact
    address and a reachable specification, and a name that does not match the
