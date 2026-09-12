@@ -176,13 +176,16 @@ any ordering.
 
 **Flags bitfield (bit 0 = LSB):**
 
+Presence of `PREV`, `EXTD` and `LHAS` is discovered from the chunk directory, not
+from the header; only the two flags below are defined.
+
 | Bit | Name | Description |
 |-----|------|-------------|
-| 0 | `HAS_PREVIEW` | File contains ≥1 `PREV` chunk. |
+| 0 | - | Reserved. Must be 0. |
 | 1 | `MULTI_SECTOR` | File uses sector-based (multi-material) layer encoding. |
-| 2 | `HAS_EXTENSIONS` | File contains ≥1 `EXTD` chunk. |
-| 3 | `ENCRYPTED` | File contains an `AUTH` chunk; sensitive chunks are encrypted. |
-| 4 | `HAS_LAYER_HASHES` | File contains an `LHAS` chunk with per-layer SHA-256 hashes and Merkle root. |
+| 2 | - | Reserved. Must be 0. |
+| 3 | `ENCRYPTED` | File contains an `AUTH` chunk; content chunks are encrypted. |
+| 4 | - | Reserved. Must be 0. |
 | 5–31 | - | Reserved. Must be 0. Readers must ignore unknown flags. |
 
 ### 3.2 Chunk Descriptor
@@ -297,6 +300,7 @@ Human-readable print parameters as a single JSON object.
 
 ```jsonc
 {
+  "meta_version": 1,
   "normal_exposure_sec": 2.5,
   "bottom_exposure_sec": 30.0,
   "bottom_layer_count": 4,
@@ -411,7 +415,7 @@ Human-readable print parameters as a single JSON object.
 **Field resolution for readers:**
 
 1. Start with META values as defaults for all layers (and SECT values per-sector, if multi-sector).
-2. Apply bottom/transition blending: layers in the bottom range use bottom-prefixed values; layers in the transition range linearly interpolate between bottom and normal values.
+2. Apply bottom/transition blending: layers in the bottom range use bottom-prefixed values; layers in the transition range interpolate between bottom and normal values (§8 defines the formula and which fields participate).
 3. If `LROV` chunk present, override specific fields for specific layers (last matching entry wins).
 
 See §8 for the complete layer timing pipeline.
@@ -612,8 +616,10 @@ metadata needed to derive or unwrap the session key.
 | 16 | 4 | `u32` | `iterations` | Argon2id time cost. |
 | 20 | 4 | `u32` | `memory_kib` | Argon2id memory cost in KiB. |
 | 24 | 1 | `u8` | `parallelism` | Argon2id lanes. |
-| 25 | 12 | `[u8; 12]` | `kw_nonce` | Nonce for AES-256-KW. |
-| 37 | 40 | `[u8; 40]` | `wrapped_key` | Session key wrapped with Argon2id-derived KEK (AES-256-KW, RFC 3394). |
+| 25 | 40 | `[u8; 40]` | `wrapped_key` | Session key wrapped with the Argon2id-derived KEK (AES-256-KW, RFC 3394). |
+
+Password section size: 65 bytes. AES-256-KW is deterministic and takes no nonce, so
+none is stored; per-file uniqueness comes from the salt.
 
 To decrypt: derive a 256-bit KEK from the password + salt + Argon2id parameters,
 then unwrap `wrapped_key` with AES-256-KW to recover the session key.
@@ -626,10 +632,9 @@ Contains one or more recipient entries. Each entry:
 |--------|------|------|-------|-------------|
 | 0 | 32 | `[u8; 32]` | `machine_fp` | SHA-256 fingerprint of the machine's public key. |
 | 32 | 32 | `[u8; 32]` | `ephemeral_pk` | Sender's ephemeral X25519 public key. |
-| 64 | 12 | `[u8; 12]` | `kw_nonce` | Nonce for AES-256-KW. |
-| 76 | 40 | `[u8; 40]` | `wrapped_key` | Session key wrapped with ECDH-derived KEK. |
+| 64 | 40 | `[u8; 40]` | `wrapped_key` | Session key wrapped with the ECDH-derived KEK (AES-256-KW). |
 
-Total per entry: 116 bytes. `machine_section_len / 116` gives the recipient count.
+Total per entry: 104 bytes. `machine_section_len / 104` gives the recipient count.
 
 To decrypt: the machine performs X25519 ECDH with its private key and
 `ephemeral_pk`, derives a KEK from the shared secret via HKDF-SHA-256, then
@@ -699,8 +704,7 @@ Per-layer timing parameter overrides.
       "normal_exposure_sec": 2.2,
       "wait_time_before_cure_sec": 0.5
     }
-  ],
-  "use_defaults_for_unmatched": true
+  ]
 }
 ```
 
@@ -711,7 +715,7 @@ Per-layer timing parameter overrides.
 - When several entries match a given `(layer, sector)` pair, the **last** matching
   entry wins. Because an entry without `sector_id` matches every sector, a later
   sector-specific entry overrides it for that sector only.
-- `use_defaults_for_unmatched` defaults to `true` if absent. When `true`, unmatched layers use META (or SECT) defaults.
+- Layers with no matching entry use META (or SECT) defaults; LROV never removes them.
 
 ### 4.7 PREV - Preview Image Chunk
 
@@ -783,6 +787,9 @@ encrypted alongside the other content chunks when `AUTH` is present.
 - If no dictionary was used, `ZDIC` MUST be absent and every block frame's
   dictionary ID MUST be `0`.
 - A file MUST NOT contain more than one non-null `ZDIC` chunk.
+- Writers MUST NOT suppress the zstd dictionary ID (`ZSTD_c_dictIDFlag`). Every block
+  frame compressed with the dictionary reports `dict_id`, so a reader can always tell
+  whether a dictionary is required.
 
 **Design notes:**
 
@@ -817,7 +824,7 @@ output of block `LTBL.entries[i].block_index` and has size
 layr_header:
   layr_version            : u32   - Layout version. 1 for this spec.
   block_count             : u32   - Number of zstd block frames.
-  block_table_entry_size  : u32   - Bytes per block table entry. 16 for v1.
+  block_table_entry_size  : u32   - Bytes per block table entry. 24 for v1.
   block_table             : block_count × block_table_entry_size bytes
 
 block_region:
@@ -829,13 +836,17 @@ is `0` and `size_uncompressed` is the container's byte length. The `ENCRYPTED` c
 flag still applies - it selects whether the block frames inside the container are
 sealed (§9.3).
 
-**Block table entry (v1, 16 bytes):**
+**Block table entry (v1, 24 bytes):**
 
 | Offset | Size | Type | Field | Description |
 |--------|------|------|-------|-------------|
 | 0 | 8 | `u64` | `frame_offset` | Byte offset of the block frame from the start of `block_region`. |
-| 8 | 4 | `u32` | `frame_size` | Stored size of the frame. Includes AEAD framing overhead when block frames are encrypted. |
-| 12 | 4 | `u32` | `uncompressed_size` | Exact size of the block's decompressed output. |
+| 8 | 8 | `u64` | `frame_size` | Stored size of the frame. Includes AEAD framing overhead when block frames are encrypted. |
+| 16 | 8 | `u64` | `uncompressed_size` | Exact size of the block's decompressed output. |
+
+Both sizes are 64-bit because a block's output is not bounded by `u32`: worst-case
+REE (a dithered or checkerboard layer) is roughly 5 bytes per pixel, so a 64-layer
+block at 12K can exceed 4 GB even though a single layer cannot.
 
 **Block invariants:**
 
@@ -905,29 +916,31 @@ verification. This enables:
 | 1 | 1 | `u8` | `hash_size` | `32` for SHA-256. |
 | 2 | 4 | `u32` | `layer_count` | Must equal `HDR.total_layers`. |
 | 6 | 32 | `[u8; 32]` | `merkle_root` | Root hash of the Merkle tree over all layer hashes. |
-| 38 | N | - | `layer_hashes` | `layer_count × hash_size` bytes. `layer_hashes[i]` = SHA-256 of layer `i`'s data exactly as it appears in the decompressed output of its block: the byte range `[LTBL.entries[i].data_offset, + data_size)` (an empty layer hashes the empty string). |
+| 38 | N | - | `layer_hashes` | `layer_count × hash_size` bytes. `layer_hashes[i]` is the leaf hash `SHA-256(0x00 \|\| d)`, where `d` is layer `i`'s data exactly as it appears in the decompressed output of its block: the byte range `[LTBL.entries[i].data_offset, + data_size)`. An empty layer stores `SHA-256(0x00)`. |
 
-**Merkle tree construction:**
+**Merkle tree construction** (domain-separated, RFC 6962 style):
 
-1. **Leaf layer:** Let `H[i]` = `layer_hashes[i]` for `i` in `0..layer_count`.
-2. **Pad** `H` to the next power of 2 by repeating the last hash:
-   `padded_len = 2^ceil(log2(layer_count))`.
-3. **Build tree bottom-up:**
-   ```
-   while len(H) > 1:
-       for j in 0..len(H)/2:
-           parent[j] = SHA-256(H[2j] || H[2j+1])
-       H = parent
-   ```
-4. The single remaining hash in `H` is the `merkle_root`.
+1. **Leaves:** `H[i] = SHA-256(0x00 || layer_data_i)` for `i` in `0..layer_count`,
+   where `layer_data_i` is the byte range defined for `layer_hashes[i]` above.
+   `layer_hashes[i]` stores this leaf hash.
+2. **Internal nodes:** `parent = SHA-256(0x01 || left || right)`.
+3. **Odd levels:** when a level holds an odd number of nodes, the final node is
+   promoted to the next level unchanged. Hashes are never duplicated or repeated.
+4. **Root:** repeat steps 2-3, promoting the odd node at each level, until one node
+   remains. That node is `merkle_root`. For `layer_count == 1` the root is the single
+   leaf.
 
-**Verifying a single layer `i`:** the reader needs the layer's hash, its sibling
-hashes along the Merkle path (`ceil(log2(layer_count))` hashes), and the
-`merkle_root`. Recompute the path upwards; the result must equal `merkle_root`.
+The `0x00`/`0x01` prefixes keep leaf hashes distinguishable from internal-node
+hashes, so two different layer sets cannot produce the same root.
+
+**Verifying a single layer `i`:** compute the leaf hash `SHA-256(0x00 || d)`, combine
+it with sibling hashes along the Merkle path (at most `ceil(log2(layer_count))` of
+them) using the internal-node rule, and check that the result equals `merkle_root`.
+Every sibling hash is recoverable from `layer_hashes`.
 
 **Verifying the entire file:**
-1. Decompress each block and, for each layer it contains, compute SHA-256 over the
-   layer's byte range within that block's output.
+1. Decompress each block and, for each layer it contains, compute `SHA-256(0x00 || d)`
+   over the layer's byte range `d` within that block's output.
 2. Verify each hash matches `layer_hashes[i]`.
 3. Recompute the Merkle root from `layer_hashes`; verify it matches `merkle_root`.
 
@@ -1028,10 +1041,12 @@ Readers skip unknown EXTD chunks (or refuse if `critical` is set).
 
 This section defines how individual layer images are encoded into compact byte
 streams. Lumen replaces the run-length encoding (RLE) used by every existing
-format with **run-end encoding (REE)** - a strictly more efficient representation
-that stores fewer numbers per run. For anti-aliased prints, a novel **split
-encoding** separates the bulk binary geometry from the sparse edge pixels,
-enabling zstd to compress each at its optimal rate.
+format with **run-end encoding (REE)**. Binary REE stores end positions only, with
+run values implicit in their strict alternation, so a binary layer costs fewer numbers
+per run than classic RLE. Grayscale REE stores one value and one length per run - the
+same count as RLE - and takes its gains from cross-layer compression. For
+anti-aliased prints, a novel **split encoding** separates the bulk binary geometry
+from the sparse edge pixels, enabling zstd to compress each at its optimal rate.
 
 Lumen supports three encoding strategies per layer, selected by a 1-byte tag
 prepended to each layer's mask data within its block's decompressed output:
@@ -1046,10 +1061,11 @@ Tags `0x03`–`0xFF` are reserved. Readers must refuse a layer with an unknown t
 
 ### 5.1 Rationale
 
-REE replaces classic RLE `(value, length)` with `(value, end_position)` where
-`end_position` is the cumulative absolute pixel index where the run ends. For binary
-images where runs strictly alternate, run values
-are implicit - only end positions are stored.
+Conceptually, REE replaces classic RLE `(value, length)` with `(value, end_position)`
+where `end_position` is the cumulative absolute pixel index where the run ends. Binary REE
+stores those positions as the differences between them - the run lengths (§5.3) -
+while grayscale REE stores them absolutely (§5.4). For binary images where runs
+strictly alternate, run values are implicit, so only the lengths are stored.
 
 The split encoding (tag `0x02`) exploits the observation that in an anti-aliased
 print the AA gradient only exists within a narrow band along geometry edges -
@@ -1086,30 +1102,32 @@ before allocating decode buffers.
 Used when every pixel is 0 or 255.
 Runs strictly alternate: even runs are black, odd runs are white.
 
-**Stream format:**
+**Stream format (as stored):**
 
 ```
 first_value : u8        - Value of the first run. 0x00 = black, 0xFF = white.
 run_count   : varint    - Number of runs (K). 0 = empty layer (all black).
-end_pos_0   : varint    - End of run 0.
-end_pos_1   : varint    - End of run 1.
+run_len_0   : varint    - Length in pixels of run 0.
+run_len_1   : varint    - Length in pixels of run 1.
 ...
-end_pos_{K-2}: varint   - End of second-to-last run.
-- end_pos_{K-1} is IMPLICIT = total_pixels (not stored).
+run_len_{K-2}: varint   - Length in pixels of run K-2.
+- The last run's length is IMPLICIT: run K-1 ends at total_pixels.
 ```
+
+A stored value is the difference between consecutive end positions, i.e. a run length.
+Storing lengths rather than absolute positions keeps the integers small and gives zstd
+better cross-layer patterns.
 
 - `run_count == 0`: decodes to all black. `first_value` is 0x00, `run_count` is
   varint `0`. Decoders MUST accept this form, but it is **not canonical**: an
   all-black layer MUST be stored as an empty layer (`LTBL.sector_count == 0`,
   `data_size == 0`, no bytes). Encoders MUST NOT emit `run_count == 0`; strict-mode
   validators reject it.
-- `run_count == 1`: one solid run to total_pixels. `first_value` gives the color, `run_count` is varint `1`. Zero end positions.
-- `run_count >= 2`: K–1 end positions stored (the last is implicit).
+- `run_count == 1`: one solid run to total_pixels. `first_value` gives the color, `run_count` is varint `1`. Zero stored lengths.
+- `run_count >= 2`: K–1 run lengths are stored (the last run's length is implicit).
 
-**Delta pre-encoding:** Before concatenating into LAYR, end positions are converted
-to deltas. The encoder writes each delta as the difference from the previous
-cumulative position, producing smaller integers that form better cross-layer
-patterns for zstd:
+**Encoding algorithm.** Each value written after `run_count` is a run length, derived
+from the end positions:
 
 ```
 write first_value as u8
@@ -1133,8 +1151,7 @@ for i in 0..K-1:
     end_pos[i] = cumulative
 ```
 
-Delta encoding converts cumulative positions to run lengths, which are smaller
-numbers and form better cross-layer patterns for zstd.
+Absolute end positions are recovered by accumulating the stored lengths.
 
 **Decoding algorithm:**
 
@@ -1449,9 +1466,25 @@ empty layer has no sectors (`sector_count == 0`).
 The layer timing pipeline resolves as follows for each layer index `i`:
 
 1. **Base values** from META (and SECT, if multi-sector).
-2. **Bottom/transition blending:** Layers `0 .. bottom_layer_count-1` use bottom
-   values. Layers `bottom_layer_count .. bottom_layer_count+transition_layer_count-1`
-   linearly interpolate between bottom and normal values.
+2. **Bottom/transition blending:** Layers `0 .. bottom_layer_count-1` use the
+   bottom-prefixed values verbatim. For a layer `i` in the transition range
+   `bottom_layer_count .. bottom_layer_count+transition_layer_count-1`, let
+
+   ```
+   t = (i - bottom_layer_count + 1) / (transition_layer_count + 1)
+   ```
+
+   and set each **interpolatable** value to
+   `bottom_value + t × (normal_value - bottom_value)`. The first fully-normal layer is
+   therefore `bottom_layer_count + transition_layer_count`, where `t = 1`.
+
+   Interpolatable values are the continuous motion and timing parameters: exposure
+   times, lift/retract distances and speeds, wait times, and light-off delays. A
+   `bottom_*` value that is absent equals its normal counterpart, which makes that
+   field's interpolation a no-op. Integer and categorical values do **not** interpolate:
+   `light_pwm`/`bottom_light_pwm` switch to the normal value at the first non-bottom
+   layer, and `delay_mode`, `bottom_layer_count` and `transition_layer_count` are taken
+   verbatim from META.
 3. **LROV overrides:** Any matching `layer` or `layer_range` entry in LROV overrides
    the interpolated value for the sectors it targets (`sector_id` absent = all
    sectors). The last matching entry wins per `(layer, sector)` pair.
@@ -1531,6 +1564,7 @@ enable multiple authorized machines without re-encrypting the entire payload.
 |-------|-------|-------------|
 | File | `header.version` | Breaking changes to the binary container. |
 | HDR chunk | `hdr_version` | New fields added to HDR; compatible across file versions. |
+| META chunk | `meta_version` | Additive changes to the META JSON schema. `SECT` and `LROV` payloads share this schema version. |
 | LTBL chunk | `table_version` | Changes to layer entry layout. |
 | AUTH chunk | `auth_version` | Changes to encryption metadata layout. |
 | LAYR chunk | `layr_version` | Changes to the block framing layout. |
@@ -1542,7 +1576,9 @@ enable multiple authorized machines without re-encrypting the entire payload.
 1. **Unknown chunk types:** Skip (chunk descriptor gives byte range).
 2. **Unknown chunk flags:** Ignore within known types.
 3. **Unknown JSON keys:** Ignore in META, SECT, LROV payloads.
-4. **New HDR fields:** Stride using `hdr_version`.
+4. **New HDR fields:** Parse the layout for the `hdr_version` present. An unrecognized
+   `hdr_version` is rejected - forward striding is impossible when the new fields'
+   widths are unknown.
 5. **New LTBL fields:** Stride using `entry_size`.
 6. **Unknown EXTD with `critical = 1`:** Refuse file.
 7. **Unknown EXTD with `critical = 0`:** Skip.
@@ -1574,9 +1610,6 @@ prefer the newer one.
 - [ ] `LTBL` chunk present.
 - [ ] `LAYR` chunk present, and its `layr_header` is well-formed (`block_count >= 1`).
 - [ ] If any LAYR block frame references a zstd dictionary (dictionary ID `!= 0`), exactly one `ZDIC` chunk is present and every block frame's dictionary ID equals `ZDIC.dict_id`.
-- [ ] If `HAS_PREVIEW` flag set, ≥1 `PREV` chunk present.
-- [ ] If `HAS_EXTENSIONS` flag set, ≥1 `EXTD` chunk present.
-- [ ] If `HAS_LAYER_HASHES` flag set, `LHAS` chunk present.
 - [ ] If `LHAS` chunk present, `layer_count` equals `HDR.total_layers`.
 
 ### 11.2 Semantic Validation
@@ -1585,13 +1618,13 @@ prefer the newer one.
 - [ ] `LTBL.entry_size >= 20`. The layout is fixed through offset 20; future versions may append fields after offset 20, and readers stride by `entry_size` to skip unknown trailing fields.
 - [ ] `HDR.layer_height_mm > 0.0`.
 - [ ] `HDR.build_width_mm > 0.0`, `HDR.build_depth_mm > 0.0`, `HDR.build_height_mm > 0.0`.
-- [ ] `HDR.encoder_name_len <= 256` (or the HDR chunk's `size_uncompressed` as an implicit upper bound).
+- [ ] `HDR.encoder_name_len <= 256`, and `8 + encoder_name_len + 48 <= HDR.size_uncompressed` so that the name plus the trailing fixed fields fit inside the chunk.
 - [ ] Every `LTBL.entries[i].block_index` is less than `LAYR.block_count`, and the sequence of `block_index` values is non-decreasing in `i`.
 - [ ] (Multi-sector only) For every layer `i` with `LTBL.entries[i].sector_count > 0`, the `sector_count` varint at the start of that layer's data within its block equals `LTBL.entries[i].sector_count` (the LAYR value is authoritative for decoding). Layers with `sector_count == 0` store no bytes at all. In single-sector mode, layer data starts with the encoding tag byte, not a `sector_count` varint.
 - [ ] `HDR.display_width_px × display_height_px > 0`.
-- [ ] `HDR.physical_width_px` is a multiple of `display_width_px` (1× if no
-  sub-pixel packing).
-- [ ] META JSON contains all required fields (`normal_exposure_sec`, `bottom_exposure_sec`, `bottom_layer_count`, `transition_layer_count`, `layer_height_mm`, `lift_distance_mm`, `lift_speed_mm_min`, `retract_distance_mm`, `retract_speed_mm_min`).
+- [ ] `HDR.physical_width_px` is an integer multiple of `display_width_px`, and `physical_height_px` is an integer multiple of `display_height_px`. A ratio of 1 means one display pixel per physical pixel.
+- [ ] `META.meta_version` is present and recognized.
+- [ ] META JSON contains all required fields (`meta_version`, `normal_exposure_sec`, `bottom_exposure_sec`, `bottom_layer_count`, `transition_layer_count`, `layer_height_mm`, `lift_distance_mm`, `lift_speed_mm_min`, `retract_distance_mm`, `retract_speed_mm_min`).
 - [ ] `META.normal_exposure_sec > 0.0`.
 - [ ] `META.bottom_exposure_sec > 0.0`.
 - [ ] `META.layer_height_mm > 0.0`.
@@ -1628,6 +1661,7 @@ prefer the newer one.
 - [ ] For each LTBL entry: `data_offset + data_size <= block_table[block_index].uncompressed_size`.
 - [ ] All varints are well-formed: minimally encoded (no overlong forms), terminated within the containing buffer, and at most 10 bytes (the maximum for a 64-bit value).
 - [ ] Layer encoding tag is in `{0x00, 0x01, 0x02}`. Reject any layer with an unknown tag.
+- [ ] Split-encoded layers (tag `0x02`): `aa_positions` values are strictly increasing, every position is `< total_pixels`, and `aa_values` holds exactly `aa_pixel_count` bytes.
 - [ ] For binary REE (tag `0x00`): `first_value` must be `0x00` or `0xFF`.
 - [ ] For empty layers (`sector_count == 0`): `data_size` must be 0.
 - [ ] (Strict mode) No layer uses the non-canonical `run_count == 0` form; all-black layers are stored as empty layers.
@@ -1641,8 +1675,8 @@ prefer the newer one.
 - [ ] If `ENCRYPTED` flag set, all LAYR/META/PROF/SECT/LROV/VOXL/ZDIC chunks have the encrypted flag set, and LAYR block frames are individually sealed (§9.3).
 - [ ] Auth tag verifies for each encrypted chunk (decryption integrity check).
 - [ ] `AUTH.mode` has at least one bit set.
-- [ ] If `AUTH.mode` bit 0 is set, `password_section_len >= 77` (minimum password section size; see §4.4.1).
-- [ ] If `AUTH.mode` bit 1 is set, `machine_section_len >= 116` and `machine_section_len % 116 == 0` (must contain at least one complete recipient entry; see §4.4.2).
+- [ ] If `AUTH.mode` bit 0 is set, `password_section_len >= 65` (the fixed password section size; see §4.4.1).
+- [ ] If `AUTH.mode` bit 1 is set, `machine_section_len >= 104` and `machine_section_len % 104 == 0` (must contain at least one complete recipient entry; see §4.4.2).
 - [ ] Machine-binding entries have valid key lengths.
 - [ ] Argon2id parameters are within reasonable bounds (`iterations >= 1`,
   `memory_kib >= 8192`).
@@ -1691,7 +1725,7 @@ Single-sector, 100 layers, 1920×1080, no encryption (illustrative estimates):
 ```
 Offset    Size    Content
 ------    ----    -------
-0         32      File header: LUMN, v1, dir_offset=<end>, chunk_count=8, flags=0x01
+0         32      File header: LUMN, v1, dir_offset=<end>, chunk_count=8, flags=0x00
 32        ~60     HDR (uncompressed): encoder="DragonFruit 1.0", 1920×1080, layer_height=0.05, 100 layers
 ~92       ~350    META (zstd-compressed, ~1.2 KB uncompressed): full JSON metadata
 ~442      ~800    PROF (zstd-compressed, ~2.5 KB uncompressed): reusable print profile for Odyssey import
