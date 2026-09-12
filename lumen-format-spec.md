@@ -112,7 +112,7 @@ To avoid confusion with other parts of the ORA ecosystem, Lumen is explicitly
 | Property | Value |
 |----------|-------|
 | Extension | `.lumen` |
-| Media type | `application/x-lumen` (provisional) |
+| Media type | `application/vnd.openresin.lumen` (vendor tree; see Appendix D) |
 | Magic bytes | `LUMN` (`0x4C 0x55 0x4D 0x4E`) |
 | Endianness | Little-endian (all multi-byte integers) |
 | Coordinate basis | Right-handed, Z-up |
@@ -1936,6 +1936,88 @@ Key integration points:
 | [GOO file format](https://github.com/elegooofficial/GOO) | Elegoo binary format |
 | [NanoDLP format](https://docs.nano3dtech.com/manual/format/) | NanoDLP ZIP-based format |
 | [ZIP APPNOTE](https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT) | ZIP archive format (used by AFZ, NanoDLP; referenced for Lumen's chunk-directory-at-end design) |
+
+---
+
+## Appendix D: Media Type Registration
+
+The media type has not been submitted to IANA. The registration below is the
+template to submit, and it is already free in the registry (no
+`application/vnd.openresin.*` and no `*lumen` subtype is currently assigned).
+Until it is submitted, implementations SHOULD use the type as specified here.
+
+**Type name:** `application`
+
+**Subtype name:** `vnd.openresin.lumen`
+
+**Required parameters:** none
+
+**Optional parameters:** none
+
+**Encoding considerations:** binary. A `.lumen` file is a little-endian binary
+container, not text, and MUST NOT be carried through a text-only channel without
+a content-transfer-encoding such as base64.
+
+**Security considerations:** see §9. Files are plaintext by default; the optional
+authenticated encryption provides confidentiality and per-chunk integrity but
+**not** authenticity (§9.1). Readers must bound all work performed on untrusted
+input - Argon2id parameters, chunk uncompressed sizes and block decompressed sizes
+are attacker-controlled and must be checked before allocation (§11.3, §11.4). As
+with any print file, file-derived paths and metadata should be treated as
+untrusted.
+
+**Interoperability considerations:** format detection is reliable from content
+alone - the four ASCII bytes `LUMN` (`0x4C 0x55 0x4D 0x4E`) at offset 0 - so the
+file extension is not needed to identify a file. Forward-compatibility rules are
+in §10: unknown chunk types and unknown JSON keys are skipped, while an unknown
+`EXTD` chunk with `critical = 1` MUST cause the file to be refused. Reader
+behaviour is specified in §11 and exercised by the conformance corpus in
+`test-vectors/` (§11.6).
+
+**Published specification:** this document,
+`https://github.com/Open-Resin-Alliance/LumenFormat/blob/main/lumen-format-spec.md`.
+IANA requires the specification to be publicly reachable, so this submission has
+to wait until the repository is public or the document is published on
+`openresin.org`.
+
+**Applications that use this media type:** DragonFruit (encoder); Odyssey
+firmware, via the Orion frontend (decoder).
+
+**Fragment identifier considerations:** none.
+
+**Additional information:**
+
+- Magic number: `0x4C 0x55 0x4D 0x4E` (`LUMN`) at offset 0.
+- File extension: `.lumen`
+- Macintosh file type code: none
+- Uniform Type Identifier: `org.openresin.lumen` (declared here; not yet
+  registered with Apple)
+- Deprecated alias: none. The placeholder `application/x-lumen` was never emitted
+  by a released implementation, so no alias is carried.
+
+**Person & email address to contact for further information:** Open Resin
+Alliance, through the issue tracker at
+`https://github.com/Open-Resin-Alliance/LumenFormat/issues`.
+
+**Intended usage:** COMMON
+
+**Restrictions on usage:** none
+
+**Author:** Open Resin Alliance
+
+**Change controller:** Open Resin Alliance
+
+### D.1 Why `openresin` rather than the Alliance's initials
+
+`application/vnd.openresin.*` is used instead of `application/vnd.ora.*` because
+the latter sits one character away from the registered
+`application/vnd.oracle.*` vendor in a flat namespace, which invites collisions in
+search results, tooling and human memory. `openresin` matches the Alliance's own
+domain, `openresin.org`.
+
+The standards tree (`application/lumen`, with no `vnd.` prefix) would require the
+Alliance to be recognised as a standards body by IANA. The vendor tree is the
+correct tree until that changes.
 
 ---
 
