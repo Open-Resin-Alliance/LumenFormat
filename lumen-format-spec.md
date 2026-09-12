@@ -1941,10 +1941,22 @@ Key integration points:
 
 ## Appendix D: Media Type Registration
 
-The media type has not been submitted to IANA. The registration below is the
-template to submit, and it is already free in the registry (no
-`application/vnd.openresin.*` and no `*lumen` subtype is currently assigned).
+The media type has not been submitted to IANA. The registration below follows the
+template of RFC 6838 §5.6 and is ready to submit; the name is free in the registry
+(no `application/vnd.openresin.*` and no `*lumen` subtype is currently assigned).
 Until it is submitted, implementations SHOULD use the type as specified here.
+
+Registration in the vendor tree costs nothing, and the Alliance is squarely
+eligible: RFC 6838 §3.2 states that "industry consortia as well as non-commercial
+entities that do not qualify as recognized standards-related organizations can
+quite appropriately register media types in the vendor tree". The procedure is
+**Expert Review**: a media types reviewer appointed by the IETF Applications Area
+Director checks the submission against RFC 6838 and returns anything that does not
+conform for revision. Publication as an RFC is explicitly *not* required for
+vendor-tree registrations (§4.10), and a provisional registration is not available
+either - that process exists only for the standards tree (§5.2.1). Posting the
+template to the `media-types@iana.org` list for comment before submitting is
+strongly encouraged (§5.2).
 
 **Type name:** `application`
 
@@ -1976,9 +1988,11 @@ behaviour is specified in §11 and exercised by the conformance corpus in
 
 **Published specification:** this document,
 `https://github.com/Open-Resin-Alliance/LumenFormat/blob/main/lumen-format-spec.md`.
-IANA requires the specification to be publicly reachable, so this submission has
-to wait until the repository is public or the document is published on
-`openresin.org`.
+RFC 6838 does not require a vendor-tree registration to be published as an RFC, but
+the reviewer has to be able to read the specification, so this URL must resolve
+publicly before submitting. The registration template is MIT-licensed (see
+*License*), which satisfies the requirement in §4.10 that the copyright on the
+template allow IANA to copy it into the registry.
 
 **Applications that use this media type:** DragonFruit (encoder); Odyssey
 firmware, via the Orion frontend (decoder).
@@ -1987,25 +2001,34 @@ firmware, via the Orion frontend (decoder).
 
 **Additional information:**
 
-- Magic number: `0x4C 0x55 0x4D 0x4E` (`LUMN`) at offset 0.
-- File extension: `.lumen`
-- Macintosh file type code: none
-- Uniform Type Identifier: `org.openresin.lumen` (declared here; not yet
-  registered with Apple)
-- Deprecated alias: none. The placeholder `application/x-lumen` was never emitted
-  by a released implementation, so no alias is carried.
+- Deprecated alias names for this type: `N/A`. The placeholder
+  `application/x-lumen` was never emitted by a released implementation, so no alias
+  is carried.
+- Magic number(s): `0x4C 0x55 0x4D 0x4E` (`LUMN`), four octets at offset 0.
+- File extension(s): `.lumen`
+- Macintosh file type code(s): `N/A`
+- Uniform Type Identifier: `org.openresin.lumen` (declared here; not yet registered
+  with Apple)
+
+These five names are the ones RFC 6838 §5.6 uses, which also requires fields that
+do not apply to read `N/A` exactly - not `none`, or any other word that could be
+mistaken for a response.
 
 **Person & email address to contact for further information:** Open Resin
-Alliance, through the issue tracker at
-`https://github.com/Open-Resin-Alliance/LumenFormat/issues`.
+Alliance, `<contact role address>`. A working address is required; the issue tracker
+URL alone is not enough. A role address such as `maintainers@openresin.org` must be
+supplied before submitting.
 
 **Intended usage:** COMMON
 
-**Restrictions on usage:** none
+**Restrictions on usage:** `N/A`
 
 **Author:** Open Resin Alliance
 
 **Change controller:** Open Resin Alliance
+
+**Provisional registration?** (standards tree only): `N/A` - provisional
+registrations exist only in the standards tree (RFC 6838 §5.2.1).
 
 ### D.1 Why `openresin` rather than the Alliance's initials
 
