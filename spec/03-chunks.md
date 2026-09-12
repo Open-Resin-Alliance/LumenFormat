@@ -181,6 +181,20 @@ Human-readable print parameters as a single JSON object.
 }
 ```
 
+**Motion model.** Lift and retract are each performed in two segments, and a
+`*_distance*` field is the length of one segment, not a total:
+
+| Segment | Distance | Speed |
+|---------|----------|-------|
+| Lift 1 - slow peel, to break the layer away from the film | `lift_distance_mm` | `lift_speed_mm_min` |
+| Lift 2 - fast, the remainder of the lift | `lift_distance2_mm` | `lift_speed2_mm_min` |
+| Retract 1 - fast, most of the return | `retract_distance_mm` | `retract_speed_mm_min` |
+| Retract 2 - slow final approach | `retract_distance2_mm` | `retract_speed2_mm_min` |
+
+The total travel of a move is the sum of its two segments. A segment whose distance
+or speed is `0.0` is not performed, so a single-stage move is the degenerate case:
+set the `*2` fields to `0.0`. The `bottom_*` fields follow the same model.
+
 **Field resolution for readers:**
 
 1. Start with META values as defaults for all layers (and SECT values per-sector, if multi-sector).

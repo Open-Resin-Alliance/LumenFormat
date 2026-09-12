@@ -38,3 +38,21 @@ Key integration points:
   trailer).
 - `parallel_encode_fn()` enables parallel RLE→REE conversion via rayon; block
   compression is likewise independent per block.
+
+### B.1 Mapping to the existing formats
+
+LUMEN stores motion as two segments per direction, while ChiTuBox and the formats
+derived from it store the *total* lift and only the second segment:
+
+| LUMEN | ChiTuBox / GOO v5 |
+|-------|-------------------|
+| `lift_distance_mm` + `lift_distance2_mm` | `LiftHeight` (the total) |
+| `retract_distance_mm` | `RetractHeight` (the first segment) |
+| `retract_distance2_mm` | `RetractHeight2` (the second segment) |
+| `bottom_retract_distance2_mm` | `BottomRetractHeight2` |
+
+A converter that copies `lift_distance_mm` straight into `LiftHeight` lifts only a
+fraction of the intended travel, because ours is the first segment where theirs is
+the sum. Note also that the slicer's CTB timing struct carries a
+`bottom_retract_height2_mm` field: it is the same quantity as
+`bottom_retract_distance2_mm`, under the other format's name.
