@@ -2,16 +2,6 @@
 
 <!-- Part of the LUMEN Format Specification. Section numbers (`§3.1`) are stable anchors across the parts. -->
 
-
-
-**Lead Developer:** Paul Skapczyk  
-**Maintaining Authority:** Open Resin Alliance  
-**Project:** Open Resin Alliance - Next-Generation Print File Format  
-**Status:** Draft Specification  
-**License:** MIT
-
----
-
 ## Abstract
 
 The LUMEN format is a next-generation, open-source print file format for resin

@@ -1,6 +1,7 @@
 # LumenFormat
 
 Specification for the LUMEN print file format (`.lumen`), by the Open Resin Alliance.
+Written and maintained by Paul Skapczyk.
 
 - **[spec/01-overview.md](spec/01-overview.md)** — start here. The specification is
   published in parts under [`spec/`](spec/), in reading order; section numbers
