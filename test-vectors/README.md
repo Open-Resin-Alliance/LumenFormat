@@ -9,7 +9,7 @@ LUMEN v1.0 and are validated against it.
 | Path | Contents |
 |------|----------|
 | `valid/*.lumen` | Files a conforming reader must accept |
-| `invalid/*.lumen` | Files a conforming reader must reject, each failing exactly one documented check |
+| `invalid/*.lumen` | Files a conforming reader must reject, each failing the check its manifest entry names |
 | `manifest.json` | Golden data for every vector: sizes, offsets, block table, per-layer hashes, Merkle root, CRC-32C, and the credentials and parameters for encrypted vectors |
 | `make_vectors.py` | Reference encoder that regenerates the corpus from the specification |
 | `verify_vectors.py` | Independent reader and validator |
@@ -29,8 +29,8 @@ python make_vectors.py          # regenerate valid/, invalid/ and manifest.json
 ```
 
 `verify_vectors.py` exits 0 only if every valid vector passes **and** every invalid
-vector fails exactly the check its manifest entry advertises. It also re-checks each
-committed file against the golden values in `manifest.json`.
+vector fails the check its manifest entry advertises. It also re-checks each committed
+file against the golden values in `manifest.json`.
 
 `cryptography` and `argon2-cffi` are needed only for the encrypted vectors. Without
 them the plaintext vectors still validate, every encrypted vector is reported as
@@ -49,7 +49,8 @@ So this corpus pins:
   table, `LHAS`, every REE stream, the chunk directory and the trailer CRC-32C,
   plus the decompressed bytes of every layer, the Merkle root over them, every
   sealed unit (nonce, ciphertext and tag), and the plaintext payload bytes of every
-  `PROF`, `LROV`, `PREV` and `VOXL` chunk (`chunk_payload_sha256` in the manifest).
+  `PROF`, `LROV`, `PREV`, `VOXL` and `EXTD` chunk (`chunk_payload_sha256` in the manifest;
+  `PREV` and `EXTD` are lists in file order).
 - **By property** - compressed payload bytes. The manifest records the
   zstandard version and level, the frame's dictionary ID and the decompressed
   size; `verify_vectors.py` asserts those instead of byte equality.
@@ -74,6 +75,7 @@ nonce, salt and key is derived from a fixed seed (see *Test credentials*).
 | `layer-overrides` | 10 | 2 | - | `LROV`: a single-layer override, an inclusive `layer_range` scoped to sector 0, and a range that applies to every sector |
 | `previews` | 4 | 2 | AES-256-GCM, password | two `PREV` chunks in one file - a large preview in the clear and a sealed icon - with the role in the descriptor's flags. Preview sealing is optional even when the file is encrypted |
 | `embedded-scene` | 4 | 2 | AES-256-GCM, password | a sealed `VOXL` chunk: an embedded scene is copied in and must come back out unchanged, while LUMEN itself never parses it |
+| `extensions` | 4 | 2 | - | two non-critical `EXTD` chunks - a reserved ORA type code and a vendor extension - pinning the frame, the `vendor_id` field and the `critical` bit, and the rule that readers skip extensions they do not implement |
 
 The encrypted vectors also pin the two encryption flags that the spec assigns
 different bit numbers: the file header's bit 3 (`ENCRYPTED`, "an `AUTH` chunk is
@@ -82,10 +84,15 @@ present") and the chunk descriptor's bit 4 ("this payload is sealed"). `HDR`,
 
 ## Invalid vectors
 
-`expected_failure` is the check name that must fail, and it must be the **first**
-check to fail. Except for `trailer-crc-mismatch`, every file carries a deliberately
-introduced defect and a recomputed trailer CRC-32C, so a reader reaches the intended
-check rather than stopping at the file-completeness check first.
+`expected_failure` is the check name that must fail, and it must be the **first** check
+to fail. For almost every vector it is the only failure. Where a defect necessarily
+unsatisfies a dependent rule as well - an `EXTD` payload too short to hold an `ext_type`
+cannot satisfy the type rule either - the advertised check still has to come first, and
+`verify_vectors.py` enforces exactly that.
+
+Except for `trailer-crc-mismatch`, every file carries a deliberately introduced defect
+and a recomputed trailer CRC-32C, so a reader reaches the intended check rather than
+stopping at the file-completeness check first.
 
 | Vector | Defect | Expected failure |
 |--------|--------|------------------|
@@ -119,8 +126,12 @@ check rather than stopping at the file-completeness check first.
 | `prev-flags` | a `PREV` chunk sets reserved flag bit 5 alongside its role | `prev.flags` |
 | `prev-not-png` | a `PREV` payload does not begin with the PNG signature | `prev.png_signature` *(strict)* |
 | `voxl-not-voxl` | the embedded scene is a JSON array, so the payload begins with neither the V2 magic nor the V1 document marker | `voxl.signature` *(strict)* |
+| `extd-critical` | an `EXTD` chunk sets the `critical` bit on an extension no reader implements | `extd.critical` |
+| `extd-truncated` | an `EXTD` payload is four bytes, too short for `ext_version` and `ext_type` | `extd.frame` |
+| `extd-reserved-flags` | an `EXTD` chunk sets reserved flag bit 0 | `extd.flags` |
+| `extd-type-nonascii` | an `EXTD` `ext_type` is four non-ASCII bytes | `extd.ext_type` |
 
-Two vectors are marked *(strict)*: the defect is invisible to a loose-mode reader
+Four vectors are marked *(strict)*: the defect is invisible to a loose-mode reader
 (section 11.5) and must only be caught by a strict-mode validator. The manifest
 records this as `strict_only`, and `verify_vectors.py` asserts that a loose-mode
 reader accepts them — so the corpus pins the loose/strict distinction itself, not
@@ -135,8 +146,8 @@ that the refusal happens before any crypto work.
 
 Checks are named `<group>.<rule>`, mirroring section 11:
 `trailer.*`, `header.*`, `dir.*`, `chunk.*`, `presence.*`, `hdr.*`, `auth.*`,
-`meta.*`, `sect.*`, `prof.*`, `lrov.*`, `prev.*`, `voxl.*`, `ltbl.*`, `layr.*`,
-`zdic.*`, `lhas.*`, `ree.*`, `sector.*`, `crypt.*`.
+`meta.*`, `sect.*`, `prof.*`, `lrov.*`, `prev.*`, `voxl.*`, `extd.*`, `ltbl.*`,
+`layr.*`, `zdic.*`, `lhas.*`, `ree.*`, `sector.*`, `crypt.*`.
 
 Implementations are encouraged to use the same names when reporting which rule
 failed. Use them verbatim as `expected_failure` when adding vectors.
@@ -203,6 +214,11 @@ decrypt the file at all. Only entry 2 recovers the real key.
 - `LROV` entries carry exactly one of `layer` or `layer_range`; the corpus pins that
   form. A `PREV` chunk carries its role in its descriptor's flag bits 0-3, with bits
   5-31 reserved, and there may be several `PREV` chunks in a file.
+- `EXTD` is pinned at the frame level: `ext_version`, `ext_type`, the `vendor_id` field
+  and the `critical` bit, plus the rule that a reader must refuse a critical extension it
+  does not implement. This validator implements none, so any critical extension fails
+  here - the check is deliberately reader-relative. Extension payloads themselves are
+  vendor-defined: they are copied through, never interpreted.
 - The `VOXL` vector pins the transport contract only: the scene is copied in and must
   come back out byte for byte, and LUMEN never parses it. Its payload is a synthetic
   V1 document rather than a real slice, which is sufficient precisely because the chunk

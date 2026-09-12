@@ -404,6 +404,46 @@
       "file_size": 886,
       "name": "voxl-not-voxl",
       "strict_only": true
+    },
+    {
+      "base_vector": null,
+      "description": "An extension sets the critical bit, so a reader that does not implement it must refuse the file rather than print an approximation.",
+      "expected_failure": "extd.critical",
+      "file": "invalid/extd-critical.lumen",
+      "file_sha256": "2b0fa4e86b788c1f5dfc3ece63cf87d6db67d68ccb09a91bc0b9d1eb2bdc095b",
+      "file_size": 862,
+      "name": "extd-critical",
+      "strict_only": false
+    },
+    {
+      "base_vector": null,
+      "description": "An EXTD payload is four bytes, too short to carry ext_version and ext_type.",
+      "expected_failure": "extd.frame",
+      "file": "invalid/extd-truncated.lumen",
+      "file_sha256": "df26d2e8648c8bca3c104423b06f640428870a76043a68f7e05f3584084016ec",
+      "file_size": 854,
+      "name": "extd-truncated",
+      "strict_only": false
+    },
+    {
+      "base_vector": null,
+      "description": "An EXTD chunk sets reserved flag bit 0, which must be 0.",
+      "expected_failure": "extd.flags",
+      "file": "invalid/extd-reserved-flags.lumen",
+      "file_sha256": "376f07667df2b63657aa07cc80a5ef518ddadfbfe95e50921dd747c3a3c72f5a",
+      "file_size": 862,
+      "name": "extd-reserved-flags",
+      "strict_only": false
+    },
+    {
+      "base_vector": null,
+      "description": "An EXTD ext_type is four non-ASCII bytes, so no reader can name the extension.",
+      "expected_failure": "extd.ext_type",
+      "file": "invalid/extd-type-nonascii.lumen",
+      "file_sha256": "5c7556f7a072588ba199d2139651910c26e520f48e556c4b730fe9429fd181e0",
+      "file_size": 862,
+      "name": "extd-type-nonascii",
+      "strict_only": false
     }
   ],
   "valid": [
@@ -2774,6 +2814,109 @@
       "total_layers": 4,
       "total_uncompressed_size": 1090,
       "trailer_crc32c": "0x750D2F27"
+    },
+    {
+      "block_size_layers": 2,
+      "blocks": [
+        {
+          "frame_offset": 0,
+          "frame_size": 17,
+          "uncompressed_size": 8
+        },
+        {
+          "frame_offset": 17,
+          "frame_size": 17,
+          "uncompressed_size": 8
+        }
+      ],
+      "chunk_count": 7,
+      "chunk_payload_sha256": {
+        "EXTD": [
+          "f6b65b8ce59523deb61b0b888b8264daa041c58761f99e34042766388de2eac8",
+          "a60a344cbd543c7ddad3987e4668bfa9991af96ff7e7de95498992fd2604bdb2"
+        ]
+      },
+      "description": "Two non-critical EXTD chunks - one reserved ORA type code and one vendor extension - exercising the frame, the vendor id and critical flag bit, and the rule that readers skip extensions they do not implement.",
+      "dict": {
+        "dict_id": 0,
+        "dict_size": 0,
+        "present": false
+      },
+      "dir_offset": 726,
+      "display_height_px": 48,
+      "display_width_px": 64,
+      "features": [
+        "extd-chunk",
+        "extension-frame",
+        "vendor-extension",
+        "reserved-type-code",
+        "skippable-extension"
+      ],
+      "file": "valid/extensions.lumen",
+      "file_sha256": "41a79240d459d11052f0d17cd578ad15a657473c0c65a0dd5ae83a3dc8445b14",
+      "file_size": 958,
+      "header_flags": 0,
+      "layer_height_mm": 0.05,
+      "layers": [
+        {
+          "block_index": 0,
+          "data_offset": 0,
+          "data_size": 4,
+          "decompressed_sha256": "e2ecef88fe015467de5bafb5859602d57beaf78ebdfc6606f990176dd223cf76",
+          "index": 0,
+          "lhas_leaf": "b284bc6b28d3afb6ca28990e365070d6a56cd7d43f3a1fbd8d7792d9e43492df",
+          "sector_count": 1,
+          "sector_tags": [
+            0
+          ],
+          "tag": 0
+        },
+        {
+          "block_index": 0,
+          "data_offset": 4,
+          "data_size": 4,
+          "decompressed_sha256": "e2ecef88fe015467de5bafb5859602d57beaf78ebdfc6606f990176dd223cf76",
+          "index": 1,
+          "lhas_leaf": "b284bc6b28d3afb6ca28990e365070d6a56cd7d43f3a1fbd8d7792d9e43492df",
+          "sector_count": 1,
+          "sector_tags": [
+            0
+          ],
+          "tag": 0
+        },
+        {
+          "block_index": 1,
+          "data_offset": 0,
+          "data_size": 4,
+          "decompressed_sha256": "e2ecef88fe015467de5bafb5859602d57beaf78ebdfc6606f990176dd223cf76",
+          "index": 2,
+          "lhas_leaf": "b284bc6b28d3afb6ca28990e365070d6a56cd7d43f3a1fbd8d7792d9e43492df",
+          "sector_count": 1,
+          "sector_tags": [
+            0
+          ],
+          "tag": 0
+        },
+        {
+          "block_index": 1,
+          "data_offset": 4,
+          "data_size": 4,
+          "decompressed_sha256": "e2ecef88fe015467de5bafb5859602d57beaf78ebdfc6606f990176dd223cf76",
+          "index": 3,
+          "lhas_leaf": "b284bc6b28d3afb6ca28990e365070d6a56cd7d43f3a1fbd8d7792d9e43492df",
+          "sector_count": 1,
+          "sector_tags": [
+            0
+          ],
+          "tag": 0
+        }
+      ],
+      "merkle_root": "8602cdd0d6d8c7d7a190006144c908165719522ef152a52d91d979a344db27f0",
+      "multi_sector": false,
+      "name": "extensions",
+      "total_layers": 4,
+      "total_uncompressed_size": 782,
+      "trailer_crc32c": "0xF29107AF"
     }
   ]
 }

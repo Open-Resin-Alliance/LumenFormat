@@ -367,6 +367,18 @@ def png_preview(width: int, height: int, rgb=(200, 200, 200)) -> bytes:
             + chunk(b"IDAT", zlib.compress(rows, 9)) + chunk(b"IEND", b""))
 
 
+def extd_payload(ext_type: bytes, ext_data: bytes, ext_version: int = 1, vendor_id: int = 0,
+                 critical: bool = False, flags_extra: int = 0) -> tuple[bytes, int]:
+    """An EXTD chunk payload and its descriptor flags (spec 4.13).
+
+    The frame is `ext_version || ext_type || ext_data`. The descriptor's flags carry
+    the vendor id in bits 8-23 and the critical bit at 24; `flags_extra` is for the
+    invalid vectors that set a reserved bit on purpose.
+    """
+    flags = ((vendor_id & 0xFFFF) << 8) | (0x01000000 if critical else 0) | flags_extra
+    return struct.pack("<I", ext_version) + ext_type + ext_data, flags
+
+
 def voxl_payload(**overrides) -> bytes:
     """A minimal V1 VOXL scene document (spec 4.12).
 
@@ -392,11 +404,11 @@ def payload_hashes(chunks: list[dict]) -> dict:
     out: dict = {}
     for ch in chunks:
         name = ch["type"].decode("ascii").rstrip("\x00")
-        if name not in ("PROF", "LROV", "PREV", "VOXL"):
+        if name not in ("PROF", "LROV", "PREV", "VOXL", "EXTD"):
             continue
         digest = hashlib.sha256(ch["payload"]).hexdigest()
-        if name == "PREV":
-            out.setdefault("PREV", []).append(digest)
+        if name in ("PREV", "EXTD"):
+            out.setdefault(name, []).append(digest)
         else:
             out[name] = digest
     return out
@@ -578,7 +590,8 @@ def sparse_layers(count: int, total: int) -> list:
 
 def content_chunks(enc: dict, encoder_name: str, display: tuple[int, int], layer_height: float,
                    layer_count: int, meta_extra, prof: bytes | None = None,
-                   lrov: bytes | None = None, prevs=(), voxl: bytes | None = None) -> list[dict]:
+                   lrov: bytes | None = None, prevs=(), voxl: bytes | None = None,
+                   extds=()) -> list[dict]:
     """The chunk list before any encryption, in the order section 3 recommends.
 
     `prevs` is a list of (payload, role, seal) triples: a PREV's role lives in its
@@ -604,6 +617,8 @@ def content_chunks(enc: dict, encoder_name: str, display: tuple[int, int], layer
         chunks.append({"type": b"PREV", "payload": payload, "flags": role, "seal": seal_prev})
     if voxl is not None:
         chunks.append({"type": b"VOXL", "payload": voxl, "compressed": True})
+    for payload, flags in extds:
+        chunks.append({"type": b"EXTD", "payload": payload, "compressed": True, "flags": flags})
     chunks += [
         {"type": b"LTBL", "payload": ltbl_payload(enc["entries"])},
         {"type": b"LHAS", "payload": lhas_payload(enc["leaves"])},
@@ -673,12 +688,12 @@ def build_vector(name: str, description: str, features: list[str], display: tupl
                  layer_height: float, layers, block_size: int, use_dict: bool,
                  dict_samples_bytes: int = 2048, split_layers=(), force_run_count_zero=(),
                  meta_extra: dict | None = None, prof: bytes | None = None,
-                 lrov: bytes | None = None, prevs=(), voxl: bytes | None = None):
+                 lrov: bytes | None = None, prevs=(), voxl: bytes | None = None, extds=()):
     """layers: list of (list of sector spans). One sector per layer => single-sector."""
     enc = encode_layers(display, layers, block_size, use_dict, dict_samples_bytes,
                         split_layers, force_run_count_zero)
     chunks = content_chunks(enc, "LumenFormat test vectors 1.0", display, layer_height,
-                            len(layers), meta_extra, prof, lrov, prevs, voxl)
+                            len(layers), meta_extra, prof, lrov, prevs, voxl, extds)
     raw, layout = build_file(chunks, FLAG_MULTI_SECTOR if enc["multi_sector"] else 0)
     meta = vector_meta(name, description, features, display, layer_height, block_size, enc,
                        chunks, raw, layout, chunk_hashes=payload_hashes(chunks))
@@ -812,7 +827,8 @@ def build_encrypted_vector(name: str, description: str, features: list[str],
                            dict_samples_bytes: int = 1024, split_layers=(), meta_extra=None,
                            argon2_params=None, password_trim: int = 0, machine_roles=(),
                            session_key: bytes | None = None, prof: bytes | None = None,
-                           lrov: bytes | None = None, prevs=(), voxl: bytes | None = None):
+                           lrov: bytes | None = None, prevs=(), voxl: bytes | None = None,
+                           extds=()):
     """An encrypted file: the same content chunks, sealed, plus an AUTH chunk.
 
     `machine_roles` lists the recipient entries in file order; the role "local"
@@ -852,7 +868,7 @@ def build_encrypted_vector(name: str, description: str, features: list[str],
             raise ValueError("unknown recipient role %r" % (role,))
 
     chunks = content_chunks(enc, "LumenFormat test vectors 1.0", display, layer_height,
-                            len(layers), meta_extra, prof, lrov, prevs, voxl)
+                            len(layers), meta_extra, prof, lrov, prevs, voxl, extds)
     sealed = seal_content_chunks(chunks, enc, session_key, cipher_id)
     auth = {"type": b"AUTH", "payload": auth_payload(cipher_id, mode, password_sec, machine_sec)}
     after = 3 if prof is not None else 2      # section 3 lists PROF before AUTH
@@ -1030,6 +1046,21 @@ def vector_embedded_scene():
         cipher_id="A256", mode=1, voxl=voxl_payload())
 
 
+def vector_extensions():
+    """Plaintext, with two non-critical extensions."""
+    extds = [
+        extd_payload(b"CMLT", json.dumps({"corpus_bytes": 4096, "dict_size": 1024}).encode()),
+        extd_payload(b"DRNF", b"\x01\x02\x03\x04\x05", vendor_id=0x1234),
+    ]
+    return build_vector(
+        "extensions",
+        "Two non-critical EXTD chunks - one reserved ORA type code and one vendor extension - exercising the frame, the vendor id and critical flag bit, and the rule that readers skip extensions they do not implement.",
+        ["extd-chunk", "extension-frame", "vendor-extension", "reserved-type-code",
+         "skippable-extension"],
+        (64, 48), 0.05, [[((0, 60, 255),)] for _ in range(4)], block_size=2,
+        use_dict=False, extds=extds)
+
+
 def main() -> int:
     assert crc32c(b"123456789") == 0xE3069283, "CRC-32C self-test failed"
     os.makedirs(VALID_DIR, exist_ok=True)
@@ -1053,7 +1084,7 @@ def main() -> int:
     for builder in (vector_binary_basic, vector_dict, vector_multisector,
                     vector_encrypted_password, vector_encrypted_machine,
                     vector_encrypted_both, vector_print_profile, vector_layer_overrides,
-                    vector_previews, vector_embedded_scene):
+                    vector_previews, vector_embedded_scene, vector_extensions):
         raw, meta, layout = builder()
         path = os.path.join(VALID_DIR, meta["name"] + ".lumen")
         with open(path, "wb") as fh:
@@ -1309,6 +1340,25 @@ def main() -> int:
     emit_invalid("voxl-not-voxl",
                  "The embedded scene is a JSON array rather than a VOXL document: the payload begins with neither the V2 magic nor the V1 document marker. A loose reader never looks inside the chunk and must still accept the file; a strict validator rejects it.",
                  "voxl.signature", raw_vx, strict_only=True, base=None)
+
+    def emit_extd_invalid(name, expected, description, extds):
+        raw_x, _, _ = build_vector("x-extd", "source", [], (64, 48), 0.05,
+                                   [[((0, 50, 255),)] for _ in range(4)], block_size=2,
+                                   use_dict=False, extds=extds)
+        emit_invalid(name, description, expected, raw_x, base=None)
+
+    emit_extd_invalid("extd-critical", "extd.critical",
+                      "An extension sets the critical bit, so a reader that does not implement it must refuse the file rather than print an approximation.",
+                      [extd_payload(b"DRNF", b"\x00", vendor_id=0x1234, critical=True)])
+    emit_extd_invalid("extd-truncated", "extd.frame",
+                      "An EXTD payload is four bytes, too short to carry ext_version and ext_type.",
+                      [extd_payload(b"", b"")])
+    emit_extd_invalid("extd-reserved-flags", "extd.flags",
+                      "An EXTD chunk sets reserved flag bit 0, which must be 0.",
+                      [extd_payload(b"CMLT", b"x", flags_extra=0x01)])
+    emit_extd_invalid("extd-type-nonascii", "extd.ext_type",
+                      "An EXTD ext_type is four non-ASCII bytes, so no reader can name the extension.",
+                      [extd_payload(b"\x80\x81\x82\x83", b"x")])
 
     with open(os.path.join(HERE, "manifest.json"), "w", encoding="utf-8", newline="\n") as fh:
         json.dump(manifest, fh, indent=2, sort_keys=True)

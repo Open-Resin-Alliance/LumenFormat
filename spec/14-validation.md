@@ -65,6 +65,10 @@
 - [ ] If `LHAS` chunk present, recompute Merkle root from `layer_hashes` and verify it matches `merkle_root`.
 - [ ] (Strict mode) If `LHAS` chunk present, decompress and hash each layer; verify against `layer_hashes`.
 - [ ] (Strict mode) If `VOXL` chunk present, the payload is recognizable as VOXL: it begins with the V2 magic `VOXL` or with the V1 JSON document marker `{` ([§4.12](07-scene-chunks.md#412-voxl---embedded-scene-chunk)). Whether it is a *valid* VOXL file is VOXL's business, checked by whatever parses the scene; a print reader never needs to know.
+- [ ] Every `EXTD` payload is at least 8 bytes: `ext_version` and `ext_type` make up the fixed part of the frame ([§4.13](07-scene-chunks.md#413-extd---extension-chunk)).
+- [ ] `EXTD` `ext_type` is four ASCII characters.
+- [ ] `EXTD` reserved flag bits - 0-3, 5-7 and 25-31 - are 0 ([§4.13](07-scene-chunks.md#413-extd---extension-chunk)).
+- [ ] No `EXTD` chunk that a reader does not implement carries `critical = 1`: such a file is unprintable to that reader rather than printable with approximations ([§4.13](07-scene-chunks.md#413-extd---extension-chunk)).
 
 ### 11.3 Layer Data Validation (post-decompression)
 
@@ -126,8 +130,9 @@ test password and recipient key in the manifest.
 
 Coverage is not exhaustive. The corpus exercises single- and multi-sector layer data,
 the empty-layer form, all three encoding tags, dictionary compression, multi-block
-framing, both encryption modes and both ciphers, and the `PROF`, `LROV`, `PREV` and
-`VOXL` chunks - the last at the transport level only, where the embedded scene is
-pinned byte for byte while VOXL's own validation stays outside this specification. It
-does **not** cover the `EXTD` extension mechanism, whose payloads are vendor-defined.
-See `test-vectors/README.md` for the check-name convention and the full scope.
+framing, both encryption modes and both ciphers, and every chunk type this
+specification defines. Two things are pinned at the transport level only: the `VOXL`
+payload is byte-exact while VOXL's own validation stays outside this specification, and
+`EXTD` covers the frame and the flag semantics while individual extension payloads
+remain vendor-defined and are not pinned. See `test-vectors/README.md` for the
+check-name convention and the full scope.

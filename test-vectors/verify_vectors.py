@@ -722,6 +722,38 @@ def validate(path: str, strict: bool, verbose: bool = False, crypto: dict | None
                 voxl_plain[:4] == b"VOXL" or voxl_plain[:1] == b"{")
         payloads[b"VOXL"] = voxl_plain
 
+    # ---- EXTD ----------------------------------------------------------
+    # §4.13: vendor or future-standard extensions, any number of them.  The
+    # fixed frame is ext_version (u32) || ext_type (4 bytes) || ext_data, and
+    # the payload is zstd-compressed unless the extension says otherwise, so
+    # it is read decompressed here.  EXTD is required neither to be sealed nor
+    # to be clear, and this reader implements no extension semantics: a
+    # payload that will not decompress cannot satisfy the frame at all, so it
+    # is reported as a frame failure rather than raised.
+    extd_e = find(b"EXTD")
+    if extd_e:
+        extd_plain = []
+        for e in extd_e:
+            try:
+                extd_plain.append(payload_plain(e))
+            except Exception:
+                extd_plain.append(None)
+
+        chk("extd.frame", all(b is not None and len(b) >= 8 for b in extd_plain))
+        chk("extd.ext_type", all(
+            b is not None and len(b) >= 8 and all(c < 0x80 for c in b[4:8])
+            for b in extd_plain))
+        # Descriptor flags: bits 8-23 are `vendor_id` (§4.13), bit 24 is
+        # `critical`; bits 0-3, 5-7 (bit 4 is the standard ENCRYPTED flag) and
+        # 25-31 are reserved and must be 0.
+        chk("extd.flags", all((e["flags"] & 0xFE0000EF) == 0 for e in extd_e))
+        # `critical` is reader-relative: a reader that does not implement the
+        # extension must refuse the file rather than print an approximation.
+        # This reference validator implements no extension semantics, so every
+        # critical EXTD is a file it must not accept.
+        chk("extd.critical", all((e["flags"] & 0x01000000) == 0 for e in extd_e))
+        payloads[b"EXTD"] = [b for b in extd_plain if b is not None]
+
     # dictionary
     zdic = find(b"ZDIC")
     dict_bytes = b""
@@ -948,9 +980,10 @@ def check_manifest(v: dict, path: str, payloads: dict | None = None) -> list[str
     """Compare the committed bytes against the recorded golden values.
 
     `payloads` carries the plaintext payload of each optional content chunk as
-    the validator decoded it, keyed by type tag (a list for PREV, in file
-    order), so the recorded `chunk_payload_sha256` pins can be compared without
-    re-deriving the session key here.  An absent payload has no pin to check.
+    the validator decoded it, keyed by type tag (a list for the multi-instance
+    PREV and EXTD chunks, in file order), so the recorded
+    `chunk_payload_sha256` pins can be compared without re-deriving the session
+    key here.  An absent payload has no pin to check.
     """
     bad = []
     raw = open(path, "rb").read()

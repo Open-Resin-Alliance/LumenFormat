@@ -72,10 +72,14 @@ Vendor or future-standard extension data.
 |-----|------|-------------|
 | 0–7 | - | Reserved for standard chunk flags (bit 4 = `ENCRYPTED`, see [§3.2](02-file-structure.md#32-chunk-descriptor)). |
 | 8–23 | `vendor_id` | Vendor identifier (registered with ORA). `0x0000` = ORA standard extension. |
-| 24 | `critical` | If set, a reader that does not recognize this extension must refuse to print. |
+| 24 | `critical` | If set, a reader that does not implement this extension must refuse the file rather than print an approximation. |
 | 25–31 | - | Reserved. Must be 0. |
 
-Readers skip unknown EXTD chunks (or refuse if `critical` is set).
+Readers skip `EXTD` chunks they do not implement, unless `critical` is set, in which
+case they MUST refuse the file ([§11.2](14-validation.md#112-semantic-validation)). An
+extension with `vendor_id = 0` and one of the reserved type codes below is still
+unimplemented until a reader implements its semantics; reserving the code is not the
+same as defining the payload.
 
 **Reserved ORA-standard extension types (`vendor_id = 0`):**
 
