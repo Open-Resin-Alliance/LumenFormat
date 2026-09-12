@@ -543,7 +543,7 @@ When a Lumen-capable printer receives a file with a `PROF` chunk, it may:
     "chamber_temperature_c": 30.0,
     "vat_temperature_c": 28.0,
 
-    // Resin working curve - experimental (§5.6). If omitted, printer falls back
+    // Resin working curve - experimental (§5.7). If omitted, printer falls back
     // to traditional exposure-time model.
     "cure_curve": {
       "dp_um": 120.0,
@@ -953,6 +953,9 @@ verification. This enables:
 | 6 | 32 | `[u8; 32]` | `merkle_root` | Root hash of the Merkle tree over all layer hashes. |
 | 38 | N | - | `layer_hashes` | `layer_count × hash_size` bytes. `layer_hashes[i]` is the leaf hash `SHA-256(0x00 \|\| d)`, where `d` is layer `i`'s data exactly as it appears in the decompressed output of its block: the byte range `[LTBL.entries[i].data_offset, + data_size)`. An empty layer stores `SHA-256(0x00)`. |
 
+Because these hashes cover decompressed bytes, they are reproducible only if encoders
+agree on the byte stream; §5.6 defines that canonical form.
+
 **Merkle tree construction** (domain-separated, RFC 6962 style):
 
 1. **Leaves:** `H[i] = SHA-256(0x00 || layer_data_i)` for `i` in `0..layer_count`,
@@ -1065,7 +1068,7 @@ Readers skip unknown EXTD chunks (or refuse if `critical` is set).
 | `ext_type` | Name | Purpose |
 |------------|------|---------|
 | `SIGN` | Signature | Cryptographic signature for file authenticity. |
-| `VLYR` | Variable Layers | Per-layer height values. Reserved for a future core mechanism; not usable in v1 (§5.6). |
+| `VLYR` | Variable Layers | Per-layer height values. Reserved for a future core mechanism; not usable in v1 (§5.7). |
 | `CMLT` | Compression ML | Training metadata for the `ZDIC` dictionary (corpus size, training parameters). |
 | `CMAP` | Color Map | Per-sector color channel mapping for multi-color printing. |
 
@@ -1092,6 +1095,9 @@ prepended to each layer's mask data within its block's decompressed output:
 | `0x02` | Split REE + sparse AA (§5.5) | Anti-aliased, but most pixels are solid 0/255. Bulk of layer encoded as binary REE; edge AA pixels stored as a sparse overlay. |
 
 Tags `0x03`–`0xFF` are reserved. Readers must refuse a layer with an unknown tag.
+
+Encoders MUST emit the canonical byte stream for the tag they choose; §5.6 defines the
+canonical form of each tag and the rules for choosing one.
 
 ### 5.1 Rationale
 
@@ -1159,6 +1165,8 @@ better cross-layer patterns.
   validators reject it.
 - `run_count == 1`: one solid run to total_pixels. `first_value` gives the color, `run_count` is varint `1`. Zero stored lengths.
 - `run_count >= 2`: K–1 run lengths are stored (the last run's length is implicit).
+- Every stored length is `>= 1`, the implicit final length is `>= 1`, and the lengths sum
+  to exactly `total_pixels` (§5.6).
 
 **Encoding algorithm.** Each value written after `run_count` is a run length, derived
 from the end positions:
@@ -1244,6 +1252,13 @@ is known (it alternates from the first). In grayscale REE it is not. Storing the
 last end_pos (= total_pixels) costs 1 varint (~1–4 bytes) and keeps the decoder
 loop uniform.
 
+**Canonical form.** Every run length is `>= 1` (so the end positions are strictly
+increasing), the final end position equals `total_pixels`, and no two adjacent runs carry
+the same value - they would be a single run. `run_count == 0` decodes to all black but is
+**not canonical**: an all-black layer uses the empty-layer form (`LTBL.sector_count == 0`,
+`data_size == 0`). A layer whose pixels are all `0x00` or `0xFF` MUST use binary REE
+instead (§5.6).
+
 **Grayscale REE is NOT delta-encoded** before zstd (the u8 values break the
 pure-delta stream; the compression gain from delta encoding is marginal with
 explicit values present).
@@ -1257,11 +1272,12 @@ output than full grayscale REE for AA prints at high resolutions.
 
 **How it works:**
 
-1. The encoder thresholds the grayscale layer at 127 to produce a binary mask
-   (0 or 255).
-2. The encoder identifies AA pixels: any pixel whose actual grayscale value
-   differs from the thresholded value. These are expected to be a small fraction
-   of total pixels (edge pixels only).
+1. The encoder thresholds the grayscale layer to a binary mask: `255` where the
+   grayscale value is `>= 128`, otherwise `0`.
+2. The AA pixels are exactly those whose grayscale value is neither `0x00` nor `0xFF` -
+   equivalently, the pixels where the thresholded value differs from the original. They
+   are expected to be a small fraction of total pixels (edge pixels only), and the set is
+   uniquely determined by the pixel content (§5.6).
 3. The binary mask is encoded as standard binary REE (§5.3).
 4. The AA overlay is encoded as a **sparse indexed stream** of (position, value)
    pairs covering the AA pixels.
@@ -1323,7 +1339,49 @@ complexity, AA settings, and zstd dictionary effectiveness.
 | Grayscale REE | Per-run value byte overhead | Larger | Every pixel carries a u8 run value. |
 | Split REE + sparse AA | Binary REE + sparse overlay | Substantially smaller than grayscale | Bulk as binary REE, edges as sparse overlay. |
 
-### 5.6 Resin Working Curve (Experimental)
+### 5.6 Canonical Encoding
+
+`LHAS` (§4.11) hashes the decompressed bytes of each layer, so a stream that is legal
+but not canonical yields a different hash for identical pixel content. This section
+defines the canonical form for each tag, and the one choice left to the encoder.
+
+**Tag choice.**
+
+- A layer with no exposed pixels uses the empty-layer form (`LTBL.sector_count == 0`,
+  `data_size == 0`); no tag is stored.
+- A layer whose pixels are all `0x00` or `0xFF` MUST use tag `0x00` (binary REE).
+- Otherwise the layer MUST use tag `0x01` (grayscale REE) or tag `0x02` (split REE).
+  Either is permitted; see "Reproducibility scope" below.
+
+**Canonical binary REE (tag `0x00`).** `first_value` is `0x00` or `0xFF`. Every stored
+run length is `>= 1`, the implicit length of the final run is `>= 1`, and the run lengths
+sum to exactly `total_pixels`. Runs alternate by construction, so adjacent runs never
+share a value.
+
+**Canonical grayscale REE (tag `0x01`).** Every run length is `>= 1` (so the end
+positions are strictly increasing), the final end position equals `total_pixels`, and no
+two adjacent runs carry the same value - they would be a single run.
+
+**Canonical split REE (tag `0x02`).** The binary component thresholds as
+`255 if v >= 128 else 0`, and the AA overlay contains exactly the pixels whose value is
+neither `0x00` nor `0xFF`, listed with strictly increasing indices. The overlay is
+therefore uniquely determined by the pixel content and cannot be padded or reordered.
+
+**Reproducibility scope.**
+
+- Deterministic: the empty-layer form and tag `0x00` fix the bytes for their content.
+- Encoder's choice: tag `0x01` versus tag `0x02`. Picking the smaller requires encoding
+  both, which is a cost/ratio trade-off rather than a correctness one. An encoder that
+  evaluates both SHOULD break ties in favour of tag `0x01`.
+- Required of every encoder: identical input and settings produce identical output, so
+  re-slicing the same scene yields the same file and the same `LHAS` hashes.
+- Not claimed: that two different encoders produce identical bytes, or identical `LHAS`
+  hashes, for the same layer.
+
+A decoder MUST accept any stream that satisfies §5.3-§5.5, canonical or not; strict-mode
+validators MAY reject non-canonical streams (§11.3).
+
+### 5.7 Resin Working Curve (Experimental)
 
 The `cure_curve` object in META and PROF provides the three fundamental parameters
 of a resin's photopolymerization behavior. When present, Odyssey firmware can
@@ -1716,6 +1774,10 @@ prefer the newer one.
 - [ ] For binary REE (tag `0x00`): `first_value` must be `0x00` or `0xFF`.
 - [ ] For empty layers (`sector_count == 0`): `data_size` must be 0.
 - [ ] (Strict mode) No layer uses the non-canonical `run_count == 0` form; all-black layers are stored as empty layers.
+- [ ] (Strict mode) Binary REE (tag `0x00`): every stored run length is `>= 1`, the implicit final run length is `>= 1`, and the lengths sum to exactly `total_pixels`.
+- [ ] (Strict mode) Grayscale REE (tag `0x01`): every run length is `>= 1` and no two adjacent runs carry the same value.
+- [ ] (Strict mode) A layer whose pixels are all `0x00`/`0xFF` is not stored as grayscale REE; it uses tag `0x00`.
+- [ ] (Strict mode) Split REE (tag `0x02`): the binary component thresholds at `v >= 128`, and the overlay covers exactly the pixels whose value is neither `0x00` nor `0xFF`.
 - [ ] REE streams decode to strictly increasing end positions.
 - [ ] Last end position equals `total_pixels`.
 - [ ] (Strict mode) Sector masks at each layer sum to `total_pixels` and are
