@@ -1,7 +1,7 @@
-# Lumen test vectors
+# LUMEN test vectors
 
 Byte-exact `.lumen` files plus an independent validator, for implementations of
-[`../lumen-format-spec.md`](../lumen-format-spec.md).
+[`../spec/01-overview.md`](../spec/01-overview.md).
 
 ## Layout
 
