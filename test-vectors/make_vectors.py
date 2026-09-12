@@ -20,8 +20,16 @@ import json
 import os
 import struct
 import sys
+from importlib.metadata import version as package_version
 
 import zstandard as zstd
+from argon2.low_level import Type as Argon2Type
+from argon2.low_level import hash_secret_raw
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey, X25519PublicKey
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM, ChaCha20Poly1305
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from cryptography.hazmat.primitives.keywrap import aes_key_unwrap, aes_key_wrap
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 VALID_DIR = os.path.join(HERE, "valid")
@@ -40,6 +48,7 @@ CREATED_UNIX_SEC = 1757000000
 
 FLAG_MULTI_SECTOR = 0x02
 FLAG_ENCRYPTED = 0x08
+FLAG_CHUNK_ENCRYPTED = 0x10
 
 TAG_BINARY = 0x00
 TAG_GRAYSCALE = 0x01
@@ -313,13 +322,19 @@ def build_file(chunks: list[dict], header_flags: int) -> tuple[bytes, dict]:
         pad = (-pos) % CHUNK_ALIGN
         body += b"\x00" * pad
         pos += pad
-        payload = ch["payload"]
-        if ch.get("compressed"):
-            stored = zstd.ZstdCompressor(level=ZSTD_SMALL_LEVEL).compress(payload)
-            size_uncompressed, size_compressed = len(payload), len(stored)
+        if "sealed" in ch:
+            # A framed, encrypted unit: size_uncompressed is the plaintext length it
+            # yields after decrypt + decompress, size_compressed the on-disk length
+            # including the 28-byte AEAD framing (spec 3.2, 9.3).
+            stored = ch["sealed"]
+            size_uncompressed, size_compressed = ch["size_uncompressed"], len(stored)
+        elif ch.get("compressed"):
+            size_uncompressed = len(ch["payload"])
+            stored = zstd.ZstdCompressor(level=ZSTD_SMALL_LEVEL).compress(ch["payload"])
+            size_compressed = len(stored)
         else:
-            stored = payload
-            size_uncompressed, size_compressed = len(payload), 0
+            stored = ch["payload"]
+            size_uncompressed, size_compressed = len(stored), 0
         layout[ch["type"].decode().rstrip("\0") + "_off"] = pos
         entries.append({
             "type": ch["type"],
@@ -357,11 +372,13 @@ def build_file(chunks: list[dict], header_flags: int) -> tuple[bytes, dict]:
 # vector construction
 # --------------------------------------------------------------------------
 
-def build_vector(name: str, description: str, features: list[str], display: tuple[int, int],
-                 layer_height: float, layers, block_size: int, use_dict: bool,
-                 dict_samples_bytes: int = 2048, split_layers=(), force_run_count_zero=(),
-                 meta_extra: dict | None = None):
-    """layers: list of (list of sector spans). One sector per layer => single-sector."""
+def encode_layers(display: tuple[int, int], layers, block_size: int, use_dict: bool,
+                  dict_samples_bytes: int, split_layers, force_run_count_zero) -> dict:
+    """Everything about one vector's layer data, before it is stored.
+
+    Shared by the plaintext and encrypted builders: encryption changes how the
+    block frames and content chunks are stored, never what they decode to.
+    """
     w, h = display
     total = w * h
 
@@ -433,57 +450,360 @@ def build_vector(name: str, description: str, features: list[str], display: tupl
 
     leaves = [leaf_hash(b) for b in layer_bytes]
 
+    return {"multi_sector": multi_sector, "layer_bytes": layer_bytes,
+            "sector_counts": sector_counts, "tags": tags, "sector_tags": sector_tags,
+            "frames": frames, "uncompressed_sizes": uncompressed_sizes, "entries": entries,
+            "leaves": leaves, "use_dict": use_dict, "dict_bytes": dict_bytes, "dict_id": dict_id}
+
+
+def sparse_layers(count: int, total: int) -> list:
+    """`count` layers of scattered runs, for vectors that need dictionary samples."""
+    layers = []
+    for i in range(count):
+        spans = []
+        pos = 0
+        for k in range(60):
+            gap = 40 + ((i * 7 + k * 13) % 60)
+            length = 20 + ((i + k) % 40)
+            start = pos + gap
+            if start + length >= total:
+                break
+            value = 255 if (i + k) % 3 else 128 + ((i * k) % 100)
+            spans.append((start, start + length, value))
+            pos = start + length
+        layers.append([tuple(spans)])
+    return layers
+
+
+def content_chunks(enc: dict, encoder_name: str, display: tuple[int, int], layer_height: float,
+                   layer_count: int, meta_extra) -> list[dict]:
+    """The chunk list before any encryption, in the order section 3 recommends."""
+    w, h = display
     chunks = [
         {"type": b"HDR\0", "payload": hdr_payload(
-            "LumenFormat test vectors 1.0", w, h, 218.0, 123.0, 250.0, layer_height, len(layers))},
+            encoder_name, w, h, 218.0, 123.0, 250.0, layer_height, layer_count)},
         {"type": b"META", "payload": meta_payload(**(meta_extra or {})), "compressed": True},
     ]
-    if multi_sector:
+    if enc["multi_sector"]:
         chunks.append({"type": b"SECT", "payload": sect_payload(1, "Support", 3.0),
                        "compressed": True})
-    if use_dict:
-        chunks.append({"type": b"ZDIC", "payload": zdic_payload(dict_bytes, dict_id)})
+    if enc["use_dict"]:
+        chunks.append({"type": b"ZDIC", "payload": zdic_payload(enc["dict_bytes"], enc["dict_id"])})
     chunks += [
-        {"type": b"LTBL", "payload": ltbl_payload(entries)},
-        {"type": b"LHAS", "payload": lhas_payload(leaves)},
-        {"type": b"LAYR", "payload": layr_payload(frames, uncompressed_sizes)},
+        {"type": b"LTBL", "payload": ltbl_payload(enc["entries"])},
+        {"type": b"LHAS", "payload": lhas_payload(enc["leaves"])},
+        {"type": b"LAYR", "payload": layr_payload(enc["frames"], enc["uncompressed_sizes"])},
     ]
+    return chunks
 
-    raw, layout = build_file(chunks, FLAG_MULTI_SECTOR if multi_sector else 0)
 
+def stored_block_table(raw: bytes, layout: dict) -> list[dict]:
+    """The LAYR block table exactly as written to the file.
+
+    Read back rather than recomputed: an encrypted vector's frames are sealed, so
+    their frame_size includes the 28-byte AEAD overhead (spec 4.10, 9.3), and the
+    manifest must describe the bytes that are actually there.
+    """
+    off = layout["LAYR_off"]
+    _version, block_count, entry_size = struct.unpack_from("<III", raw, off)
+    return [dict(zip(("frame_offset", "frame_size", "uncompressed_size"),
+                     struct.unpack_from("<QQQ", raw, off + 12 + k * entry_size)))
+            for k in range(block_count)]
+
+
+def vector_meta(name: str, description: str, features: list[str], display: tuple[int, int],
+                layer_height: float, block_size: int, enc: dict, chunks: list[dict],
+                raw: bytes, layout: dict, crypto: dict | None = None) -> dict:
+    """The manifest entry's golden data for one vector."""
+    w, h = display
     meta = {
         "name": name,
         "description": description,
         "features": features,
         "display_width_px": w,
         "display_height_px": h,
-        "total_layers": len(layers),
+        "total_layers": len(enc["layer_bytes"]),
         "layer_height_mm": layer_height,
         "block_size_layers": block_size,
-        "header_flags": FLAG_MULTI_SECTOR if multi_sector else 0,
-        "multi_sector": multi_sector,
+        "header_flags": struct.unpack_from("<I", raw, 20)[0],
+        "multi_sector": enc["multi_sector"],
         "chunk_count": len(chunks),
         "dir_offset": layout["dir_offset"],
         "total_uncompressed_size": struct.unpack_from("<Q", raw, 24)[0],
         "trailer_crc32c": "0x%08X" % struct.unpack_from("<I", raw, layout["trailer_offset"] + 4)[0],
         "file_size": len(raw),
         "file_sha256": hashlib.sha256(raw).hexdigest(),
-        "dict": {"present": bool(use_dict), "dict_id": dict_id, "dict_size": len(dict_bytes)},
-        "blocks": [{"frame_offset": sum(len(f) for f in frames[:k]),
-                    "frame_size": len(frames[k]),
-                    "uncompressed_size": uncompressed_sizes[k]}
-                   for k in range(len(frames))],
-        "merkle_root": merkle_root(leaves).hex(),
-        "layers": [{"index": i, "block_index": entries[i]["block_index"],
-                    "data_offset": entries[i]["data_offset"],
-                    "data_size": entries[i]["data_size"],
-                    "sector_count": sector_counts[i],
-                    "tag": tags[i],
-                    "sector_tags": sector_tags[i],
-                    "decompressed_sha256": hashlib.sha256(layer_bytes[i]).hexdigest(),
-                    "lhas_leaf": leaves[i].hex()} for i in range(len(layers))],
+        "dict": {"present": enc["use_dict"], "dict_id": enc["dict_id"],
+                 "dict_size": len(enc["dict_bytes"])},
+        "blocks": stored_block_table(raw, layout),
+        "merkle_root": merkle_root(enc["leaves"]).hex(),
+        "layers": [{"index": i, "block_index": enc["entries"][i]["block_index"],
+                    "data_offset": enc["entries"][i]["data_offset"],
+                    "data_size": enc["entries"][i]["data_size"],
+                    "sector_count": enc["sector_counts"][i],
+                    "tag": enc["tags"][i],
+                    "sector_tags": enc["sector_tags"][i],
+                    "decompressed_sha256": hashlib.sha256(enc["layer_bytes"][i]).hexdigest(),
+                    "lhas_leaf": enc["leaves"][i].hex()} for i in range(len(enc["layer_bytes"]))],
     }
+    if crypto is not None:
+        meta["crypto"] = crypto
+    return meta
+
+
+def build_vector(name: str, description: str, features: list[str], display: tuple[int, int],
+                 layer_height: float, layers, block_size: int, use_dict: bool,
+                 dict_samples_bytes: int = 2048, split_layers=(), force_run_count_zero=(),
+                 meta_extra: dict | None = None):
+    """layers: list of (list of sector spans). One sector per layer => single-sector."""
+    enc = encode_layers(display, layers, block_size, use_dict, dict_samples_bytes,
+                        split_layers, force_run_count_zero)
+    chunks = content_chunks(enc, "LumenFormat test vectors 1.0", display, layer_height,
+                            len(layers), meta_extra)
+    raw, layout = build_file(chunks, FLAG_MULTI_SECTOR if enc["multi_sector"] else 0)
+    meta = vector_meta(name, description, features, display, layer_height, block_size, enc,
+                       chunks, raw, layout)
     return raw, meta, layout
+
+
+# --------------------------------------------------------------------------
+# encryption (spec 4.4, 9)
+# --------------------------------------------------------------------------
+
+SEED = b"LUMEN test vectors v1.0"
+TEST_PASSWORD = "lumen-test-vector"
+MACHINE_INFO = b"LUMEN machine-binding v1\x00"
+DEFAULT_ARGON2 = (1, 8, 1)          # iterations, memory_kib, parallelism
+ENC_CONTENT_TYPES = (b"LAYR", b"META", b"PROF", b"SECT", b"LROV", b"VOXL", b"ZDIC")
+
+
+def det(label: bytes, length: int) -> bytes:
+    """Deterministic test material, so the corpus regenerates byte for byte.
+
+    Real encoders MUST draw every nonce, salt and key from a CSPRNG (spec 9.3);
+    these values are public test data and demonstrate nothing about production
+    randomness.
+    """
+    return hashlib.shake_256(SEED + b"|" + label).digest(length)
+
+
+def unit_aad(chunk_type: bytes, unit_index: int) -> bytes:
+    """AAD binds a sealed unit to its identity in the file (spec 9.3)."""
+    return chunk_type + b"\x00" + struct.pack("<I", unit_index)
+
+
+def seal(key: bytes, cipher_id: str, chunk_type: bytes, unit_index: int, plaintext: bytes) -> bytes:
+    """One sealed unit: nonce || ciphertext || tag (spec 9.3)."""
+    nonce = det(b"nonce|" + chunk_type + b"|%d" % unit_index, 12)
+    aead = AESGCM(key) if cipher_id == "A256" else ChaCha20Poly1305(key)
+    return nonce + aead.encrypt(nonce, plaintext, unit_aad(chunk_type, unit_index))
+
+
+def argon2_kek(password: str, salt: bytes, iterations: int, memory_kib: int,
+               parallelism: int) -> bytes:
+    """Argon2id per RFC 9106: version 0x13, 32-byte output, UTF-8 password."""
+    return hash_secret_raw(secret=password.encode(), salt=salt, time_cost=iterations,
+                           memory_cost=memory_kib, parallelism=parallelism, hash_len=32,
+                           type=Argon2Type.ID)
+
+
+def password_section(session_key: bytes, password: str, salt: bytes, iterations: int,
+                     memory_kib: int, parallelism: int) -> bytes:
+    kek = argon2_kek(password, salt, iterations, memory_kib, parallelism)
+    return (salt + struct.pack("<IIB", iterations, memory_kib, parallelism)
+            + aes_key_wrap(kek, session_key))
+
+
+def public_of(private: bytes) -> bytes:
+    return X25519PrivateKey.from_private_bytes(private).public_key().public_bytes_raw()
+
+
+def fingerprint(public: bytes) -> bytes:
+    return hashlib.sha256(public).digest()
+
+
+def machine_kek(ss: bytes, ephemeral_pk: bytes, fp: bytes) -> bytes:
+    return HKDF(algorithm=hashes.SHA256(), length=32, salt=fp,
+                info=MACHINE_INFO + ephemeral_pk + fp).derive(ss)
+
+
+def machine_entry(session_key: bytes, recipient_private: bytes, label: bytes) -> bytes:
+    """One recipient entry: machine_fp || ephemeral_pk || wrapped_key (spec 4.4.2)."""
+    recipient_public = public_of(recipient_private)
+    fp = fingerprint(recipient_public)
+    eph = X25519PrivateKey.from_private_bytes(det(b"ephemeral|" + label, 32))
+    ephemeral_pk = eph.public_key().public_bytes_raw()
+    ss = eph.exchange(X25519PublicKey.from_public_bytes(recipient_public))
+    return fp + ephemeral_pk + aes_key_wrap(machine_kek(ss, ephemeral_pk, fp), session_key)
+
+
+def decoy_entry(recipient_public: bytes, label: bytes) -> bytes:
+    """An entry for our own fingerprint whose ephemeral key is the low-order point.
+
+    X25519 against it yields the all-zero shared secret, which a reader MUST
+    reject (spec 4.4.2 step 1). It carries a *different* session key, so a reader
+    that unwraps it without checking cannot decrypt the file at all.
+    """
+    fp = fingerprint(recipient_public)
+    ephemeral_pk = bytes(32)
+    return (fp + ephemeral_pk
+            + aes_key_wrap(machine_kek(bytes(32), ephemeral_pk, fp),
+                           det(b"decoy-session-key|" + label, 32)))
+
+
+def auth_payload(cipher_id: str, mode: int, password_sec: bytes = b"",
+                 machine_sec: bytes = b"") -> bytes:
+    return (cipher_id.encode()
+            + struct.pack("<IIII", 1, mode, len(password_sec), len(machine_sec))
+            + password_sec + machine_sec)
+
+
+def seal_content_chunks(chunks: list[dict], enc: dict, key: bytes, cipher_id: str) -> list[dict]:
+    """Seal every content chunk (spec 9.1).
+
+    LAYR keeps its header and block table plaintext and seals each block frame
+    separately, so per-block random access still works (spec 9.3).
+    """
+    out = []
+    for ch in chunks:
+        ctype = ch["type"]
+        if ctype == b"LAYR":
+            sealed_frames = [seal(key, cipher_id, b"LAYR", k, frame)
+                             for k, frame in enumerate(enc["frames"])]
+            out.append({"type": b"LAYR",
+                        "payload": layr_payload(sealed_frames, enc["uncompressed_sizes"]),
+                        "flags": FLAG_CHUNK_ENCRYPTED})
+        elif ctype in ENC_CONTENT_TYPES:
+            plain = ch["payload"]
+            stored = (zstd.ZstdCompressor(level=ZSTD_SMALL_LEVEL).compress(plain)
+                      if ch.get("compressed") else plain)
+            out.append({"type": ctype, "sealed": seal(key, cipher_id, ctype, 0, stored),
+                        "size_uncompressed": len(plain), "flags": FLAG_CHUNK_ENCRYPTED})
+        else:
+            out.append(ch)
+    return out
+
+
+def build_encrypted_vector(name: str, description: str, features: list[str],
+                           display: tuple[int, int], layer_height: float, layers,
+                           block_size: int, cipher_id: str, mode: int, use_dict: bool = False,
+                           dict_samples_bytes: int = 1024, split_layers=(), meta_extra=None,
+                           argon2_params=None, password_trim: int = 0, machine_roles=(),
+                           session_key: bytes | None = None):
+    """An encrypted file: the same content chunks, sealed, plus an AUTH chunk.
+
+    `machine_roles` lists the recipient entries in file order; the role "local"
+    marks the entry whose private key the manifest publishes.
+    """
+    enc = encode_layers(display, layers, block_size, use_dict, dict_samples_bytes,
+                        split_layers, ())
+    session_key = session_key or det(b"session-key|" + name.encode(), 32)
+    salt = det(b"argon2-salt|" + name.encode(), 16)
+    iterations, memory_kib, parallelism = argon2_params or DEFAULT_ARGON2
+
+    password_sec = b""
+    if mode & 1:
+        password_sec = password_section(session_key, TEST_PASSWORD, salt, iterations,
+                                        memory_kib, parallelism)
+        if password_trim:
+            password_sec = password_sec[:-password_trim]
+        else:
+            # The published password must really recover the session key.
+            kek = argon2_kek(TEST_PASSWORD, salt, iterations, memory_kib, parallelism)
+            assert aes_key_unwrap(kek, password_sec[25:]) == session_key, \
+                "password section self-check failed"
+
+    machine_sec = b""
+    local_index = None
+    local_private = det(b"machine-private|" + name.encode(), 32)
+    for role in machine_roles:
+        if role == "local":
+            local_index = len(machine_sec) // 104
+            machine_sec += machine_entry(session_key, local_private, name.encode())
+        elif role == "foreign":
+            machine_sec += machine_entry(session_key, det(b"foreign-private|" + name.encode(), 32),
+                                         name.encode() + b"|foreign")
+        elif role == "decoy":
+            machine_sec += decoy_entry(public_of(local_private), name.encode())
+        else:
+            raise ValueError("unknown recipient role %r" % (role,))
+
+    chunks = content_chunks(enc, "LumenFormat test vectors 1.0", display, layer_height,
+                            len(layers), meta_extra)
+    sealed = seal_content_chunks(chunks, enc, session_key, cipher_id)
+    auth = {"type": b"AUTH", "payload": auth_payload(cipher_id, mode, password_sec, machine_sec)}
+    ordered = [sealed[0], sealed[1], auth] + sealed[2:]
+
+    header_flags = FLAG_ENCRYPTED | (FLAG_MULTI_SECTOR if enc["multi_sector"] else 0)
+    raw, layout = build_file(ordered, header_flags)
+
+    crypto = {
+        "cipher_id": cipher_id,
+        "auth_version": 1,
+        "mode": mode,
+        "mode_names": [n for bit, n in ((1, "password"), (2, "machine-binding")) if mode & bit],
+    }
+    if mode & 1:
+        crypto["password_utf8"] = TEST_PASSWORD
+        crypto["argon2"] = {"salt": salt.hex(), "iterations": iterations,
+                            "memory_kib": memory_kib, "parallelism": parallelism}
+    if mode & 2 and local_index is not None:
+        crypto["local_recipient_index"] = local_index
+        crypto["local_recipient_private_key"] = local_private.hex()
+
+    meta = vector_meta(name, description, features, display, layer_height, block_size, enc,
+                       ordered, raw, layout, crypto=crypto)
+    return raw, meta, layout
+
+
+def vector_encrypted_password():
+    """Password mode, AES-256-GCM, dictionary, two sealed blocks."""
+    return build_encrypted_vector(
+        "encrypted-password",
+        "Password-mode AES-256-GCM: an Argon2id-wrapped session key, a sealed dictionary and metadata, and two blocks of sealed layer frames.",
+        ["encryption", "password-mode", "aes-256-gcm", "argon2id", "dictionary",
+         "sealed-blocks", "multi-block"],
+        (256, 192), 0.05, sparse_layers(32, T2), block_size=16, cipher_id="A256", mode=1,
+        use_dict=True, dict_samples_bytes=1024, split_layers=set(range(0, 32, 2)))
+
+
+def vector_encrypted_machine():
+    """Machine mode, ChaCha20-Poly1305, one block, three recipient entries."""
+    layers = [
+        [((0, 120, 255),)],
+        [((0, 200, 128), (300, 460, 255),)],
+        [((0, 0, 0),)],
+        [((600, 700, 255),)],
+    ]
+    return build_encrypted_vector(
+        "encrypted-machine",
+        "Machine-mode ChaCha20-Poly1305 with three recipient entries: a foreign machine, a decoy entry for our own fingerprint whose ephemeral key is the low-order point, and the real entry. A reader that unwraps the decoy without rejecting the all-zero shared secret recovers a different session key and cannot decrypt the file.",
+        ["encryption", "machine-binding", "chacha20-poly1305", "x25519", "hkdf",
+         "multiple-recipients", "low-order-point"],
+        (64, 48), 0.05, layers, block_size=4, cipher_id="C20P", mode=2,
+        split_layers={1}, machine_roles=("foreign", "decoy", "local"))
+
+
+def vector_encrypted_both():
+    """Both wrapping modes in one AUTH, multi-sector content."""
+    layers = [
+        [((0, 100, 255),), ((200, 300, 255),)],
+        [((0, 64, 255),)],
+        [((0, 0, 0),)],
+        [((500, 600, 255),), ((1000, 1100, 255),)],
+        [((0, 900, 255),)],
+        [((70, 90, 200), (150, 200, 255),)],
+    ]
+    return build_encrypted_vector(
+        "encrypted-both",
+        "Both wrapping modes set in one AUTH chunk, with multi-sector layer content sealed under a single session key.",
+        ["encryption", "password-mode", "machine-binding", "multi-sector", "sealed-sectors",
+         "aes-256-gcm"],
+        (64, 48), 0.05, layers, block_size=2, cipher_id="A256", mode=3,
+        split_layers={5}, machine_roles=("local",),
+        meta_extra={"materials": [{"name": "Standard Grey", "brand": "DragonFruit",
+                                   "family": "standard", "density_g_ml": 1.1,
+                                   "color_rgba": [128, 128, 128, 255]}]})
 
 
 # --------------------------------------------------------------------------
@@ -512,25 +832,11 @@ def vector_binary_basic():
 
 def vector_dict():
     """64 layers with a trained dictionary, four blocks."""
-    layers = []
-    for i in range(64):
-        spans = []
-        pos = 0
-        for k in range(60):
-            gap = 40 + ((i * 7 + k * 13) % 60)
-            length = 20 + ((i + k) % 40)
-            start = pos + gap
-            if start + length >= T2:
-                break
-            value = 255 if (i + k) % 3 else 128 + ((i * k) % 100)
-            spans.append((start, start + length, value))
-            pos = start + length
-        layers.append([tuple(spans)])
     return build_vector(
         "dict-multi-block", "64 layers with a trained ZDIC dictionary, four blocks of sixteen layers.",
         ["dictionary", "dictionary-id", "multi-block", "grayscale-ree", "split-ree"],
-        (256, 192), 0.05, layers, block_size=16, use_dict=True, dict_samples_bytes=1024,
-        split_layers=set(range(0, 64, 2)))
+        (256, 192), 0.05, sparse_layers(64, T2), block_size=16, use_dict=True,
+        dict_samples_bytes=1024, split_layers=set(range(0, 64, 2)))
 
 
 def vector_multisector():
@@ -560,12 +866,19 @@ def main() -> int:
         "zstandard": zstd.__version__,
         "zstd_layer_level": ZSTD_LAYER_LEVEL,
         "zstd_small_level": ZSTD_SMALL_LEVEL,
+        "cryptography": package_version("cryptography"),
+        "argon2_cffi": package_version("argon2-cffi"),
         "note": "Compressed payload bytes depend on the zstd version and level. "
-                "Uncompressed structures (HDR, LTBL, LAYR header and block table, "
-                "LHAS, REE streams, directory, trailer) are exact.",
+                "Uncompressed structures (HDR, AUTH, LTBL, LAYR header and block table, "
+                "LHAS, REE streams, directory, trailer) are exact. Sealed units are exact "
+                "too: every nonce, salt and key is derived from a fixed SHAKE-256 seed, so "
+                "regeneration is deterministic. Those values are public test data; real "
+                "encoders must draw them from a CSPRNG.",
     }}
 
-    for builder in (vector_binary_basic, vector_dict, vector_multisector):
+    for builder in (vector_binary_basic, vector_dict, vector_multisector,
+                    vector_encrypted_password, vector_encrypted_machine,
+                    vector_encrypted_both):
         raw, meta, layout = builder()
         path = os.path.join(VALID_DIR, meta["name"] + ".lumen")
         with open(path, "wb") as fh:
@@ -576,16 +889,20 @@ def main() -> int:
               % (meta["file"], len(raw), meta["chunk_count"], len(meta["blocks"])))
 
     # ---------------- invalid vectors ----------------
-    def emit_invalid(name, description, expected, raw, strict_only=False, base=None):
+    def emit_invalid(name, description, expected, raw, strict_only=False, base=None,
+                     crypto=None):
         path = os.path.join(INVALID_DIR, name + ".lumen")
         with open(path, "wb") as fh:
             fh.write(raw)
-        manifest["invalid"].append({
+        entry = {
             "name": name, "file": "invalid/" + name + ".lumen",
             "description": description, "expected_failure": expected,
             "strict_only": strict_only, "base_vector": base,
             "file_size": len(raw), "file_sha256": hashlib.sha256(raw).hexdigest(),
-        })
+        }
+        if crypto is not None:
+            entry["crypto"] = crypto
+        manifest["invalid"].append(entry)
         print("wrote %-28s %6d bytes -> expects %s%s"
               % ("invalid/" + name + ".lumen", len(raw), expected,
                  " (strict mode only)" if strict_only else ""))
@@ -663,6 +980,86 @@ def main() -> int:
     emit_invalid("trailer-crc-mismatch",
                  "The trailer CRC-32C does not match the file bytes.", "trailer.crc32c",
                  bytes(b), base="binary-basic")
+
+    # ---------------- encrypted invalid vectors ----------------
+
+    def patch_chunk_flags(raw_in, layout_in, ctype, flags):
+        """Rewrite one chunk descriptor's flags field."""
+        b = bytearray(raw_in)
+        for i, e in enumerate(layout_in["entries"]):
+            if e["type"] == ctype:
+                struct.pack_into("<I", b, layout_in["dir_offset"] + i * DESCRIPTOR_SIZE + 28, flags)
+                return bytes(b)
+        raise AssertionError("no %r chunk" % (ctype,))
+
+    enc_raw, enc_meta, enc_layout = vector_encrypted_password()
+
+    # e01: the ENCRYPTED header flag with no AUTH chunk at all
+    b = bytearray(raw)
+    struct.pack_into("<I", b, 20, struct.unpack_from("<I", b, 20)[0] | FLAG_ENCRYPTED)
+    emit_invalid("encrypted-flag-without-auth",
+                 "The file header sets ENCRYPTED but there is no AUTH chunk, so no session key can ever be derived.",
+                 "presence.auth", repack(b, layout), base="binary-basic")
+
+    # e02: an unrecognized cipher
+    b = bytearray(enc_raw)
+    b[enc_layout["AUTH_off"]:enc_layout["AUTH_off"] + 4] = b"XXXX"
+    emit_invalid("auth-cipher-unknown",
+                 "AUTH.cipher_id is XXXX, which names no algorithm.",
+                 "auth.cipher_known", repack(b, enc_layout), base="encrypted-password",
+                 crypto=enc_meta["crypto"])
+
+    # e03: neither wrapping mode declared
+    b = bytearray(enc_raw)
+    struct.pack_into("<I", b, enc_layout["AUTH_off"] + 8, 0)
+    emit_invalid("crypt-mode-empty",
+                 "AUTH.mode is 0: neither a password nor a machine binding is declared, so the session key is unreachable.",
+                 "crypt.mode_empty", repack(b, enc_layout), base="encrypted-password",
+                 crypto={**enc_meta["crypto"], "mode": 0, "mode_names": []})
+
+    # e04: Argon2id cost above the recommended ceiling. The section is coherent, so
+    # only the cost rule can refuse it.
+    raw4, meta4, _ = build_encrypted_vector(
+        "x-argon2-budget", "source", [], (64, 48), 0.05,
+        [[((0, 300, 255),)] for _ in range(4)], block_size=2, cipher_id="A256", mode=1,
+        argon2_params=(99, 8, 1))
+    emit_invalid("crypt-argon2-budget",
+                 "The password section declares Argon2id iterations = 99, above the recommended ceiling of 10; it is otherwise coherent, so only the cost rule refuses it.",
+                 "crypt.argon2_budget", raw4, base=None, crypto=meta4["crypto"])
+
+    # e05: password section shorter than the fixed 65 bytes
+    raw5, meta5, _ = build_encrypted_vector(
+        "x-password-short", "source", [], (64, 48), 0.05,
+        [[((0, 300, 255),)] for _ in range(4)], block_size=2, cipher_id="A256", mode=1,
+        password_trim=1)
+    emit_invalid("crypt-password-len-short",
+                 "AUTH declares a 64-byte password section, one byte short of the fixed section size.",
+                 "crypt.password_section_len", raw5, base=None, crypto=meta5["crypto"])
+
+    # e06: machine mode with an empty machine section
+    raw6, meta6, _ = build_encrypted_vector(
+        "x-machine-empty", "source", [], (64, 48), 0.05,
+        [[((0, 300, 255),)] for _ in range(4)], block_size=2, cipher_id="C20P", mode=2,
+        machine_roles=())
+    emit_invalid("crypt-machine-len-empty",
+                 "AUTH.mode sets machine-binding but the machine section is empty: no recipient can ever unwrap the session key.",
+                 "crypt.machine_section_len", raw6, base=None, crypto=meta6["crypto"])
+
+    # e07: a content chunk whose descriptor says plaintext while the file is encrypted
+    b = patch_chunk_flags(enc_raw, enc_layout, b"ZDIC", 0)
+    emit_invalid("crypt-plaintext-content",
+                 "ZDIC's descriptor does not set the encrypted flag although the file is encrypted; its bytes are sealed regardless, so the flag is the only disagreement.",
+                 "crypt.chunk_flags", repack(b, enc_layout), base="encrypted-password",
+                 crypto=enc_meta["crypto"])
+
+    # e08: a tampered ciphertext byte inside a sealed LAYR block frame
+    b = bytearray(enc_raw)
+    body_off = 12 + len(enc_meta["blocks"]) * BLOCK_TABLE_ENTRY_SIZE
+    b[enc_layout["LAYR_off"] + body_off + 16] ^= 0xFF   # past the nonce, inside the ciphertext
+    emit_invalid("crypt-tag-corrupt",
+                 "One ciphertext byte of LAYR block 0 is flipped, so its AEAD tag must fail; a reader must not decompress or parse a block it cannot authenticate.",
+                 "crypt.tag_verify", repack(b, enc_layout), base="encrypted-password",
+                 crypto=enc_meta["crypto"])
 
     with open(os.path.join(HERE, "manifest.json"), "w", encoding="utf-8", newline="\n") as fh:
         json.dump(manifest, fh, indent=2, sort_keys=True)

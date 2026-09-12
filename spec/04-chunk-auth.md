@@ -37,6 +37,11 @@ none is stored; per-file uniqueness comes from the salt.
 To decrypt: derive a 256-bit KEK from the password + salt + Argon2id parameters,
 then unwrap `wrapped_key` with AES-256-KW to recover the session key.
 
+The KEK is derived with Argon2id exactly as specified by [RFC 9106](https://www.rfc-editor.org/rfc/rfc9106):
+version `0x13`, a 32-byte output, no secret key and no associated data (both fields
+empty), and the password encoded as UTF-8. `salt` is the 16-byte value from the
+section; `iterations`, `memory_kib` and `parallelism` are its three cost parameters.
+
 #### 4.4.2 Machine-Binding Section
 
 Contains one or more recipient entries. Each entry:

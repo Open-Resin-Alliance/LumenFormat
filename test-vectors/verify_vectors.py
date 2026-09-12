@@ -25,6 +25,31 @@ import sys
 
 import zstandard as zstd
 
+# The crypto libraries are optional: a plaintext corpus validates without them.
+# Guarded at import time so an encrypted vector is the only thing that needs
+# `cryptography` and `argon2-cffi` to be installed.
+try:
+    import argon2.low_level as _argon2
+    from cryptography.hazmat.primitives import hashes as _hashes
+    from cryptography.hazmat.primitives.asymmetric.x25519 import (
+        X25519PrivateKey as _X25519PrivateKey,
+        X25519PublicKey as _X25519PublicKey,
+    )
+    from cryptography.hazmat.primitives.ciphers.aead import (
+        AESGCM as _AESGCM,
+        ChaCha20Poly1305 as _ChaCha20Poly1305,
+    )
+    from cryptography.hazmat.primitives.kdf.hkdf import HKDF as _HKDF
+    from cryptography.hazmat.primitives.keywrap import aes_key_unwrap as _aes_key_unwrap
+    from cryptography.hazmat.primitives.serialization import (
+        Encoding as _Encoding,
+        PublicFormat as _PublicFormat,
+    )
+
+    CRYPTO_AVAILABLE = True
+except Exception:  # ImportError, or a broken install
+    CRYPTO_AVAILABLE = False
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 MANIFEST = os.path.join(HERE, "manifest.json")
 
@@ -141,9 +166,11 @@ def dec_split(body: bytes, total: int):
     n, pos = read_varint(body, pos)
     positions = []
     prev = 0
-    for _ in range(n):
+    # positions[0] is the absolute index of the first AA pixel (delta from 0), so
+    # only subsequent deltas have to be >= 1 for the indices to be increasing.
+    for idx in range(n):
         d, pos = read_varint(body, pos)
-        if d < 1:
+        if idx and d < 1:
             v.append("overlay positions are not strictly increasing")
         prev += d
         positions.append(prev)
@@ -158,6 +185,135 @@ def dec_split(body: bytes, total: int):
     if [p for p, _ in expect] != positions or [x for _, x in expect] != values:
         v.append("overlay is not exactly the set of non-binary pixels")
     return mask, pos, v
+
+
+# ------------------------------------------------------------ crypto helpers
+#
+# Reimplemented from spec 04-chunk-auth.md (§4.4), 06-layer-data.md (§4.10) and
+# 12-encryption.md (§9), independently of the generator.  Every helper assumes
+# CRYPTO_AVAILABLE; callers only enter the encrypted path when it holds.
+
+ENCRYPTED_FLAG = 0x08       # file header: AUTH chunk present, content sealed
+SEALED_FLAG = 0x10          # chunk descriptor: this chunk's payload is sealed
+AEAD_OVERHEAD = 28          # nonce[12] + tag[16]
+SEALED_CHUNK_TYPES = (b"LAYR", b"META", b"PROF", b"SECT", b"LROV", b"VOXL", b"ZDIC")
+CLEAR_CHUNK_TYPES = (b"HDR\0", b"AUTH", b"LTBL")
+COMPRESSED_TYPES = frozenset((b"META", b"PROF", b"SECT", b"LROV", b"VOXL"))
+
+
+def unit_aad(chunk_type: bytes, unit_index: int) -> bytes:
+    """§9.3: chunk_type || 0x00 || unit_index_le_u32."""
+    return chunk_type + b"\x00" + struct.pack("<I", unit_index)
+
+
+def open_unit(key: bytes, cipher_id: bytes, chunk_type: bytes, unit_index: int,
+              blob: bytes) -> bytes:
+    """Open one sealed unit (nonce || ciphertext || tag); raises on tag failure."""
+    if len(blob) < AEAD_OVERHEAD:
+        raise ValueError("sealed unit shorter than the 28-byte framing")
+    aad = unit_aad(chunk_type, unit_index)
+    if cipher_id == b"A256":
+        return _AESGCM(key).decrypt(blob[:12], blob[12:], aad)
+    if cipher_id == b"C20P":
+        return _ChaCha20Poly1305(key).decrypt(blob[:12], blob[12:], aad)
+    raise ValueError("unknown cipher_id %r" % (cipher_id,))
+
+
+def argon2_params(auth: bytes, pw_len: int):
+    """(iterations, memory_kib, parallelism) from the password section, or None.
+
+    Only the 25 bytes that hold salt + the three cost parameters are needed, so
+    a section whose declared length is short of the fixed 65 still exposes its
+    declared budget (the length defect is reported by its own check).
+    """
+    if pw_len < 25 or len(auth) < 20 + 25:
+        return None
+    return (struct.unpack_from("<I", auth, 36)[0],
+            struct.unpack_from("<I", auth, 40)[0],
+            auth[44])
+
+
+def recover_session_key(auth: bytes, crypto, cipher_id: bytes, mode: int,
+                        pw_len: int, mc_len: int):
+    """Unwrap the session key per §4.4; None when no credential works.
+
+    Password mode is tried first, then every machine-binding entry whose
+    fingerprint matches ours (§4.4.2 step 1: an all-zero shared secret — the
+    low-order-point result — rejects the entry).
+    """
+    if not CRYPTO_AVAILABLE or not isinstance(crypto, dict):
+        return None
+    if mode & 0x01:
+        password = crypto.get("password_utf8")
+        params = crypto.get("argon2")
+        if isinstance(password, str) and isinstance(params, dict) and pw_len >= 65:
+            try:
+                kek = _argon2.hash_secret_raw(
+                    secret=password.encode("utf-8"),
+                    salt=bytes.fromhex(params["salt"]),
+                    time_cost=int(params["iterations"]),
+                    memory_cost=int(params["memory_kib"]),
+                    parallelism=int(params["parallelism"]),
+                    hash_len=32,
+                    type=_argon2.Type.ID,
+                    version=0x13,  # RFC 9106
+                )
+                key = _aes_key_unwrap(kek, auth[45:85])
+            except Exception:
+                key = None
+            if key is not None and len(key) == 32:
+                return key
+    if mode & 0x02:
+        priv_hex = crypto.get("local_recipient_private_key")
+        if not isinstance(priv_hex, str):
+            return None
+        try:
+            priv = _X25519PrivateKey.from_private_bytes(bytes.fromhex(priv_hex))
+            local_pub = priv.public_key().public_bytes(_Encoding.Raw, _PublicFormat.Raw)
+        except Exception:
+            return None
+        machine_fp = hashlib.sha256(local_pub).digest()
+        base = 20 + pw_len
+        for i in range(mc_len // 104):
+            off = base + i * 104
+            if off + 104 > len(auth):
+                break
+            entry = auth[off:off + 104]
+            if entry[:32] != machine_fp:
+                continue
+            ephemeral_pk = entry[32:64]
+            try:
+                shared = priv.exchange(_X25519PublicKey.from_public_bytes(ephemeral_pk))
+            except Exception:
+                continue  # library rejected the point
+            if not any(shared):
+                continue  # low-order point: the all-zero shared secret
+            try:
+                kek = _HKDF(algorithm=_hashes.SHA256(), length=32, salt=machine_fp,
+                            info=b"LUMEN machine-binding v1\0" + ephemeral_pk + machine_fp
+                            ).derive(shared)
+                key = _aes_key_unwrap(kek, entry[64:104])
+            except Exception:
+                continue
+            if len(key) == 32:
+                return key
+    return None
+
+
+def chunk_flag_report(real, blocks, encrypted_flag: bool, sealed_layr: bool):
+    """(ok, detail) for crypt.chunk_flags — §11.4 / §9.1."""
+    if not encrypted_flag:
+        return True, ""
+    bad = []
+    for e in real:
+        name = e["type"].rstrip(b"\x00").decode("ascii", "replace")
+        if e["type"] in SEALED_CHUNK_TYPES and not (e["flags"] & SEALED_FLAG):
+            bad.append("%s not sealed" % name)
+        if e["type"] in CLEAR_CHUNK_TYPES and (e["flags"] & SEALED_FLAG):
+            bad.append("%s sealed" % name)
+    if sealed_layr and any(b["frame_size"] < AEAD_OVERHEAD for b in blocks):
+        bad.append("LAYR block frame shorter than 28 bytes")
+    return (not bad), ", ".join(bad)
 
 
 # ------------------------------------------------------------- file reader
@@ -178,7 +334,7 @@ class Checks:
         return [n for n, ok in self.items if not ok]
 
 
-def validate(path: str, strict: bool, verbose: bool = False):
+def validate(path: str, strict: bool, verbose: bool = False, crypto: dict | None = None):
     chk = Checks(verbose)
     raw = open(path, "rb").read()
 
@@ -213,9 +369,14 @@ def validate(path: str, strict: bool, verbose: bool = False):
         hits = [e for e in real if e["type"] == ctype]
         return hits
 
-    def payload(e):
+    def stored(e):
+        """Stored payload bytes; for LAYR this is the plaintext container."""
         n = e["csz"] or e["usz"]
-        blob = raw[e["offset"]:e["offset"] + n]
+        return raw[e["offset"]:e["offset"] + n]
+
+    def payload_plain(e):
+        """Stored payload with chunk-level compression undone."""
+        blob = stored(e)
         if e["csz"]:
             blob = zstd.ZstdDecompressor().decompress(blob, max_output_size=e["usz"])
         return blob
@@ -227,8 +388,12 @@ def validate(path: str, strict: bool, verbose: bool = False):
         chk("presence.sect", len(find(b"SECT")) >= 1)
     chk("presence.lhas", len(find(b"LHAS")) == 1)
 
+    auth_entries = find(b"AUTH")
+    encrypted_flag = bool(flags & ENCRYPTED_FLAG)
+    crypto_engaged = encrypted_flag or bool(auth_entries) or (crypto is not None)
+
     # ---- HDR -----------------------------------------------------------
-    hdr = payload(find(b"HDR\0")[0])
+    hdr = stored(find(b"HDR\0")[0])
     hdr_version, name_len = struct.unpack_from("<II", hdr, 0)
     chk("hdr.version", hdr_version == 1)
     chk("hdr.encoder_name_fits", len(hdr) >= 52 + name_len and name_len <= 256)
@@ -238,25 +403,10 @@ def validate(path: str, strict: bool, verbose: bool = False):
     chk("hdr.physical_ratio", phys_w % disp_w == 0 and phys_h % disp_h == 0)
     total_pixels = disp_w * disp_h
 
-    # ---- META / SECT ---------------------------------------------------
-    meta = json.loads(payload(find(b"META")[0]))
-    mats = meta.get("materials")
-    chk("meta.required_fields", all(k in meta for k in (
-        "meta_version", "normal_exposure_sec", "bottom_exposure_sec", "bottom_layer_count",
-        "transition_layer_count", "layer_height_mm", "lift_distance_mm", "lift_speed_mm_min",
-        "retract_distance_mm", "retract_speed_mm_min")))
-    chk("meta.materials_shape", mats is None or (
-        isinstance(mats, list) and len(mats) > 0
-        and all(isinstance(m, dict) and m.get("name") for m in mats)))
-    sects = [json.loads(payload(e)) for e in find(b"SECT")]
-    chk("sect.sector_id_nonzero", all(s.get("sector_id", 0) >= 1 for s in sects))
-    chk("sect.ids_unique", len({s["sector_id"] for s in sects}) == len(sects))
-    chk("sect.material_index_bounds", all(
-        "material_index" not in s or (mats is not None and 0 <= s["material_index"] < len(mats))
-        for s in sects))
+    # ---- META / SECT are content-derived: parsed in phase 6 -------------
 
     # ---- LTBL ----------------------------------------------------------
-    ltbl = payload(find(b"LTBL")[0])
+    ltbl = stored(find(b"LTBL")[0])
     table_version, layer_count, entry_size = struct.unpack_from("<III", ltbl, 0)
     chk("ltbl.table_version", table_version == 1)
     chk("ltbl.entry_size", entry_size >= 20)
@@ -269,7 +419,7 @@ def validate(path: str, strict: bool, verbose: bool = False):
                           "data_size": data_size, "sector_count": sector_count})
 
     # ---- LAYR ----------------------------------------------------------
-    layr = payload(find(b"LAYR")[0])
+    layr = stored(find(b"LAYR")[0])
     layr_version, block_count, bt_entry = struct.unpack_from("<III", layr, 0)
     chk("layr.version", layr_version == 1)
     chk("layr.block_count", 1 <= block_count <= total_layers)
@@ -295,12 +445,149 @@ def validate(path: str, strict: bool, verbose: bool = False):
         and e["data_offset"] + e["data_size"] <= blocks[e["block_index"]]["uncompressed_size"]
         for e in entries_l))
 
+    # ============================================================ phase 1 (c)
+    # LHAS header.  The leaf table and its root are plaintext even when the
+    # layer data is sealed, so the root can be recomputed without a key.
+    lhas = stored(find(b"LHAS")[0])
+    alg, hsize, lhas_count = struct.unpack_from("<BBI", lhas, 0)
+    root = lhas[6:38]
+    leaves = [lhas[38 + 32 * i: 38 + 32 * (i + 1)] for i in range(lhas_count)]
+    chk("lhas.hash_algorithm", alg == 1 and hsize == 32)
+    chk("lhas.layer_count", lhas_count == total_layers)
+    chk("lhas.root_recompute", merkle_root(leaves) == root)
+
+    # ============================================================== phase 2
+    # AUTH structure.  If any of this fails the session key cannot be obtained,
+    # so every later crypto and content-derived check is skipped rather than
+    # recorded as failed.
+    session_key = None
+    cipher_id = b""
+    decrypted: dict[int, bytes] = {}
+    block_frames = None
+    tag_ok = True
+    halt_crypto = False
+    halt_content = False
+
+    auth_e = auth_entries[0] if len(auth_entries) == 1 else None
+    if crypto_engaged:
+        chk("presence.auth", (not encrypted_flag) or len(auth_entries) == 1)
+        if auth_e is None:
+            halt_crypto = halt_content = True
+        else:
+            auth = stored(auth_e)
+            head = len(auth) >= 20
+            auth_version = struct.unpack_from("<I", auth, 4)[0] if head else 0
+            cipher_id = auth[:4] if head else b""
+            mode = struct.unpack_from("<I", auth, 8)[0] if head else 0
+            pw_len = struct.unpack_from("<I", auth, 12)[0] if head else 0
+            mc_len = struct.unpack_from("<I", auth, 16)[0] if head else 0
+            ok_version = chk("auth.version", auth_version == 1)
+            ok_cipher = chk("auth.cipher_known", cipher_id in (b"A256", b"C20P"))
+            ok_mode = chk("crypt.mode_empty", mode != 0)
+            ok_pw = True
+            if mode & 0x01:
+                ok_pw = chk("crypt.password_section_len", pw_len >= 65)
+            ok_mc = True
+            if mode & 0x02:
+                ok_mc = chk("crypt.machine_section_len", mc_len >= 104 and mc_len % 104 == 0)
+            ok_budget = True
+            if mode & 0x01:
+                params = argon2_params(auth, pw_len)
+                ok_budget = chk("crypt.argon2_budget",
+                                params is not None
+                                and params[0] <= 10 and params[1] <= 4194304 and params[2] <= 16)
+            if ok_version and ok_cipher and ok_mode and ok_pw and ok_mc and ok_budget:
+                session_key = recover_session_key(auth, crypto, cipher_id, mode, pw_len, mc_len)
+                if session_key is None:
+                    halt_crypto = halt_content = True
+            else:
+                halt_crypto = halt_content = True
+
+    # ============================================================== phase 3
+    # Chunk flags are directory metadata: checked before any decryption.
+    sealed_layr = bool(find(b"LAYR")[0]["flags"] & SEALED_FLAG)
+    if crypto_engaged and not halt_crypto:
+        ok_flags, flag_detail = chunk_flag_report(real, blocks, encrypted_flag, sealed_layr)
+        chk("crypt.chunk_flags", ok_flags, flag_detail)
+        if not ok_flags:
+            halt_crypto = halt_content = True
+
+    # ============================================================== phase 4
+    # Decrypt every sealed unit.  The key itself was unwrapped in phase 2,
+    # because its success decides whether the content checks can run at all.
+    if crypto_engaged and not halt_crypto:
+        chk("crypt.key_unwrap", session_key is not None)
+        if session_key is None:
+            halt_crypto = halt_content = True
+        else:
+            for e in real:
+                if (e["type"] in SEALED_CHUNK_TYPES and e["type"] != b"LAYR"
+                        and (e["flags"] & SEALED_FLAG)):
+                    try:
+                        decrypted[e["offset"]] = open_unit(
+                            session_key, cipher_id, e["type"], 0, stored(e))
+                    except Exception:
+                        tag_ok = False
+            if sealed_layr:
+                block_frames = []
+                for k, blk in enumerate(blocks):
+                    blob = layr[body_off + blk["frame_offset"]:
+                                body_off + blk["frame_offset"] + blk["frame_size"]]
+                    try:
+                        block_frames.append(open_unit(session_key, cipher_id, b"LAYR", k, blob))
+                    except Exception:
+                        tag_ok = False
+                        block_frames.append(None)
+
+    # ============================================================== phase 5
+    # §9.3: every tag must verify before content is parsed or decompressed.
+    if crypto_engaged and not halt_crypto:
+        if not chk("crypt.tag_verify", tag_ok):
+            halt_content = True
+
+    # ============================================================== phase 6
+    # Content-derived checks.  A file whose key or tags did not check out is
+    # still validated structurally, but its content is never parsed.
+    def content_entry(e):
+        if e["flags"] & SEALED_FLAG:
+            blob = decrypted.get(e["offset"])
+            if blob is None:
+                raise ValueError("%r unit was not decrypted" % (e["type"],))
+            if e["type"] in COMPRESSED_TYPES:
+                blob = zstd.ZstdDecompressor().decompress(blob, max_output_size=e["usz"])
+            return blob
+        return payload_plain(e)
+
+    def content(ctype):
+        return content_entry(find(ctype)[0])
+
+    if halt_content:
+        chk("__checks_complete", True)
+        return chk
+
+    # ---- META / SECT ---------------------------------------------------
+    meta = json.loads(content(b"META"))
+    mats = meta.get("materials")
+    chk("meta.required_fields", all(k in meta for k in (
+        "meta_version", "normal_exposure_sec", "bottom_exposure_sec", "bottom_layer_count",
+        "transition_layer_count", "layer_height_mm", "lift_distance_mm", "lift_speed_mm_min",
+        "retract_distance_mm", "retract_speed_mm_min")))
+    chk("meta.materials_shape", mats is None or (
+        isinstance(mats, list) and len(mats) > 0
+        and all(isinstance(m, dict) and m.get("name") for m in mats)))
+    sects = [json.loads(content_entry(e)) for e in find(b"SECT")]
+    chk("sect.sector_id_nonzero", all(s.get("sector_id", 0) >= 1 for s in sects))
+    chk("sect.ids_unique", len({s["sector_id"] for s in sects}) == len(sects))
+    chk("sect.material_index_bounds", all(
+        "material_index" not in s or (mats is not None and 0 <= s["material_index"] < len(mats))
+        for s in sects))
+
     # dictionary
     zdic = find(b"ZDIC")
     dict_bytes = b""
     dict_id = 0
     if zdic:
-        zd = payload(zdic[0])
+        zd = content(b"ZDIC")
         zver, dict_id, dsize = struct.unpack_from("<III", zd, 0)
         dict_bytes = zd[12:12 + dsize]
         chk("zdic.version", zver == 1)
@@ -312,9 +599,16 @@ def validate(path: str, strict: bool, verbose: bool = False):
     outputs = []
     ok_sizes = True
     decompress_ok = True
+    frames = []
+    for k, blk in enumerate(blocks):
+        if block_frames is not None:
+            frames.append(block_frames[k])
+        else:
+            frames.append(layr[body_off + blk["frame_offset"]:
+                               body_off + blk["frame_offset"] + blk["frame_size"]])
     for k, blk in enumerate(blocks):
         try:
-            frame = layr[body_off + blk["frame_offset"]: body_off + blk["frame_offset"] + blk["frame_size"]]
+            frame = frames[k]
             dict_ids.append(zstd.get_frame_parameters(frame).dict_id)
             out = dctx.decompress(frame, max_output_size=blk["uncompressed_size"])
         except Exception:
@@ -331,15 +625,7 @@ def validate(path: str, strict: bool, verbose: bool = False):
     else:
         chk("layr.dict_id_absent", all(d == 0 for d in dict_ids))
 
-    # ---- LHAS + layer decode -------------------------------------------
-    lhas = payload(find(b"LHAS")[0])
-    alg, hsize, lhas_count = struct.unpack_from("<BBI", lhas, 0)
-    root = lhas[6:38]
-    leaves = [lhas[38 + 32 * i: 38 + 32 * (i + 1)] for i in range(lhas_count)]
-    chk("lhas.hash_algorithm", alg == 1 and hsize == 32)
-    chk("lhas.layer_count", lhas_count == total_layers)
-    chk("lhas.root_recompute", merkle_root(leaves) == root)
-
+    # ---- layer data / leaf hashes --------------------------------------
     layer_data = []
     for i, e in enumerate(entries_l):
         if e["block_index"] >= block_count:
@@ -458,11 +744,22 @@ def main() -> int:
 
     manifest = json.load(open(MANIFEST, encoding="utf-8"))
     failures = 0
+    skipped = 0
+
+    def missing_crypto(v):
+        return bool(v.get("crypto")) and not CRYPTO_AVAILABLE
+
+    def report_skip(v):
+        print("  %-4s %-24s (needs cryptography + argon2-cffi)" % ("SKIP", v["name"]))
 
     print("valid vectors")
     for v in manifest["valid"]:
+        if missing_crypto(v):
+            report_skip(v)
+            skipped += 1
+            continue
         path = os.path.join(HERE, v["file"])
-        chk = validate(path, strict=True, verbose=args.verbose)
+        chk = validate(path, strict=True, verbose=args.verbose, crypto=v.get("crypto"))
         bad = chk.failed()
         ref = check_manifest(v, path)
         if ref:
@@ -474,10 +771,14 @@ def main() -> int:
 
     print("invalid vectors")
     for v in manifest["invalid"]:
+        if missing_crypto(v):
+            report_skip(v)
+            skipped += 1
+            continue
         path = os.path.join(HERE, v["file"])
         strict = not v.get("strict_only")
-        chk = validate(path, strict=True, verbose=args.verbose)
-        loose = validate(path, strict=False) if v.get("strict_only") else None
+        chk = validate(path, strict=True, verbose=args.verbose, crypto=v.get("crypto"))
+        loose = validate(path, strict=False, crypto=v.get("crypto")) if v.get("strict_only") else None
         expect = v["expected_failure"]
         names = [n for n, _ in chk.items]
         hit = [n for n, ok in chk.items if not ok]
@@ -492,8 +793,14 @@ def main() -> int:
         failures += not ok
 
     print()
-    print("corpus:", "OK" if not failures else "%d FAILURES" % failures)
-    return 1 if failures else 0
+    if failures:
+        print("corpus: %d FAILURES" % failures)
+    if skipped:
+        print("corpus: INCOMPLETE (%d encrypted vectors skipped; "
+              "pip install cryptography argon2-cffi)" % skipped)
+    if not failures and not skipped:
+        print("corpus: OK")
+    return 1 if failures else (3 if skipped else 0)
 
 
 def check_manifest(v: dict, path: str) -> list[str]:

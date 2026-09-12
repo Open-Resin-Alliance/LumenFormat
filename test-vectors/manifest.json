@@ -1,6 +1,8 @@
 {
   "generator": {
-    "note": "Compressed payload bytes depend on the zstd version and level. Uncompressed structures (HDR, LTBL, LAYR header and block table, LHAS, REE streams, directory, trailer) are exact.",
+    "argon2_cffi": "25.1.0",
+    "cryptography": "50.0.1",
+    "note": "Compressed payload bytes depend on the zstd version and level. Uncompressed structures (HDR, AUTH, LTBL, LAYR header and block table, LHAS, REE streams, directory, trailer) are exact. Sealed units are exact too: every nonce, salt and key is derived from a fixed SHAKE-256 seed, so regeneration is deterministic. Those values are public test data; real encoders must draw them from a CSPRNG.",
     "python": "3.11.9",
     "zstandard": "0.25.0",
     "zstd_layer_level": 6,
@@ -85,6 +87,182 @@
       "file_sha256": "fc491ea85408414e3b7a1b19005f89dc8710b2ca779cd237b6e51c58a9dfb97f",
       "file_size": 979,
       "name": "trailer-crc-mismatch",
+      "strict_only": false
+    },
+    {
+      "base_vector": "binary-basic",
+      "description": "The file header sets ENCRYPTED but there is no AUTH chunk, so no session key can ever be derived.",
+      "expected_failure": "presence.auth",
+      "file": "invalid/encrypted-flag-without-auth.lumen",
+      "file_sha256": "b81462ea410a850d53ad1789d47c5736c9f27d92c2c00ea33975f8850988c4b4",
+      "file_size": 979,
+      "name": "encrypted-flag-without-auth",
+      "strict_only": false
+    },
+    {
+      "base_vector": "encrypted-password",
+      "crypto": {
+        "argon2": {
+          "iterations": 1,
+          "memory_kib": 8,
+          "parallelism": 1,
+          "salt": "a701715f1ac1aa6bc62260958b6ebb27"
+        },
+        "auth_version": 1,
+        "cipher_id": "A256",
+        "mode": 1,
+        "mode_names": [
+          "password"
+        ],
+        "password_utf8": "lumen-test-vector"
+      },
+      "description": "AUTH.cipher_id is XXXX, which names no algorithm.",
+      "expected_failure": "auth.cipher_known",
+      "file": "invalid/auth-cipher-unknown.lumen",
+      "file_sha256": "495aa9df73f0f59e0fb07c2b62c2322bf717828682574f664b0c5c5e3ba3c206",
+      "file_size": 11227,
+      "name": "auth-cipher-unknown",
+      "strict_only": false
+    },
+    {
+      "base_vector": "encrypted-password",
+      "crypto": {
+        "argon2": {
+          "iterations": 1,
+          "memory_kib": 8,
+          "parallelism": 1,
+          "salt": "a701715f1ac1aa6bc62260958b6ebb27"
+        },
+        "auth_version": 1,
+        "cipher_id": "A256",
+        "mode": 0,
+        "mode_names": [],
+        "password_utf8": "lumen-test-vector"
+      },
+      "description": "AUTH.mode is 0: neither a password nor a machine binding is declared, so the session key is unreachable.",
+      "expected_failure": "crypt.mode_empty",
+      "file": "invalid/crypt-mode-empty.lumen",
+      "file_sha256": "d21ea2315eaa916d6de98b0462f6fc3690ca9f287f62a83f197f0675ff2e7418",
+      "file_size": 11227,
+      "name": "crypt-mode-empty",
+      "strict_only": false
+    },
+    {
+      "base_vector": null,
+      "crypto": {
+        "argon2": {
+          "iterations": 99,
+          "memory_kib": 8,
+          "parallelism": 1,
+          "salt": "526c86b3c5511ca23a154c9a7ec85434"
+        },
+        "auth_version": 1,
+        "cipher_id": "A256",
+        "mode": 1,
+        "mode_names": [
+          "password"
+        ],
+        "password_utf8": "lumen-test-vector"
+      },
+      "description": "The password section declares Argon2id iterations = 99, above the recommended ceiling of 10; it is otherwise coherent, so only the cost rule refuses it.",
+      "expected_failure": "crypt.argon2_budget",
+      "file": "invalid/crypt-argon2-budget.lumen",
+      "file_sha256": "4ab47a9c65890b28a288d4b8acfb9134039b0a392fcceb764e1c5e462cd4f810",
+      "file_size": 1018,
+      "name": "crypt-argon2-budget",
+      "strict_only": false
+    },
+    {
+      "base_vector": null,
+      "crypto": {
+        "argon2": {
+          "iterations": 1,
+          "memory_kib": 8,
+          "parallelism": 1,
+          "salt": "708e7351fec5a4a87b317abd985a2902"
+        },
+        "auth_version": 1,
+        "cipher_id": "A256",
+        "mode": 1,
+        "mode_names": [
+          "password"
+        ],
+        "password_utf8": "lumen-test-vector"
+      },
+      "description": "AUTH declares a 64-byte password section, one byte short of the fixed section size.",
+      "expected_failure": "crypt.password_section_len",
+      "file": "invalid/crypt-password-len-short.lumen",
+      "file_sha256": "0d9293706e9e5382c37407da272c529292e69e4e9b4e3fef00943ae50933e758",
+      "file_size": 1018,
+      "name": "crypt-password-len-short",
+      "strict_only": false
+    },
+    {
+      "base_vector": null,
+      "crypto": {
+        "auth_version": 1,
+        "cipher_id": "C20P",
+        "mode": 2,
+        "mode_names": [
+          "machine-binding"
+        ]
+      },
+      "description": "AUTH.mode sets machine-binding but the machine section is empty: no recipient can ever unwrap the session key.",
+      "expected_failure": "crypt.machine_section_len",
+      "file": "invalid/crypt-machine-len-empty.lumen",
+      "file_sha256": "c6b4b73fd5e8c2f4cec64dd67adc3095e26911944c52df3d7df150146c51ddb3",
+      "file_size": 954,
+      "name": "crypt-machine-len-empty",
+      "strict_only": false
+    },
+    {
+      "base_vector": "encrypted-password",
+      "crypto": {
+        "argon2": {
+          "iterations": 1,
+          "memory_kib": 8,
+          "parallelism": 1,
+          "salt": "a701715f1ac1aa6bc62260958b6ebb27"
+        },
+        "auth_version": 1,
+        "cipher_id": "A256",
+        "mode": 1,
+        "mode_names": [
+          "password"
+        ],
+        "password_utf8": "lumen-test-vector"
+      },
+      "description": "ZDIC's descriptor does not set the encrypted flag although the file is encrypted; its bytes are sealed regardless, so the flag is the only disagreement.",
+      "expected_failure": "crypt.chunk_flags",
+      "file": "invalid/crypt-plaintext-content.lumen",
+      "file_sha256": "864bc0e45dab34e7d8f50ece63b28037dff52ea3a88b1f3a546571da51c4e056",
+      "file_size": 11227,
+      "name": "crypt-plaintext-content",
+      "strict_only": false
+    },
+    {
+      "base_vector": "encrypted-password",
+      "crypto": {
+        "argon2": {
+          "iterations": 1,
+          "memory_kib": 8,
+          "parallelism": 1,
+          "salt": "a701715f1ac1aa6bc62260958b6ebb27"
+        },
+        "auth_version": 1,
+        "cipher_id": "A256",
+        "mode": 1,
+        "mode_names": [
+          "password"
+        ],
+        "password_utf8": "lumen-test-vector"
+      },
+      "description": "One ciphertext byte of LAYR block 0 is flipped, so its AEAD tag must fail; a reader must not decompress or parse a block it cannot authenticate.",
+      "expected_failure": "crypt.tag_verify",
+      "file": "invalid/crypt-tag-corrupt.lumen",
+      "file_sha256": "ca995698439c226ffdd8009965f600a6d6d54dae5ea8f1a9ec2f81bb58c66f3f",
+      "file_size": 11227,
+      "name": "crypt-tag-corrupt",
       "strict_only": false
     }
   ],
@@ -1198,6 +1376,733 @@
       "total_layers": 4,
       "total_uncompressed_size": 1068,
       "trailer_crc32c": "0xB56E93E0"
+    },
+    {
+      "block_size_layers": 16,
+      "blocks": [
+        {
+          "frame_offset": 0,
+          "frame_size": 3878,
+          "uncompressed_size": 16589
+        },
+        {
+          "frame_offset": 3878,
+          "frame_size": 3873,
+          "uncompressed_size": 17512
+        }
+      ],
+      "chunk_count": 7,
+      "crypto": {
+        "argon2": {
+          "iterations": 1,
+          "memory_kib": 8,
+          "parallelism": 1,
+          "salt": "a701715f1ac1aa6bc62260958b6ebb27"
+        },
+        "auth_version": 1,
+        "cipher_id": "A256",
+        "mode": 1,
+        "mode_names": [
+          "password"
+        ],
+        "password_utf8": "lumen-test-vector"
+      },
+      "description": "Password-mode AES-256-GCM: an Argon2id-wrapped session key, a sealed dictionary and metadata, and two blocks of sealed layer frames.",
+      "dict": {
+        "dict_id": 1697213845,
+        "dict_size": 1024,
+        "present": true
+      },
+      "dir_offset": 10995,
+      "display_height_px": 192,
+      "display_width_px": 256,
+      "features": [
+        "encryption",
+        "password-mode",
+        "aes-256-gcm",
+        "argon2id",
+        "dictionary",
+        "sealed-blocks",
+        "multi-block"
+      ],
+      "file": "valid/encrypted-password.lumen",
+      "file_sha256": "7e83119d5fdad47ce571feb3b28f0328fc5d44cabd7f9627d0425e3a0ef04002",
+      "file_size": 11227,
+      "header_flags": 8,
+      "layer_height_mm": 0.05,
+      "layers": [
+        {
+          "block_index": 0,
+          "data_offset": 0,
+          "data_size": 1604,
+          "decompressed_sha256": "cfdced78e46ac0ab7c34cfe90c7925efea485c0c680a90a6b6e17bae9d549107",
+          "index": 0,
+          "lhas_leaf": "aa72f59f714ede88f636733c655e1681b299736335d3185c0b2ea7f4631648e8",
+          "sector_count": 1,
+          "sector_tags": [
+            2
+          ],
+          "tag": 2
+        },
+        {
+          "block_index": 0,
+          "data_offset": 1604,
+          "data_size": 364,
+          "decompressed_sha256": "d416e7df52b71cc8e2c60a0fd0bbf2403bb50132c05a1fec26b8ccb2e08d8c2e",
+          "index": 1,
+          "lhas_leaf": "7e5abf0f39fd2f2d60fc9e8b8421ca827181a8fcd68cfeccbb874523e086a29c",
+          "sector_count": 1,
+          "sector_tags": [
+            1
+          ],
+          "tag": 1
+        },
+        {
+          "block_index": 0,
+          "data_offset": 1968,
+          "data_size": 1645,
+          "decompressed_sha256": "2434f8ff44d596bf37b04c2d5e6b68e1bba7c388aa8fa94efffeee3ac82210ed",
+          "index": 2,
+          "lhas_leaf": "c98d3dbc2f97d20197d4a889e73a95c6e514e97825ceabc5ec7af1c0771d0e29",
+          "sector_count": 1,
+          "sector_tags": [
+            2
+          ],
+          "tag": 2
+        },
+        {
+          "block_index": 0,
+          "data_offset": 3613,
+          "data_size": 364,
+          "decompressed_sha256": "43023798b3ec3f10f573b060f7e9b47eca06e801f4750d1ec4402bd6020413bd",
+          "index": 3,
+          "lhas_leaf": "caaf561924b8f8a1e3140fc3618f8710c727865dd09a044359c307ef8bcbfcdf",
+          "sector_count": 1,
+          "sector_tags": [
+            1
+          ],
+          "tag": 1
+        },
+        {
+          "block_index": 0,
+          "data_offset": 3977,
+          "data_size": 1685,
+          "decompressed_sha256": "6ae19e1387553ce3d0d6309feac500125798d83d7a6d9c807dac7693e6012fab",
+          "index": 4,
+          "lhas_leaf": "03bf010e070b6e6d2fbbdf62ed90652a38cd23275d9f617c8a86b6dbdc01c442",
+          "sector_count": 1,
+          "sector_tags": [
+            2
+          ],
+          "tag": 2
+        },
+        {
+          "block_index": 0,
+          "data_offset": 5662,
+          "data_size": 364,
+          "decompressed_sha256": "178b3c9f2d8539d7841b9136ff6597cb3e0d32e749024b6b01921035377152d4",
+          "index": 5,
+          "lhas_leaf": "87476cffea8526efa44565aa2382e20c2b4db5faf050ccc1fbcc51c05dafbbca",
+          "sector_count": 1,
+          "sector_tags": [
+            1
+          ],
+          "tag": 1
+        },
+        {
+          "block_index": 0,
+          "data_offset": 6026,
+          "data_size": 1684,
+          "decompressed_sha256": "d863cb17429884ee266e4aa6bef95d5596a97239e6e50a1a5084dfb0eeabd730",
+          "index": 6,
+          "lhas_leaf": "a2bf9c17f4ebb77bb55dd504d011bb9a723c10e0292fa609bdc0530b12cf11b9",
+          "sector_count": 1,
+          "sector_tags": [
+            2
+          ],
+          "tag": 2
+        },
+        {
+          "block_index": 0,
+          "data_offset": 7710,
+          "data_size": 364,
+          "decompressed_sha256": "3f37dde9d6136372f5ee5f723c591f75f9256474fc686dd8a430337a3f3b9e99",
+          "index": 7,
+          "lhas_leaf": "07faf135b603cd2e58776fb02694e7b122a4f22fb2fe90c966da1c7e0e9aecef",
+          "sector_count": 1,
+          "sector_tags": [
+            1
+          ],
+          "tag": 1
+        },
+        {
+          "block_index": 0,
+          "data_offset": 8074,
+          "data_size": 1725,
+          "decompressed_sha256": "73dcd3c15f108fcf218e4c84f28875ff93a06ec220ad8cdaf27301054d8f92bc",
+          "index": 8,
+          "lhas_leaf": "37aa55f86cc685f5691828dab3c880c3aaec5e3d57cc8055c1aa37bc8ffc7edd",
+          "sector_count": 1,
+          "sector_tags": [
+            2
+          ],
+          "tag": 2
+        },
+        {
+          "block_index": 0,
+          "data_offset": 9799,
+          "data_size": 364,
+          "decompressed_sha256": "4c11eea73f3c21a0c8c0c8af0e82834139ea82123b12e79ecb3395e1e6353483",
+          "index": 9,
+          "lhas_leaf": "765b8e16ae8097ebbf392dd047707e9c22b6698ff642d999eeaf3f8085d09d25",
+          "sector_count": 1,
+          "sector_tags": [
+            1
+          ],
+          "tag": 1
+        },
+        {
+          "block_index": 0,
+          "data_offset": 10163,
+          "data_size": 1765,
+          "decompressed_sha256": "d461c126ab7597cc523d70ebf0a0f09fcc1c8ddd8c9d9aae05aed85e8b664440",
+          "index": 10,
+          "lhas_leaf": "2218ca88fbb48dc1455afd010ba000f4a1398b0ad2399f5f58b16b3512cb59ba",
+          "sector_count": 1,
+          "sector_tags": [
+            2
+          ],
+          "tag": 2
+        },
+        {
+          "block_index": 0,
+          "data_offset": 11928,
+          "data_size": 364,
+          "decompressed_sha256": "6757d7c1334570f1d1159319b7c16d446f1fddd019e228995342a71946a03ee0",
+          "index": 11,
+          "lhas_leaf": "9740facbd632e436d2d8ee1a43aecdb9352ddf63aedd6368d05ca742e06cef7e",
+          "sector_count": 1,
+          "sector_tags": [
+            1
+          ],
+          "tag": 1
+        },
+        {
+          "block_index": 0,
+          "data_offset": 12292,
+          "data_size": 1764,
+          "decompressed_sha256": "d705e4dddcc06bb2f7cc7fad033ef6a900c6fc2d56fabffe8ca0b30b16581cc9",
+          "index": 12,
+          "lhas_leaf": "53ce09a361ea9258a85d4a5bfa7808247cb0c86b46f005021a070ec1a1667480",
+          "sector_count": 1,
+          "sector_tags": [
+            2
+          ],
+          "tag": 2
+        },
+        {
+          "block_index": 0,
+          "data_offset": 14056,
+          "data_size": 364,
+          "decompressed_sha256": "5e594d1ee6d059fdcf942323a452061435f039955dae80046a86960501cfeea4",
+          "index": 13,
+          "lhas_leaf": "0e6bb0892d30247da81ebc9787e2b79212fb39ab155a4d73d87767bfb98b7a56",
+          "sector_count": 1,
+          "sector_tags": [
+            1
+          ],
+          "tag": 1
+        },
+        {
+          "block_index": 0,
+          "data_offset": 14420,
+          "data_size": 1805,
+          "decompressed_sha256": "057bbe0fcacf92199bfdfb20b5a34840791001505deb73e8d821dc3812b69c4c",
+          "index": 14,
+          "lhas_leaf": "c359470372128f2a8ba7096811bb25b9698a9256d5a12e5bf914519e5f5d6755",
+          "sector_count": 1,
+          "sector_tags": [
+            2
+          ],
+          "tag": 2
+        },
+        {
+          "block_index": 0,
+          "data_offset": 16225,
+          "data_size": 364,
+          "decompressed_sha256": "be5d18d505350881c2cd4b958204d4ffc5ca5ddbb725b4a4686791d00fe2aade",
+          "index": 15,
+          "lhas_leaf": "34abcd8a6b42a5491084f28520e3ec9063c45726e20954ee332d4b785c922511",
+          "sector_count": 1,
+          "sector_tags": [
+            1
+          ],
+          "tag": 1
+        },
+        {
+          "block_index": 1,
+          "data_offset": 0,
+          "data_size": 1845,
+          "decompressed_sha256": "13c11af7780567973e1b444eece8602f19142e1748dc7860d079df7639cc66b9",
+          "index": 16,
+          "lhas_leaf": "4e381c4386dd73453eb8e08b62f042ca8db93046dd67a7f0d0c4839b9a9f5ef9",
+          "sector_count": 1,
+          "sector_tags": [
+            2
+          ],
+          "tag": 2
+        },
+        {
+          "block_index": 1,
+          "data_offset": 1845,
+          "data_size": 365,
+          "decompressed_sha256": "317d7a1a07342b9fe162afa899b6a8bbe762c4b53b7a428c987209f88c90db28",
+          "index": 17,
+          "lhas_leaf": "6d688633998ef671594d6dea75a5a73f618c1891ae3d9e83d7f4f0f8be9d3a77",
+          "sector_count": 1,
+          "sector_tags": [
+            1
+          ],
+          "tag": 1
+        },
+        {
+          "block_index": 1,
+          "data_offset": 2210,
+          "data_size": 1844,
+          "decompressed_sha256": "64c15583db798d1dd573bc590cc970772396e4b1564949f120be8182e330293c",
+          "index": 18,
+          "lhas_leaf": "7741dc3429f841c6d457d16a2f320ab3bb3c395b89f7c4af2accd4ede68eb581",
+          "sector_count": 1,
+          "sector_tags": [
+            2
+          ],
+          "tag": 2
+        },
+        {
+          "block_index": 1,
+          "data_offset": 4054,
+          "data_size": 364,
+          "decompressed_sha256": "da6cac9ab01a65aacd50f6cac868ff636264f11fe0aacb670dd9b04b01150f63",
+          "index": 19,
+          "lhas_leaf": "dc5bdf5d696417060417ae6c7a63cc571a9eb94f475fe6d96acbba9239dfd1bb",
+          "sector_count": 1,
+          "sector_tags": [
+            1
+          ],
+          "tag": 1
+        },
+        {
+          "block_index": 1,
+          "data_offset": 4418,
+          "data_size": 1885,
+          "decompressed_sha256": "c41f4e6119e312c3692e4844bb84cb0e25c13b8ffea2efa21235ad2ca082d156",
+          "index": 20,
+          "lhas_leaf": "27b37cec7da40176ad076abe5225343a4c649dce3fdbf572e51f617c6e91aa54",
+          "sector_count": 1,
+          "sector_tags": [
+            2
+          ],
+          "tag": 2
+        },
+        {
+          "block_index": 1,
+          "data_offset": 6303,
+          "data_size": 364,
+          "decompressed_sha256": "759b0108708ef6fe4783ece16304556423ca9ed688c6e474462d68edeb83bd4c",
+          "index": 21,
+          "lhas_leaf": "bba6608d2cdd4b29a75a5a49700b52bedec7a7aee1c64b35125627fa12b5bce8",
+          "sector_count": 1,
+          "sector_tags": [
+            1
+          ],
+          "tag": 1
+        },
+        {
+          "block_index": 1,
+          "data_offset": 6667,
+          "data_size": 1845,
+          "decompressed_sha256": "3b914b9a4ce89682e5e970b2dd3d645d74ebaa7dfc3413a6333d4181486fb697",
+          "index": 22,
+          "lhas_leaf": "544e86f626a06ecd29674b7e25bb8906e2fc876a4fe679d2cf65f2290db5c998",
+          "sector_count": 1,
+          "sector_tags": [
+            2
+          ],
+          "tag": 2
+        },
+        {
+          "block_index": 1,
+          "data_offset": 8512,
+          "data_size": 364,
+          "decompressed_sha256": "0119b13aabbafb9428275d884cd78acf5e5d8ac1ec488d44158dd0bec8c04801",
+          "index": 23,
+          "lhas_leaf": "983182a8b63d3c2599f2b8bd292fa24d6c1e082e5441ecdb59c65dc554fe1a09",
+          "sector_count": 1,
+          "sector_tags": [
+            1
+          ],
+          "tag": 1
+        },
+        {
+          "block_index": 1,
+          "data_offset": 8876,
+          "data_size": 1844,
+          "decompressed_sha256": "eb09315fcdd6bed30cae9b2d2db3a978f99d07db170a10361e62bc7c1839a200",
+          "index": 24,
+          "lhas_leaf": "462b2760720abd0c378c38ff3f47226fb4e38f35784d29e446faff108648cde2",
+          "sector_count": 1,
+          "sector_tags": [
+            2
+          ],
+          "tag": 2
+        },
+        {
+          "block_index": 1,
+          "data_offset": 10720,
+          "data_size": 365,
+          "decompressed_sha256": "cf287346adb384d4618b09bfaae48689211117f7f621491e2a7a026ddee2344a",
+          "index": 25,
+          "lhas_leaf": "3217b14b14aee6562c594bdf0691cd324959ca2e4148ef5d196faee108a23fab",
+          "sector_count": 1,
+          "sector_tags": [
+            1
+          ],
+          "tag": 1
+        },
+        {
+          "block_index": 1,
+          "data_offset": 11085,
+          "data_size": 1805,
+          "decompressed_sha256": "7613dfe569fcc6a51c3118ada807b154be0879fc86575ca974fc1a1cb3e1fceb",
+          "index": 26,
+          "lhas_leaf": "fb2d1364706ba1a1c42994b356b3f3c76b9259cdfbe9498ea18f4d3040e27a8a",
+          "sector_count": 1,
+          "sector_tags": [
+            2
+          ],
+          "tag": 2
+        },
+        {
+          "block_index": 1,
+          "data_offset": 12890,
+          "data_size": 364,
+          "decompressed_sha256": "15f0e3ea34523e654925591d3771bea4ebbbd1283d729708bf37ce2263a3542c",
+          "index": 27,
+          "lhas_leaf": "580e35317eeb5286921198e4aca6a8317b6b74fac17001f3ad95d6cc6aee7669",
+          "sector_count": 1,
+          "sector_tags": [
+            1
+          ],
+          "tag": 1
+        },
+        {
+          "block_index": 1,
+          "data_offset": 13254,
+          "data_size": 1765,
+          "decompressed_sha256": "64846b8fe8f9e2af714847af14dc57abab46af9d26c3a2bd0bda7103757bcb84",
+          "index": 28,
+          "lhas_leaf": "d33e01e43acb1ffd5bd2b01405eeb3eef403a6a838e511192d13df1a0a262054",
+          "sector_count": 1,
+          "sector_tags": [
+            2
+          ],
+          "tag": 2
+        },
+        {
+          "block_index": 1,
+          "data_offset": 15019,
+          "data_size": 364,
+          "decompressed_sha256": "8a879445cfa373984dd7c584f54e2d2ba875cb8ef46db557e0cf47209e888616",
+          "index": 29,
+          "lhas_leaf": "a42b9baed73b25c1607f3c07ecd410dd424758a656d7bc8e1127ac1d5cf8ae07",
+          "sector_count": 1,
+          "sector_tags": [
+            1
+          ],
+          "tag": 1
+        },
+        {
+          "block_index": 1,
+          "data_offset": 15383,
+          "data_size": 1764,
+          "decompressed_sha256": "a7f375aa7b1ee4aa93884fea41f40ec582f79349fb367d2c14fb9d28b090d8aa",
+          "index": 30,
+          "lhas_leaf": "9c509891691c655e43a898094c88a57029161ed55a061a5de53947494eb135a0",
+          "sector_count": 1,
+          "sector_tags": [
+            2
+          ],
+          "tag": 2
+        },
+        {
+          "block_index": 1,
+          "data_offset": 17147,
+          "data_size": 365,
+          "decompressed_sha256": "94c6dc827fc6b94fcb0f2d044e11c3fbca516c26ab8fecb2a6ae378fca5e18da",
+          "index": 31,
+          "lhas_leaf": "43105e2a8f7265abb7d853424613e9cde60580714cbdf7ccf8d4b316c3e16316",
+          "sector_count": 1,
+          "sector_tags": [
+            1
+          ],
+          "tag": 1
+        }
+      ],
+      "merkle_root": "d1da9acf17a2ab403e2406ff00ab824c727bdacbde35c068d8c1bb156eba6310",
+      "multi_sector": false,
+      "name": "encrypted-password",
+      "total_layers": 32,
+      "total_uncompressed_size": 11014,
+      "trailer_crc32c": "0x501E6DFB"
+    },
+    {
+      "block_size_layers": 4,
+      "blocks": [
+        {
+          "frame_offset": 0,
+          "frame_size": 71,
+          "uncompressed_size": 420
+        }
+      ],
+      "chunk_count": 6,
+      "crypto": {
+        "auth_version": 1,
+        "cipher_id": "C20P",
+        "local_recipient_index": 2,
+        "local_recipient_private_key": "d20d982749d845c996c8b13df2373483a5823693e5ebced68572bdaad250846a",
+        "mode": 2,
+        "mode_names": [
+          "machine-binding"
+        ]
+      },
+      "description": "Machine-mode ChaCha20-Poly1305 with three recipient entries: a foreign machine, a decoy entry for our own fingerprint whose ephemeral key is the low-order point, and the real entry. A reader that unwraps the decoy without rejecting the all-zero shared secret recovers a different session key and cannot decrypt the file.",
+      "dict": {
+        "dict_id": 0,
+        "dict_size": 0,
+        "present": false
+      },
+      "dir_offset": 1019,
+      "display_height_px": 48,
+      "display_width_px": 64,
+      "features": [
+        "encryption",
+        "machine-binding",
+        "chacha20-poly1305",
+        "x25519",
+        "hkdf",
+        "multiple-recipients",
+        "low-order-point"
+      ],
+      "file": "valid/encrypted-machine.lumen",
+      "file_sha256": "63c2688f889be138a006a7045b71fdfa8df7087f30311d85835ec80b6e3b6c63",
+      "file_size": 1219,
+      "header_flags": 8,
+      "layer_height_mm": 0.05,
+      "layers": [
+        {
+          "block_index": 0,
+          "data_offset": 0,
+          "data_size": 4,
+          "decompressed_sha256": "4d12a0f5a07f2cd96d02b12d79ea5caf29be94d0d3b490b8d30307eabb53d9c3",
+          "index": 0,
+          "lhas_leaf": "dd46bcb27ef22666cb83357cb60720ef517fb471cd5fc12c4cc45fd312904d14",
+          "sector_count": 1,
+          "sector_tags": [
+            0
+          ],
+          "tag": 0
+        },
+        {
+          "block_index": 0,
+          "data_offset": 4,
+          "data_size": 410,
+          "decompressed_sha256": "c8dac22a0200176d29e58ef21b8db00b4c547b1aadaa16e7cdf67ecc124224d0",
+          "index": 1,
+          "lhas_leaf": "f22e4ad1daddd2d0c572d0c3e22250487a5afc74d2f6f0e4df0557cb8f4a2202",
+          "sector_count": 1,
+          "sector_tags": [
+            2
+          ],
+          "tag": 2
+        },
+        {
+          "block_index": 0,
+          "data_offset": 414,
+          "data_size": 0,
+          "decompressed_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "index": 2,
+          "lhas_leaf": "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d",
+          "sector_count": 0,
+          "sector_tags": [],
+          "tag": null
+        },
+        {
+          "block_index": 0,
+          "data_offset": 414,
+          "data_size": 6,
+          "decompressed_sha256": "9235ff44e859da26e0c2d96a34c8a64e58cdb1a7abc1d7b10d0f5ca62b47d770",
+          "index": 3,
+          "lhas_leaf": "efb9d3803055b5015e587a335ec06c0a677d2712fb6fb59378b373225df4b7b3",
+          "sector_count": 1,
+          "sector_tags": [
+            0
+          ],
+          "tag": 0
+        }
+      ],
+      "merkle_root": "0002b9bc25a70d86970ff0d0fc67adab5a854a83254e8e96cb6388515e57e5b0",
+      "multi_sector": false,
+      "name": "encrypted-machine",
+      "total_layers": 4,
+      "total_uncompressed_size": 1065,
+      "trailer_crc32c": "0x687163F0"
+    },
+    {
+      "block_size_layers": 2,
+      "blocks": [
+        {
+          "frame_offset": 0,
+          "frame_size": 59,
+          "uncompressed_size": 22
+        },
+        {
+          "frame_offset": 59,
+          "frame_size": 54,
+          "uncompressed_size": 17
+        },
+        {
+          "frame_offset": 113,
+          "frame_size": 67,
+          "uncompressed_size": 59
+        }
+      ],
+      "chunk_count": 7,
+      "crypto": {
+        "argon2": {
+          "iterations": 1,
+          "memory_kib": 8,
+          "parallelism": 1,
+          "salt": "9bc3e520155584017c18dc9ba2f20512"
+        },
+        "auth_version": 1,
+        "cipher_id": "A256",
+        "local_recipient_index": 0,
+        "local_recipient_private_key": "fbd5c628be1e8feb513b2400f64e6e51a2ed1b4cd76080559f2cef60b7490a0b",
+        "mode": 3,
+        "mode_names": [
+          "password",
+          "machine-binding"
+        ],
+        "password_utf8": "lumen-test-vector"
+      },
+      "description": "Both wrapping modes set in one AUTH chunk, with multi-sector layer content sealed under a single session key.",
+      "dict": {
+        "dict_id": 0,
+        "dict_size": 0,
+        "present": false
+      },
+      "dir_offset": 1360,
+      "display_height_px": 48,
+      "display_width_px": 64,
+      "features": [
+        "encryption",
+        "password-mode",
+        "machine-binding",
+        "multi-sector",
+        "sealed-sectors",
+        "aes-256-gcm"
+      ],
+      "file": "valid/encrypted-both.lumen",
+      "file_sha256": "b4c1eafed1af7c6b1bc0a42699c461c18d3948c44958c495849257bf2cd3dec8",
+      "file_size": 1592,
+      "header_flags": 10,
+      "layer_height_mm": 0.05,
+      "layers": [
+        {
+          "block_index": 0,
+          "data_offset": 0,
+          "data_size": 15,
+          "decompressed_sha256": "74b7c16695df412942b913583b2a0bbff04bf3909d84f9d35715ebde39fd4181",
+          "index": 0,
+          "lhas_leaf": "8cc6f60f7792eff314594f6aaf85a1c4f7f84bcdd8b94f9f10502f07ec743bb1",
+          "sector_count": 2,
+          "sector_tags": [
+            0,
+            0
+          ],
+          "tag": null
+        },
+        {
+          "block_index": 0,
+          "data_offset": 15,
+          "data_size": 7,
+          "decompressed_sha256": "a1123094b593c1c400154415f0958737a924ad20a609eb298e53e38b0f2ed0c0",
+          "index": 1,
+          "lhas_leaf": "82a92b6abc4fe8be91532fbcaae7ca4f4eca8676e0992965ff6b054b77f5c897",
+          "sector_count": 1,
+          "sector_tags": [
+            0
+          ],
+          "tag": null
+        },
+        {
+          "block_index": 1,
+          "data_offset": 0,
+          "data_size": 0,
+          "decompressed_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "index": 2,
+          "lhas_leaf": "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d",
+          "sector_count": 0,
+          "sector_tags": [],
+          "tag": null
+        },
+        {
+          "block_index": 1,
+          "data_offset": 0,
+          "data_size": 17,
+          "decompressed_sha256": "5e0e4f9b411719bbc4f319a1347ece47615f2d33d89a560cecc23f2af14221e2",
+          "index": 3,
+          "lhas_leaf": "2b8b3434515c4472be075104dfa6aaf63330f2c80645ba083e96d70c54119efa",
+          "sector_count": 2,
+          "sector_tags": [
+            0,
+            0
+          ],
+          "tag": null
+        },
+        {
+          "block_index": 2,
+          "data_offset": 0,
+          "data_size": 8,
+          "decompressed_sha256": "eb8cdc6ac2f59e37948dba4f68d7f3219aff8c89dedf1ad5183919ffad16664f",
+          "index": 4,
+          "lhas_leaf": "61f5a3f3455d0341836628fcfd457ea3c239c46d600dfe081e8101eab0e7ab87",
+          "sector_count": 1,
+          "sector_tags": [
+            0
+          ],
+          "tag": null
+        },
+        {
+          "block_index": 2,
+          "data_offset": 8,
+          "data_size": 51,
+          "decompressed_sha256": "5b53c147ef08dd7db217fd06278e81790dfa7490b95c2221227e6868e03b53c0",
+          "index": 5,
+          "lhas_leaf": "422a128a43751192a7f29441dc3497c1dd58ec124924feb525f9ffecfbee13ae",
+          "sector_count": 1,
+          "sector_tags": [
+            2
+          ],
+          "tag": null
+        }
+      ],
+      "merkle_root": "fe8aef7c327fcc09bde63e75671115305ac8508f6943ee0e842b61e8d54cd46f",
+      "multi_sector": true,
+      "name": "encrypted-both",
+      "total_layers": 6,
+      "total_uncompressed_size": 1508,
+      "trailer_crc32c": "0xE6FC511D"
     }
   ]
 }

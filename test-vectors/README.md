@@ -10,7 +10,7 @@ LUMEN v1.0 and are validated against it.
 |------|----------|
 | `valid/*.lumen` | Files a conforming reader must accept |
 | `invalid/*.lumen` | Files a conforming reader must reject, each failing exactly one documented check |
-| `manifest.json` | Golden data for every vector: sizes, offsets, block table, per-layer hashes, Merkle root, CRC-32C |
+| `manifest.json` | Golden data for every vector: sizes, offsets, block table, per-layer hashes, Merkle root, CRC-32C, and the credentials and parameters for encrypted vectors |
 | `make_vectors.py` | Reference encoder that regenerates the corpus from the specification |
 | `verify_vectors.py` | Independent reader and validator |
 
@@ -22,15 +22,20 @@ self-consistent.
 ## Running
 
 ```sh
-pip install zstandard
+pip install zstandard cryptography argon2-cffi
 python verify_vectors.py        # validate the committed corpus
 python verify_vectors.py -v     # print every individual check
 python make_vectors.py          # regenerate valid/, invalid/ and manifest.json
 ```
 
-`verify_vectors.py` exits non-zero unless every valid vector passes **and** every
-invalid vector fails exactly the check its manifest entry advertises. It also
-re-checks each committed file against the golden values in `manifest.json`.
+`verify_vectors.py` exits 0 only if every valid vector passes **and** every invalid
+vector fails exactly the check its manifest entry advertises. It also re-checks each
+committed file against the golden values in `manifest.json`.
+
+`cryptography` and `argon2-cffi` are needed only for the encrypted vectors. Without
+them the plaintext vectors still validate, every encrypted vector is reported as
+`SKIP`, and the exit status is **3**: not 0, because the run did not cover the whole
+corpus, and not 1, which means an actual check failed.
 
 ## What is exact, and what is not
 
@@ -40,10 +45,10 @@ zstd, whose output bytes are not stable across versions, levels or builds.
 
 So this corpus pins:
 
-- **Exactly** - the file header, `HDR`, `LTBL`, the `LAYR` header and block
+- **Exactly** - the file header, `HDR`, `AUTH`, `LTBL`, the `LAYR` header and block
   table, `LHAS`, every REE stream, the chunk directory and the trailer CRC-32C,
-  plus the decompressed bytes of every layer and the Merkle root over them.
-  These are all in `manifest.json`.
+  plus the decompressed bytes of every layer, the Merkle root over them, and every
+  sealed unit (nonce, ciphertext and tag).
 - **By property** - compressed payload bytes. The manifest records the
   zstandard version and level, the frame's dictionary ID and the decompressed
   size; `verify_vectors.py` asserts those instead of byte equality.
@@ -51,22 +56,31 @@ So this corpus pins:
 Re-running `make_vectors.py` under a different zstandard version may change
 `file_sha256`, the chunk sizes and the trailer CRC-32C. The uncompressed
 structures and all layer hashes must not change. Regeneration is deterministic
-for a fixed zstandard version.
+for a fixed zstandard version, including the encrypted vectors, because every
+nonce, salt and key is derived from a fixed seed (see *Test credentials*).
 
 ## Valid vectors
 
-| Vector | Layers | Blocks | Dictionary | Exercises |
-|--------|--------|--------|-----------|-----------|
-| `binary-basic` | 6 | 3 | no | the empty-layer form, binary REE, grayscale REE, split REE, multi-block framing, single-sector layer data |
-| `dict-multi-block` | 64 | 4 | yes (trained, 1024 bytes) | `ZDIC`, dictionary-ID agreement across every block frame, four-block framing, split and grayscale REE at scale |
-| `multi-sector` | 4 | 2 | no | `MULTI_SECTOR`, the per-layer sector varint framing, per-layer sector tags, the partition invariant, a layer with a single active sector inside a multi-sector file, an empty layer |
+| Vector | Layers | Blocks | Cipher / mode | Exercises |
+|--------|--------|--------|---------------|-----------|
+| `binary-basic` | 6 | 3 | - | the empty-layer form, binary REE, grayscale REE, split REE, multi-block framing, single-sector layer data |
+| `dict-multi-block` | 64 | 4 | - | `ZDIC`, dictionary-ID agreement across every block frame, four-block framing, split and grayscale REE at scale |
+| `multi-sector` | 4 | 2 | - | `MULTI_SECTOR`, the per-layer sector varint framing, per-layer sector tags, the partition invariant, a layer with a single active sector inside a multi-sector file, an empty layer |
+| `encrypted-password` | 32 | 2 | AES-256-GCM, password | the `AUTH` chunk and its fixed 65-byte password section, Argon2id and AES-256-KW unwrapping to the session key, a sealed dictionary, sealed metadata, two blocks of individually sealed layer frames with their per-block AAD, and dictionary-ID agreement across sealed frames |
+| `encrypted-machine` | 4 | 1 | ChaCha20-Poly1305, machine binding | three recipient entries, matching by `machine_fp` without contacting the other recipients, X25519 and HKDF-SHA-256 and AES-256-KW unwrapping, the low-order-point entry that must be rejected, the second cipher, a single sealed block |
+| `encrypted-both` | 6 | 3 | AES-256-GCM, both modes | mode bits 0 and 1 in one `AUTH`, one session key wrapped both ways, sealed `SECT` and sealed layer frames in a multi-sector file |
+
+The encrypted vectors also pin the two encryption flags that the spec assigns
+different bit numbers: the file header's bit 3 (`ENCRYPTED`, "an `AUTH` chunk is
+present") and the chunk descriptor's bit 4 ("this payload is sealed"). `HDR`,
+`AUTH`, `LTBL` and the LAYR header and block table carry neither.
 
 ## Invalid vectors
 
-`expected_failure` is the check name that must fail. Except for
-`trailer-crc-mismatch`, every file carries a deliberately introduced defect and a
-recomputed trailer CRC-32C, so a reader reaches the intended check rather than
-stopping at the file-completeness check first.
+`expected_failure` is the check name that must fail, and it must be the **first**
+check to fail. Except for `trailer-crc-mismatch`, every file carries a deliberately
+introduced defect and a recomputed trailer CRC-32C, so a reader reaches the intended
+check rather than stopping at the file-completeness check first.
 
 | Vector | Defect | Expected failure |
 |--------|--------|------------------|
@@ -78,6 +92,14 @@ stopping at the file-completeness check first.
 | `layer-hash-mismatch` | layer 0's stored leaf altered, `merkle_root` recomputed to match | `lhas.leaf_match` *(strict)* |
 | `layer-range-past-block` | `LTBL` entry 2 claims a `data_size` past its block's decompressed size | `ltbl.offsets_within_block` |
 | `trailer-crc-mismatch` | the trailer CRC-32C does not match the file bytes | `trailer.crc32c` |
+| `encrypted-flag-without-auth` | the header sets `ENCRYPTED` and there is no `AUTH` chunk | `presence.auth` |
+| `auth-cipher-unknown` | `AUTH.cipher_id` is `XXXX` | `auth.cipher_known` |
+| `crypt-mode-empty` | `AUTH.mode` is 0, so neither wrapping method is declared | `crypt.mode_empty` |
+| `crypt-password-len-short` | a password section of 64 bytes, one short of the fixed size | `crypt.password_section_len` |
+| `crypt-machine-len-empty` | machine mode with an empty machine section | `crypt.machine_section_len` |
+| `crypt-argon2-budget` | a coherent password section declaring Argon2id `iterations = 99`, past the ceiling of 10 | `crypt.argon2_budget` |
+| `crypt-plaintext-content` | `ZDIC`'s descriptor does not set the encrypted flag although the file is encrypted | `crypt.chunk_flags` |
+| `crypt-tag-corrupt` | one ciphertext byte of LAYR block 0 flipped, which its tag must reject | `crypt.tag_verify` |
 
 Two vectors are marked *(strict)*: the defect is invisible to a loose-mode reader
 (section 11.5) and must only be caught by a strict-mode validator. The manifest
@@ -85,19 +107,66 @@ records this as `strict_only`, and `verify_vectors.py` asserts that a loose-mode
 reader accepts them — so the corpus pins the loose/strict distinction itself, not
 just the checks.
 
+`crypt-argon2-budget` is the one invalid vector a reader *could* decrypt: its
+password section is coherent, and only the cost ceiling refuses it. A validator must
+not attempt a derivation it has already rejected, which is why the file also pins
+that the refusal happens before any crypto work.
+
 ## Check names
 
 Checks are named `<group>.<rule>`, mirroring section 11:
-`trailer.*`, `header.*`, `dir.*`, `chunk.*`, `presence.*`, `hdr.*`, `meta.*`,
-`sect.*`, `ltbl.*`, `layr.*`, `zdic.*`, `lhas.*`, `ree.*`, `sector.*`.
+`trailer.*`, `header.*`, `dir.*`, `chunk.*`, `presence.*`, `hdr.*`, `auth.*`,
+`meta.*`, `sect.*`, `ltbl.*`, `layr.*`, `zdic.*`, `lhas.*`, `ree.*`, `sector.*`,
+`crypt.*`.
 
 Implementations are encouraged to use the same names when reporting which rule
 failed. Use them verbatim as `expected_failure` when adding vectors.
 
+## Cryptographic parameters
+
+The spec fixes the algorithms and leaves the rest to these vectors:
+
+- Session key 256 bits, one per file, wrapped independently by each method.
+- Password mode: Argon2id per RFC 9106, version `0x13`, 32-byte output, no secret
+  key and no associated data, the password encoded as UTF-8, then AES-256-KW
+  (RFC 3394) over the session key.
+- Machine binding: `ss = X25519(recipient_private, ephemeral_pk)`, rejected when it
+  is all zero; `KEK = HKDF-SHA-256(IKM = ss, salt = machine_fp, info = "LUMEN
+  machine-binding v1\0" || ephemeral_pk || machine_fp, L = 32)`; then AES-256-KW.
+  `machine_fp` is the SHA-256 of the recipient's 32-byte X25519 public key.
+- Unit framing: `nonce[12] || ciphertext || tag[16]`, AAD
+  `chunk_type || 0x00 || unit_index_le_u32`, with `unit_index` 0 for every chunk
+  except `LAYR`, where it is the block index.
+- Compress-then-encrypt: a compressed chunk's unit seals the zstd frame, so
+  `size_uncompressed` is the length of the plaintext JSON, not of the frame.
+
+## Test credentials
+
+Everything an implementer needs to read the encrypted vectors is in
+`manifest.json`, under each vector's `crypto` block:
+
+- `password_utf8` and `argon2` for password-mode vectors.
+- `local_recipient_index` and `local_recipient_private_key` (a hex X25519 private
+  key) for machine-binding vectors.
+
+`encrypted-machine` has three recipients and only the last is ours. Entry 0 is
+another machine, which a reader must skip by fingerprint. Entry 1 carries *our*
+fingerprint with the ephemeral key set to the low-order point, so the shared secret
+is the all-zero value that §4.4.2 requires a reader to reject — and it wraps a
+*different* session key, so a reader that unwraps it without checking cannot
+decrypt the file at all. Only entry 2 recovers the real key.
+
+> **These are public test values.** The nonces, salts, session keys and recipient
+> keys in this corpus come from `SHAKE-256` over a fixed seed, so the files
+> regenerate byte for byte. Real encoders MUST draw every nonce, salt and key from a
+> CSPRNG, must never reuse a nonce, and must not treat this corpus as a model for
+> key management.
+
 ## Adding a vector
 
 1. Add a builder in `make_vectors.py` (and, for invalid vectors, a mutation plus
-   its expected check name).
+   its expected check name). Encrypted vectors go through
+   `build_encrypted_vector`, which also records the `crypto` block.
 2. `python make_vectors.py`
 3. `python verify_vectors.py -v`
 4. Commit the `.lumen` files and `manifest.json` together.
@@ -106,10 +175,12 @@ failed. Use them verbatim as `expected_failure` when adding vectors.
 
 - `make_vectors.py` self-tests its CRC-32C against the standard check value
   (`"123456789"` → `0xE3069283`) before generating anything, and
-  `verify_vectors.py` repeats that self-test before validating.
-- The vectors use a 64×48 display (3 072 pixels) except `dict-multi-block`, which
-  uses 256×192 (49 152 pixels) so that the zstd dictionary has enough sample data
-  to train on. Display size is irrelevant to every rule the vectors exercise.
-- No vector covers encryption (`AUTH`), previews (`PREV`) or embedded scenes
-  (`VOXL`). Those need key material, a PNG encoder and a VOXL writer
-  respectively; they are candidates for a later pass.
+  `verify_vectors.py` repeats that self-test before validating. The generator also
+  asserts that its own password section unwraps to the session key it sealed with.
+- The vectors use a 64×48 display (3 072 pixels) except `dict-multi-block` and
+  `encrypted-password`, which use 256×192 (49 152 pixels) so that the zstd
+  dictionary has enough sample data to train on. Display size is irrelevant to
+  every rule the vectors exercise.
+- The vectors still do not cover previews (`PREV`), profiles (`PROF`), per-layer
+  overrides (`LROV`) or embedded scenes (`VOXL`). Those need a PNG encoder, a
+  profile schema and a VOXL writer respectively.

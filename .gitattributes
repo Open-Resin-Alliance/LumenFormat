@@ -2,3 +2,7 @@
 # This spec is consumed by tooling (Rust encoders, Dart firmware, docs sites) on
 # Windows, Linux and macOS; normalizing avoids spurious whole-file diffs.
 * text=auto eol=lf
+
+# Test vectors are byte-exact. Never normalise them: zstd and AEAD payloads contain
+# arbitrary bytes, including CRLF pairs, which a text checkout would rewrite.
+*.lumen binary

@@ -93,7 +93,8 @@
 
 ### 11.4 Encryption Validation
 
-- [ ] If `ENCRYPTED` flag set, all LAYR/META/PROF/SECT/LROV/VOXL/ZDIC chunks have the encrypted flag set, and LAYR block frames are individually sealed ([§9.3](12-encryption.md#93-encryption-format)).
+- [ ] If `ENCRYPTED` flag set, all LAYR/META/PROF/SECT/LROV/VOXL/ZDIC chunks have the encrypted flag set, every LAYR block frame is at least 28 bytes (one sealed unit), and LAYR block frames are individually sealed ([§9.3](12-encryption.md#93-encryption-format)).
+- [ ] If `ENCRYPTED` flag set, `HDR`, `AUTH` and `LTBL` do **not** have the encrypted flag set, and neither do the LAYR header and block table ([§9.1](12-encryption.md#91-design-principles)).
 - [ ] Auth tag verifies for each encrypted chunk (decryption integrity check).
 - [ ] `AUTH.mode` has at least one bit set.
 - [ ] If `AUTH.mode` bit 0 is set, `password_section_len >= 65` (the fixed password section size; see [§4.4.1](04-chunk-auth.md#441-password-section)).
@@ -116,13 +117,15 @@ accepts them, a strict validator rejects them.
 The repository carries byte-exact test vectors and an independent validator under
 [`test-vectors/`](test-vectors/). Implementations SHOULD validate against them. Each
 valid vector pins the uncompressed structures it contains exactly - the file header,
-`HDR`, `LTBL`, the `LAYR` header and block table, `LHAS`, every REE stream, the chunk
-directory and the trailer - and each invalid vector fails exactly one named check from
-this section. Compressed payloads are pinned by property rather than by byte, because
-zstd output is not stable across versions.
+`HDR`, `AUTH`, `LTBL`, the `LAYR` header and block table, `LHAS`, every REE stream, the
+chunk directory and the trailer - and each invalid vector fails exactly one named check
+from this section. Compressed payloads are pinned by property rather than by byte,
+because zstd output is not stable across versions. The encrypted vectors carry their
+test password and recipient key in the manifest.
 
 Coverage is not exhaustive. The corpus exercises single- and multi-sector layer data,
-the empty-layer form, all three encoding tags, dictionary compression and multi-block
-framing. It does **not** yet cover encryption (`AUTH`), previews (`PREV`) or embedded
-scenes (`VOXL`), so those parts of this section have no executable check. See
-`test-vectors/README.md` for the check-name convention and the full scope.
+the empty-layer form, all three encoding tags, dictionary compression, multi-block
+framing, both encryption modes and both ciphers. It does **not** cover previews
+(`PREV`), profiles (`PROF`), per-layer overrides (`LROV`) or embedded scenes (`VOXL`),
+so those chunks have no executable check. See `test-vectors/README.md` for the
+check-name convention and the full scope.
