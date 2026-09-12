@@ -106,7 +106,7 @@ To avoid confusion with other parts of the ORA ecosystem, LUMEN is explicitly
 | Property | Value |
 |----------|-------|
 | Extension | `.lumen` |
-| Media type | `application/vnd.openresin.lumen` (vendor tree; see [Appendix D](19-appendix-d-media-type.md#appendix-d-media-type-registration)) |
+| Media type | `application/vnd.openresin.lumen` (vendor tree) |
 | Magic bytes | `LUMN` (`0x4C 0x55 0x4D 0x4E`) |
 | Endianness | Little-endian (all multi-byte integers) |
 | Coordinate basis | Right-handed, Z-up |
