@@ -394,6 +394,16 @@
       "file_size": 926,
       "name": "prev-not-png",
       "strict_only": true
+    },
+    {
+      "base_vector": null,
+      "description": "The embedded scene is a JSON array rather than a VOXL document: the payload begins with neither the V2 magic nor the V1 document marker. A loose reader never looks inside the chunk and must still accept the file; a strict validator rejects it.",
+      "expected_failure": "voxl.signature",
+      "file": "invalid/voxl-not-voxl.lumen",
+      "file_sha256": "0ff7900bd6eec2804aaed1861e4e3fdae7f5855c308da7ec4996a7a98e89a3ed",
+      "file_size": 886,
+      "name": "voxl-not-voxl",
+      "strict_only": true
     }
   ],
   "valid": [
@@ -2648,6 +2658,122 @@
       "total_layers": 4,
       "total_uncompressed_size": 1750,
       "trailer_crc32c": "0xDAC98F50"
+    },
+    {
+      "block_size_layers": 2,
+      "blocks": [
+        {
+          "frame_offset": 0,
+          "frame_size": 45,
+          "uncompressed_size": 8
+        },
+        {
+          "frame_offset": 45,
+          "frame_size": 45,
+          "uncompressed_size": 8
+        }
+      ],
+      "chunk_count": 7,
+      "chunk_payload_sha256": {
+        "VOXL": "e9271fbab32d3488ad308cf7cc1ace3ff0d2ab3730ebf5ced731145d5d327fb7"
+      },
+      "crypto": {
+        "argon2": {
+          "iterations": 1,
+          "memory_kib": 8,
+          "parallelism": 1,
+          "salt": "36bb23f575e8567d45b07d78456a1473"
+        },
+        "auth_version": 1,
+        "cipher_id": "A256",
+        "mode": 1,
+        "mode_names": [
+          "password"
+        ],
+        "password_utf8": "lumen-test-vector"
+      },
+      "description": "Password-mode AES-256-GCM with a sealed VOXL chunk: the scene bytes are copied in and must come back out unchanged, while LUMEN itself never parses them.",
+      "dict": {
+        "dict_id": 0,
+        "dict_size": 0,
+        "present": false
+      },
+      "dir_offset": 1006,
+      "display_height_px": 48,
+      "display_width_px": 64,
+      "features": [
+        "embedded-scene",
+        "voxl-chunk",
+        "round-trip-payload",
+        "sealed-content",
+        "password-mode",
+        "aes-256-gcm"
+      ],
+      "file": "valid/embedded-scene.lumen",
+      "file_sha256": "1b18325eac2beb73f7c342cc575eed1764568f57ff24e3b20dfb882d85a9fd12",
+      "file_size": 1238,
+      "header_flags": 8,
+      "layer_height_mm": 0.05,
+      "layers": [
+        {
+          "block_index": 0,
+          "data_offset": 0,
+          "data_size": 4,
+          "decompressed_sha256": "d2a2299911a921448af7d3b24815fd9e0f5b4415ac87bf7f7e3cc900992e8fc9",
+          "index": 0,
+          "lhas_leaf": "ea19825ef49ec3ea17c5da0b4ca8b5614a81d0af0d3bd8cf91cbfbc51045240b",
+          "sector_count": 1,
+          "sector_tags": [
+            0
+          ],
+          "tag": 0
+        },
+        {
+          "block_index": 0,
+          "data_offset": 4,
+          "data_size": 4,
+          "decompressed_sha256": "d2a2299911a921448af7d3b24815fd9e0f5b4415ac87bf7f7e3cc900992e8fc9",
+          "index": 1,
+          "lhas_leaf": "ea19825ef49ec3ea17c5da0b4ca8b5614a81d0af0d3bd8cf91cbfbc51045240b",
+          "sector_count": 1,
+          "sector_tags": [
+            0
+          ],
+          "tag": 0
+        },
+        {
+          "block_index": 1,
+          "data_offset": 0,
+          "data_size": 4,
+          "decompressed_sha256": "d2a2299911a921448af7d3b24815fd9e0f5b4415ac87bf7f7e3cc900992e8fc9",
+          "index": 2,
+          "lhas_leaf": "ea19825ef49ec3ea17c5da0b4ca8b5614a81d0af0d3bd8cf91cbfbc51045240b",
+          "sector_count": 1,
+          "sector_tags": [
+            0
+          ],
+          "tag": 0
+        },
+        {
+          "block_index": 1,
+          "data_offset": 4,
+          "data_size": 4,
+          "decompressed_sha256": "d2a2299911a921448af7d3b24815fd9e0f5b4415ac87bf7f7e3cc900992e8fc9",
+          "index": 3,
+          "lhas_leaf": "ea19825ef49ec3ea17c5da0b4ca8b5614a81d0af0d3bd8cf91cbfbc51045240b",
+          "sector_count": 1,
+          "sector_tags": [
+            0
+          ],
+          "tag": 0
+        }
+      ],
+      "merkle_root": "52ca4e3ce9170e75e11fcc77f1edaccdf0a8f5fb7d7bf85a598fdbaa44cfa633",
+      "multi_sector": false,
+      "name": "embedded-scene",
+      "total_layers": 4,
+      "total_uncompressed_size": 1090,
+      "trailer_crc32c": "0x750D2F27"
     }
   ]
 }

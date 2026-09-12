@@ -367,12 +367,32 @@ def png_preview(width: int, height: int, rgb=(200, 200, 200)) -> bytes:
             + chunk(b"IDAT", zlib.compress(rows, 9)) + chunk(b"IEND", b""))
 
 
+def voxl_payload(**overrides) -> bytes:
+    """A minimal V1 VOXL scene document (spec 4.12).
+
+    Synthetic, not a real slice: a LUMEN file embeds a scene so it can be handed
+    back unchanged, and never parses it - which is exactly what the VOXL vectors
+    pin. A V1 document starts with `{`, which is how a reader recognizes the
+    generation without knowing anything else about VOXL.
+    """
+    doc = {
+        "magic": "VOXL",
+        "version": 1,
+        "meta": {"generator": "LumenFormat test vectors", "printer": "Test printer"},
+        "scene": {"name": "embedded-scene", "units": "mm"},
+        "models": [],
+        "supports": [],
+    }
+    doc.update(overrides)
+    return json.dumps(doc, indent=2, sort_keys=True).encode()
+
+
 def payload_hashes(chunks: list[dict]) -> dict:
     """SHA-256 of each PROF/LROV/PREV plaintext payload, as the manifest records it."""
     out: dict = {}
     for ch in chunks:
         name = ch["type"].decode("ascii").rstrip("\x00")
-        if name not in ("PROF", "LROV", "PREV"):
+        if name not in ("PROF", "LROV", "PREV", "VOXL"):
             continue
         digest = hashlib.sha256(ch["payload"]).hexdigest()
         if name == "PREV":
@@ -558,7 +578,7 @@ def sparse_layers(count: int, total: int) -> list:
 
 def content_chunks(enc: dict, encoder_name: str, display: tuple[int, int], layer_height: float,
                    layer_count: int, meta_extra, prof: bytes | None = None,
-                   lrov: bytes | None = None, prevs=()) -> list[dict]:
+                   lrov: bytes | None = None, prevs=(), voxl: bytes | None = None) -> list[dict]:
     """The chunk list before any encryption, in the order section 3 recommends.
 
     `prevs` is a list of (payload, role, seal) triples: a PREV's role lives in its
@@ -582,6 +602,8 @@ def content_chunks(enc: dict, encoder_name: str, display: tuple[int, int], layer
         chunks.append({"type": b"ZDIC", "payload": zdic_payload(enc["dict_bytes"], enc["dict_id"])})
     for payload, role, seal_prev in prevs:
         chunks.append({"type": b"PREV", "payload": payload, "flags": role, "seal": seal_prev})
+    if voxl is not None:
+        chunks.append({"type": b"VOXL", "payload": voxl, "compressed": True})
     chunks += [
         {"type": b"LTBL", "payload": ltbl_payload(enc["entries"])},
         {"type": b"LHAS", "payload": lhas_payload(enc["leaves"])},
@@ -651,12 +673,12 @@ def build_vector(name: str, description: str, features: list[str], display: tupl
                  layer_height: float, layers, block_size: int, use_dict: bool,
                  dict_samples_bytes: int = 2048, split_layers=(), force_run_count_zero=(),
                  meta_extra: dict | None = None, prof: bytes | None = None,
-                 lrov: bytes | None = None, prevs=()):
+                 lrov: bytes | None = None, prevs=(), voxl: bytes | None = None):
     """layers: list of (list of sector spans). One sector per layer => single-sector."""
     enc = encode_layers(display, layers, block_size, use_dict, dict_samples_bytes,
                         split_layers, force_run_count_zero)
     chunks = content_chunks(enc, "LumenFormat test vectors 1.0", display, layer_height,
-                            len(layers), meta_extra, prof, lrov, prevs)
+                            len(layers), meta_extra, prof, lrov, prevs, voxl)
     raw, layout = build_file(chunks, FLAG_MULTI_SECTOR if enc["multi_sector"] else 0)
     meta = vector_meta(name, description, features, display, layer_height, block_size, enc,
                        chunks, raw, layout, chunk_hashes=payload_hashes(chunks))
@@ -790,7 +812,7 @@ def build_encrypted_vector(name: str, description: str, features: list[str],
                            dict_samples_bytes: int = 1024, split_layers=(), meta_extra=None,
                            argon2_params=None, password_trim: int = 0, machine_roles=(),
                            session_key: bytes | None = None, prof: bytes | None = None,
-                           lrov: bytes | None = None, prevs=()):
+                           lrov: bytes | None = None, prevs=(), voxl: bytes | None = None):
     """An encrypted file: the same content chunks, sealed, plus an AUTH chunk.
 
     `machine_roles` lists the recipient entries in file order; the role "local"
@@ -830,7 +852,7 @@ def build_encrypted_vector(name: str, description: str, features: list[str],
             raise ValueError("unknown recipient role %r" % (role,))
 
     chunks = content_chunks(enc, "LumenFormat test vectors 1.0", display, layer_height,
-                            len(layers), meta_extra, prof, lrov, prevs)
+                            len(layers), meta_extra, prof, lrov, prevs, voxl)
     sealed = seal_content_chunks(chunks, enc, session_key, cipher_id)
     auth = {"type": b"AUTH", "payload": auth_payload(cipher_id, mode, password_sec, machine_sec)}
     after = 3 if prof is not None else 2      # section 3 lists PROF before AUTH
@@ -997,6 +1019,17 @@ def vector_previews():
         prevs=[(png_preview(400, 300), 1, False), (png_preview(16, 16, (255, 0, 0)), 3, True)])
 
 
+def vector_embedded_scene():
+    """Encrypted, with a sealed embedded scene."""
+    return build_encrypted_vector(
+        "embedded-scene",
+        "Password-mode AES-256-GCM with a sealed VOXL chunk: the scene bytes are copied in and must come back out unchanged, while LUMEN itself never parses them.",
+        ["embedded-scene", "voxl-chunk", "round-trip-payload", "sealed-content",
+         "password-mode", "aes-256-gcm"],
+        (64, 48), 0.05, [[((0, 80, 255),)] for _ in range(4)], block_size=2,
+        cipher_id="A256", mode=1, voxl=voxl_payload())
+
+
 def main() -> int:
     assert crc32c(b"123456789") == 0xE3069283, "CRC-32C self-test failed"
     os.makedirs(VALID_DIR, exist_ok=True)
@@ -1020,7 +1053,7 @@ def main() -> int:
     for builder in (vector_binary_basic, vector_dict, vector_multisector,
                     vector_encrypted_password, vector_encrypted_machine,
                     vector_encrypted_both, vector_print_profile, vector_layer_overrides,
-                    vector_previews):
+                    vector_previews, vector_embedded_scene):
         raw, meta, layout = builder()
         path = os.path.join(VALID_DIR, meta["name"] + ".lumen")
         with open(path, "wb") as fh:
@@ -1268,6 +1301,14 @@ def main() -> int:
     emit_invalid("prev-not-png",
                  "A PREV payload does not begin with the PNG signature. A loose reader ignores previews and must still accept the file; a strict validator rejects it.",
                  "prev.png_signature", repack(b, layout_pv), strict_only=True, base=None)
+
+    # a VOXL payload that is neither the V2 magic nor a V1 JSON document
+    raw_vx, _, _ = build_vector(
+        "x-voxl", "source", [], (64, 48), 0.05, [[((0, 70, 255),)] for _ in range(4)],
+        block_size=2, use_dict=False, voxl=b'[{"magic": "VOXL", "version": 1}]')
+    emit_invalid("voxl-not-voxl",
+                 "The embedded scene is a JSON array rather than a VOXL document: the payload begins with neither the V2 magic nor the V1 document marker. A loose reader never looks inside the chunk and must still accept the file; a strict validator rejects it.",
+                 "voxl.signature", raw_vx, strict_only=True, base=None)
 
     with open(os.path.join(HERE, "manifest.json"), "w", encoding="utf-8", newline="\n") as fh:
         json.dump(manifest, fh, indent=2, sort_keys=True)

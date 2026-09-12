@@ -709,6 +709,19 @@ def validate(path: str, strict: bool, verbose: bool = False, crypto: dict | None
             chk("prev.png_signature", all(png_header_ok(content_entry(e)) for e in prev_e))
         payloads[b"PREV"] = [content_entry(e) for e in prev_e]
 
+    # ---- VOXL ----------------------------------------------------------
+    # §4.12: the embedded scene is opaque to LUMEN, so §11.2 only asks a strict
+    # reader to recognize which generation of VOXL it is holding.  Whether the
+    # scene is *valid* is VOXL's business: a print reader must never reject a
+    # file over its embedded scene, so loose mode records nothing here.
+    voxl_e = find(b"VOXL")
+    if voxl_e:
+        voxl_plain = content_entry(voxl_e[0])
+        if strict:
+            chk("voxl.signature",
+                voxl_plain[:4] == b"VOXL" or voxl_plain[:1] == b"{")
+        payloads[b"VOXL"] = voxl_plain
+
     # dictionary
     zdic = find(b"ZDIC")
     dict_bytes = b""

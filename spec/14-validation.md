@@ -64,8 +64,7 @@
 - [ ] If `META.chamber_temperature_c` or `vat_temperature_c` present, values are in range `[0.0, 120.0]`.
 - [ ] If `LHAS` chunk present, recompute Merkle root from `layer_hashes` and verify it matches `merkle_root`.
 - [ ] (Strict mode) If `LHAS` chunk present, decompress and hash each layer; verify against `layer_hashes`.
-- [ ] If `VOXL` chunk present, payload is a valid VOXL file (parseable, recognized version, passes VOXL validation rules).
-- [ ] (Strict mode) If `VOXL` chunk present, scene metadata (printer name, resolution) is consistent with `HDR` fields.
+- [ ] (Strict mode) If `VOXL` chunk present, the payload is recognizable as VOXL: it begins with the V2 magic `VOXL` or with the V1 JSON document marker `{` ([§4.12](07-scene-chunks.md#412-voxl---embedded-scene-chunk)). Whether it is a *valid* VOXL file is VOXL's business, checked by whatever parses the scene; a print reader never needs to know.
 
 ### 11.3 Layer Data Validation (post-decompression)
 
@@ -127,7 +126,8 @@ test password and recipient key in the manifest.
 
 Coverage is not exhaustive. The corpus exercises single- and multi-sector layer data,
 the empty-layer form, all three encoding tags, dictionary compression, multi-block
-framing, both encryption modes and both ciphers, and the `PROF`, `LROV` and `PREV`
-chunks. It does **not** cover embedded scenes (`VOXL`), a preliminary companion
-format, so that chunk has no executable check. See `test-vectors/README.md` for the
-check-name convention and the full scope.
+framing, both encryption modes and both ciphers, and the `PROF`, `LROV`, `PREV` and
+`VOXL` chunks - the last at the transport level only, where the embedded scene is
+pinned byte for byte while VOXL's own validation stays outside this specification. It
+does **not** cover the `EXTD` extension mechanism, whose payloads are vendor-defined.
+See `test-vectors/README.md` for the check-name convention and the full scope.
