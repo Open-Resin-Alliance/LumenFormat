@@ -87,7 +87,8 @@ Human-readable print parameters as a single JSON object.
 
 ```jsonc
 {
-  // Two-stage motion
+  // Two-stage motion. Stage 1 runs first; a lift usually peels slowly and retracts fast,
+  // and stage 2 covers the rest of the move.
   "lift_distance2_um": 3000,
   "lift_speed2_um_min": 180000,
   "retract_distance2_um": 3000,
@@ -191,9 +192,15 @@ Human-readable print parameters as a single JSON object.
 | Retract 1 - fast, most of the return | `retract_distance_um` | `retract_speed_um_min` |
 | Retract 2 - slow final approach | `retract_distance2_um` | `retract_speed2_um_min` |
 
+The number is the order of execution, not the speed: a printer performs stage 1 and then
+stage 2. The roles above are the usual ones rather than a rule, and they are not the same
+in both directions - stage 1 is the slow one for a lift and the fast one for a retract - so
+a field is named for when it runs, not for how fast. An encoder may set either stage faster;
+a reader that cares which is which reads the two speeds.
+
 The total travel of a move is the sum of its two segments. A segment whose distance
-or speed is `0.0` is not performed, so a single-stage move is the degenerate case:
-set the `*2` fields to `0.0`. The `bottom_*` fields follow the same model.
+or speed is `0` is not performed, so a single-stage move is the degenerate case:
+set the `*2` fields to `0`. The `bottom_*` fields follow the same model.
 
 **Field resolution for readers:**
 
