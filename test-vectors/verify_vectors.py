@@ -467,7 +467,7 @@ def validate(path: str, strict: bool, verbose: bool = False, crypto: dict | None
     chk("hdr.version", hdr_version == 1)
     chk("hdr.encoder_name_fits", len(hdr) >= 52 + name_len and name_len <= 256)
     (created, disp_w, disp_h, phys_w, phys_h) = struct.unpack_from("<QIIII", hdr, 8 + name_len)
-    (build_w, build_d, build_h, layer_h, total_layers) = struct.unpack_from("<ffffI", hdr, 32 + name_len)
+    (build_w, build_d, build_h, layer_h, total_layers) = struct.unpack_from("<IIIII", hdr, 32 + name_len)
     chk("hdr.total_layers", total_layers > 0)
     chk("hdr.physical_ratio", phys_w % disp_w == 0 and phys_h % disp_h == 0)
     total_pixels = disp_w * disp_h
@@ -643,8 +643,8 @@ def validate(path: str, strict: bool, verbose: bool = False, crypto: dict | None
     mats = meta.get("materials")
     chk("meta.required_fields", all(k in meta for k in (
         "meta_version", "normal_exposure_sec", "bottom_exposure_sec", "bottom_layer_count",
-        "transition_layer_count", "layer_height_mm", "lift_distance_mm", "lift_speed_mm_min",
-        "retract_distance_mm", "retract_speed_mm_min")))
+        "transition_layer_count", "layer_height_um", "lift_distance_um", "lift_speed_um_min",
+        "retract_distance_um", "retract_speed_um_min")))
     chk("meta.materials_shape", materials_shape_ok(mats))
     sects = [json.loads(content_entry(e)) for e in find(b"SECT")]
     chk("sect.sector_id_nonzero", all(s.get("sector_id", 0) >= 1 for s in sects))
@@ -676,8 +676,8 @@ def validate(path: str, strict: bool, verbose: bool = False, crypto: dict | None
             and settings["bottom_exposure_sec"] > 0.0)
         chk("prof.settings_layer_height",
             isinstance(settings, dict)
-            and is_number(settings.get("layer_height_mm"))
-            and settings["layer_height_mm"] > 0.0)
+            and is_number(settings.get("layer_height_um"))
+            and settings["layer_height_um"] > 0.0)
         curve = settings.get("cure_curve") if isinstance(settings, dict) else None
         chk("prof.cure_curve", curve is None or (
             isinstance(curve, dict)

@@ -234,15 +234,15 @@ def leaf_hash(layer_bytes: bytes) -> bytes:
 # chunk payload builders
 # --------------------------------------------------------------------------
 
-def hdr_payload(encoder_name: str, display_w: int, display_h: int, build_w: float,
-                build_d: float, build_h: float, layer_height: float,
+def hdr_payload(encoder_name: str, display_w: int, display_h: int, build_w_um: int,
+                build_d_um: int, build_h_um: int, layer_height_um: int,
                 total_layers: int) -> bytes:
     name = encoder_name.encode()
     return (
         struct.pack("<II", 1, len(name))
         + name
         + struct.pack("<QIIII", CREATED_UNIX_SEC, display_w, display_h, display_w, display_h)
-        + struct.pack("<ffffI", build_w, build_d, build_h, layer_height, total_layers)
+        + struct.pack("<IIIII", build_w_um, build_d_um, build_h_um, layer_height_um, total_layers)
     )
 
 
@@ -253,11 +253,11 @@ def meta_payload(**overrides) -> bytes:
         "bottom_exposure_sec": 30.0,
         "bottom_layer_count": 2,
         "transition_layer_count": 1,
-        "layer_height_mm": 0.05,
-        "lift_distance_mm": 5.0,
-        "lift_speed_mm_min": 65.0,
-        "retract_distance_mm": 5.0,
-        "retract_speed_mm_min": 150.0,
+        "layer_height_um": 50,
+        "lift_distance_um": 5000,
+        "lift_speed_um_min": 65000,
+        "retract_distance_um": 5000,
+        "retract_speed_um_min": 150000,
     }
     meta.update(overrides)
     return json.dumps(meta, indent=2, sort_keys=True).encode()
@@ -314,19 +314,19 @@ def prof_payload(settings_extra: dict | None = None, **overrides) -> bytes:
             "bottom_exposure_sec": 32.0,
             "bottom_layer_count": 5,
             "transition_layer_count": 8,
-            "layer_height_mm": 0.05,
-            "lift_distance_mm": 5.0,
-            "lift_speed_mm_min": 65.0,
-            "lift_distance2_mm": 3.0,
-            "lift_speed2_mm_min": 200.0,
-            "retract_distance_mm": 4.0,
-            "retract_speed_mm_min": 150.0,
-            "retract_distance2_mm": 2.0,
-            "retract_speed2_mm_min": 180.0,
-            "bottom_lift_distance_mm": 6.0,
-            "bottom_lift_speed_mm_min": 50.0,
-            "bottom_retract_distance_mm": 6.0,
-            "bottom_retract_speed_mm_min": 100.0,
+            "layer_height_um": 50,
+            "lift_distance_um": 5000,
+            "lift_speed_um_min": 65000,
+            "lift_distance2_um": 3000,
+            "lift_speed2_um_min": 200000,
+            "retract_distance_um": 4000,
+            "retract_speed_um_min": 150000,
+            "retract_distance2_um": 2000,
+            "retract_speed2_um_min": 180000,
+            "bottom_lift_distance_um": 6000,
+            "bottom_lift_speed_um_min": 50000,
+            "bottom_retract_distance_um": 6000,
+            "bottom_retract_speed_um_min": 100000,
             "wait_time_before_cure_sec": 1.0,
             "wait_time_after_cure_sec": 0.0,
             "wait_time_after_lift_sec": 0.5,
@@ -588,7 +588,7 @@ def sparse_layers(count: int, total: int) -> list:
     return layers
 
 
-def content_chunks(enc: dict, encoder_name: str, display: tuple[int, int], layer_height: float,
+def content_chunks(enc: dict, encoder_name: str, display: tuple[int, int], layer_height_um: float,
                    layer_count: int, meta_extra, prof: bytes | None = None,
                    lrov: bytes | None = None, prevs=(), voxl: bytes | None = None,
                    extds=()) -> list[dict]:
@@ -601,7 +601,7 @@ def content_chunks(enc: dict, encoder_name: str, display: tuple[int, int], layer
     w, h = display
     chunks = [
         {"type": b"HDR\0", "payload": hdr_payload(
-            encoder_name, w, h, 218.0, 123.0, 250.0, layer_height, layer_count)},
+            encoder_name, w, h, 218000, 123000, 250000, layer_height_um, layer_count)},
         {"type": b"META", "payload": meta_payload(**(meta_extra or {})), "compressed": True},
     ]
     if prof is not None:
@@ -642,7 +642,7 @@ def stored_block_table(raw: bytes, layout: dict) -> list[dict]:
 
 
 def vector_meta(name: str, description: str, features: list[str], display: tuple[int, int],
-                layer_height: float, block_size: int, enc: dict, chunks: list[dict],
+                layer_height_um: float, block_size: int, enc: dict, chunks: list[dict],
                 raw: bytes, layout: dict, crypto: dict | None = None,
                 chunk_hashes: dict | None = None) -> dict:
     """The manifest entry's golden data for one vector."""
@@ -654,7 +654,7 @@ def vector_meta(name: str, description: str, features: list[str], display: tuple
         "display_width_px": w,
         "display_height_px": h,
         "total_layers": len(enc["layer_bytes"]),
-        "layer_height_mm": layer_height,
+        "layer_height_um": layer_height_um,
         "block_size_layers": block_size,
         "header_flags": struct.unpack_from("<I", raw, 20)[0],
         "multi_sector": enc["multi_sector"],
@@ -685,17 +685,17 @@ def vector_meta(name: str, description: str, features: list[str], display: tuple
 
 
 def build_vector(name: str, description: str, features: list[str], display: tuple[int, int],
-                 layer_height: float, layers, block_size: int, use_dict: bool,
+                 layer_height_um: float, layers, block_size: int, use_dict: bool,
                  dict_samples_bytes: int = 2048, split_layers=(), force_run_count_zero=(),
                  meta_extra: dict | None = None, prof: bytes | None = None,
                  lrov: bytes | None = None, prevs=(), voxl: bytes | None = None, extds=()):
     """layers: list of (list of sector spans). One sector per layer => single-sector."""
     enc = encode_layers(display, layers, block_size, use_dict, dict_samples_bytes,
                         split_layers, force_run_count_zero)
-    chunks = content_chunks(enc, "LumenFormat test vectors 1.0", display, layer_height,
+    chunks = content_chunks(enc, "LumenFormat test vectors 1.0", display, layer_height_um,
                             len(layers), meta_extra, prof, lrov, prevs, voxl, extds)
     raw, layout = build_file(chunks, FLAG_MULTI_SECTOR if enc["multi_sector"] else 0)
-    meta = vector_meta(name, description, features, display, layer_height, block_size, enc,
+    meta = vector_meta(name, description, features, display, layer_height_um, block_size, enc,
                        chunks, raw, layout, chunk_hashes=payload_hashes(chunks))
     return raw, meta, layout
 
@@ -822,7 +822,7 @@ def seal_content_chunks(chunks: list[dict], enc: dict, key: bytes, cipher_id: st
 
 
 def build_encrypted_vector(name: str, description: str, features: list[str],
-                           display: tuple[int, int], layer_height: float, layers,
+                           display: tuple[int, int], layer_height_um: float, layers,
                            block_size: int, cipher_id: str, mode: int, use_dict: bool = False,
                            dict_samples_bytes: int = 1024, split_layers=(), meta_extra=None,
                            argon2_params=None, password_trim: int = 0, machine_roles=(),
@@ -867,7 +867,7 @@ def build_encrypted_vector(name: str, description: str, features: list[str],
         else:
             raise ValueError("unknown recipient role %r" % (role,))
 
-    chunks = content_chunks(enc, "LumenFormat test vectors 1.0", display, layer_height,
+    chunks = content_chunks(enc, "LumenFormat test vectors 1.0", display, layer_height_um,
                             len(layers), meta_extra, prof, lrov, prevs, voxl, extds)
     sealed = seal_content_chunks(chunks, enc, session_key, cipher_id)
     auth = {"type": b"AUTH", "payload": auth_payload(cipher_id, mode, password_sec, machine_sec)}
@@ -891,7 +891,7 @@ def build_encrypted_vector(name: str, description: str, features: list[str],
         crypto["local_recipient_index"] = local_index
         crypto["local_recipient_private_key"] = local_private.hex()
 
-    meta = vector_meta(name, description, features, display, layer_height, block_size, enc,
+    meta = vector_meta(name, description, features, display, layer_height_um, block_size, enc,
                        ordered, raw, layout, crypto=crypto, chunk_hashes=payload_hashes(chunks))
     return raw, meta, layout
 
@@ -903,7 +903,7 @@ def vector_encrypted_password():
         "Password-mode AES-256-GCM: an Argon2id-wrapped session key, a sealed dictionary and metadata, and two blocks of sealed layer frames.",
         ["encryption", "password-mode", "aes-256-gcm", "argon2id", "dictionary",
          "sealed-blocks", "multi-block"],
-        (256, 192), 0.05, sparse_layers(32, T2), block_size=16, cipher_id="A256", mode=1,
+        (256, 192), 50, sparse_layers(32, T2), block_size=16, cipher_id="A256", mode=1,
         use_dict=True, dict_samples_bytes=1024, split_layers=set(range(0, 32, 2)))
 
 
@@ -920,7 +920,7 @@ def vector_encrypted_machine():
         "Machine-mode ChaCha20-Poly1305 with three recipient entries: a foreign machine, a decoy entry for our own fingerprint whose ephemeral key is the low-order point, and the real entry. A reader that unwraps the decoy without rejecting the all-zero shared secret recovers a different session key and cannot decrypt the file.",
         ["encryption", "machine-binding", "chacha20-poly1305", "x25519", "hkdf",
          "multiple-recipients", "low-order-point"],
-        (64, 48), 0.05, layers, block_size=4, cipher_id="C20P", mode=2,
+        (64, 48), 50, layers, block_size=4, cipher_id="C20P", mode=2,
         split_layers={1}, machine_roles=("foreign", "decoy", "local"))
 
 
@@ -939,7 +939,7 @@ def vector_encrypted_both():
         "Both wrapping modes set in one AUTH chunk, with multi-sector layer content sealed under a single session key.",
         ["encryption", "password-mode", "machine-binding", "multi-sector", "sealed-sectors",
          "aes-256-gcm"],
-        (64, 48), 0.05, layers, block_size=2, cipher_id="A256", mode=3,
+        (64, 48), 50, layers, block_size=2, cipher_id="A256", mode=3,
         split_layers={5}, machine_roles=("local",),
         meta_extra={"materials": [{"name": "Standard Grey", "brand": "DragonFruit",
                                    "family": "standard", "density_g_ml": 1.1,
@@ -967,7 +967,7 @@ def vector_binary_basic():
     return build_vector(
         "binary-basic", "Six layers covering the empty-layer form, binary REE, grayscale REE and split REE, across three blocks with no dictionary.",
         ["empty-layer", "binary-ree", "grayscale-ree", "split-ree", "multi-block", "no-dictionary"],
-        (64, 48), 0.05, layers, block_size=2, use_dict=False, split_layers={4})
+        (64, 48), 50, layers, block_size=2, use_dict=False, split_layers={4})
 
 
 def vector_dict():
@@ -975,7 +975,7 @@ def vector_dict():
     return build_vector(
         "dict-multi-block", "64 layers with a trained ZDIC dictionary, four blocks of sixteen layers.",
         ["dictionary", "dictionary-id", "multi-block", "grayscale-ree", "split-ree"],
-        (256, 192), 0.05, sparse_layers(64, T2), block_size=16, use_dict=True,
+        (256, 192), 50, sparse_layers(64, T2), block_size=16, use_dict=True,
         dict_samples_bytes=1024, split_layers=set(range(0, 64, 2)))
 
 
@@ -990,7 +990,7 @@ def vector_multisector():
     return build_vector(
         "multi-sector", "Four layers with two non-overlapping sectors, exercising the multi-sector varint framing and the sector partition invariant.",
         ["multi-sector", "sector-framing", "empty-layer", "binary-ree"],
-        (64, 48), 0.05, layers, block_size=2, use_dict=False,
+        (64, 48), 50, layers, block_size=2, use_dict=False,
         meta_extra={"materials": [{"name": "Standard Grey", "brand": "DragonFruit",
                                    "family": "standard", "density_g_ml": 1.1,
                                    "color_rgba": [128, 128, 128, 255]}]})
@@ -1003,14 +1003,14 @@ def vector_print_profile():
         "Password-mode AES-256-GCM with a sealed PROF chunk: profile identity, a material library, and a settings block reusing META's field names, including the experimental cure curve.",
         ["print-profile", "prof-chunk", "profile-materials", "profile-uuid", "cure-curve",
          "sealed-content", "password-mode", "aes-256-gcm"],
-        (64, 48), 0.05, [[((0, 150, 255),)] for _ in range(4)], block_size=2,
+        (64, 48), 50, [[((0, 150, 255),)] for _ in range(4)], block_size=2,
         cipher_id="A256", mode=1, prof=prof_payload())
 
 
 def vector_layer_overrides():
     """Plaintext, per-layer and per-range overrides."""
     overrides = [
-        {"layer": 2, "normal_exposure_sec": 2.8, "lift_distance_mm": 6.0},
+        {"layer": 2, "normal_exposure_sec": 2.8, "lift_distance_um": 6000},
         {"layer_range": [3, 5], "sector_id": 0, "normal_exposure_sec": 2.2,
          "wait_time_before_cure_sec": 0.5},
         {"layer_range": [6, 8], "wait_time_after_lift_sec": 1.0},
@@ -1019,7 +1019,7 @@ def vector_layer_overrides():
         "layer-overrides",
         "Ten layers with an LROV chunk covering a single layer, an inclusive layer range scoped to sector 0, and a range that applies to every sector.",
         ["lrov-chunk", "layer-override", "layer-range", "sector-scoped-override"],
-        (64, 48), 0.05, [[((0, 120, 255),)] for _ in range(10)], block_size=5,
+        (64, 48), 50, [[((0, 120, 255),)] for _ in range(10)], block_size=5,
         use_dict=False, lrov=lrov_payload(overrides))
 
 
@@ -1030,7 +1030,7 @@ def vector_previews():
         "Password-mode AES-256-GCM with two PREV chunks: a large preview in the clear and a sealed icon. Preview sealing is optional even when the file is encrypted, so both forms are valid in the same file.",
         ["previews", "prev-chunk", "clear-preview", "sealed-preview", "preview-role",
          "password-mode", "aes-256-gcm"],
-        (64, 48), 0.05, [[((0, 100, 255),)] for _ in range(4)], block_size=2,
+        (64, 48), 50, [[((0, 100, 255),)] for _ in range(4)], block_size=2,
         cipher_id="A256", mode=1,
         prevs=[(png_preview(400, 300), 1, False), (png_preview(16, 16, (255, 0, 0)), 3, True)])
 
@@ -1042,7 +1042,7 @@ def vector_embedded_scene():
         "Password-mode AES-256-GCM with a sealed VOXL chunk: the scene bytes are copied in and must come back out unchanged, while LUMEN itself never parses them.",
         ["embedded-scene", "voxl-chunk", "round-trip-payload", "sealed-content",
          "password-mode", "aes-256-gcm"],
-        (64, 48), 0.05, [[((0, 80, 255),)] for _ in range(4)], block_size=2,
+        (64, 48), 50, [[((0, 80, 255),)] for _ in range(4)], block_size=2,
         cipher_id="A256", mode=1, voxl=voxl_payload())
 
 
@@ -1057,7 +1057,7 @@ def vector_extensions():
         "Two non-critical EXTD chunks - one reserved ORA type code and one vendor extension - exercising the frame, the vendor id and critical flag bit, and the rule that readers skip extensions they do not implement.",
         ["extd-chunk", "extension-frame", "vendor-extension", "reserved-type-code",
          "skippable-extension"],
-        (64, 48), 0.05, [[((0, 60, 255),)] for _ in range(4)], block_size=2,
+        (64, 48), 50, [[((0, 60, 255),)] for _ in range(4)], block_size=2,
         use_dict=False, extds=extds)
 
 
@@ -1131,7 +1131,7 @@ def main() -> int:
 
     # x02: the non-canonical run_count == 0 all-black form (decodable, not canonical)
     raw2, meta2, _ = build_vector(
-        "x-source", "source", [], (64, 48), 0.05,
+        "x-source", "source", [], (64, 48), 50,
         [[((0, 0, 0),)] for _ in range(4)], block_size=2, use_dict=False,
         force_run_count_zero={0})
     emit_invalid("run-count-zero-all-black",
@@ -1226,7 +1226,7 @@ def main() -> int:
     # e04: Argon2id cost above the recommended ceiling. The section is coherent, so
     # only the cost rule can refuse it.
     raw4, meta4, _ = build_encrypted_vector(
-        "x-argon2-budget", "source", [], (64, 48), 0.05,
+        "x-argon2-budget", "source", [], (64, 48), 50,
         [[((0, 300, 255),)] for _ in range(4)], block_size=2, cipher_id="A256", mode=1,
         argon2_params=(99, 8, 1))
     emit_invalid("crypt-argon2-budget",
@@ -1235,7 +1235,7 @@ def main() -> int:
 
     # e05: password section shorter than the fixed 65 bytes
     raw5, meta5, _ = build_encrypted_vector(
-        "x-password-short", "source", [], (64, 48), 0.05,
+        "x-password-short", "source", [], (64, 48), 50,
         [[((0, 300, 255),)] for _ in range(4)], block_size=2, cipher_id="A256", mode=1,
         password_trim=1)
     emit_invalid("crypt-password-len-short",
@@ -1244,7 +1244,7 @@ def main() -> int:
 
     # e06: machine mode with an empty machine section
     raw6, meta6, _ = build_encrypted_vector(
-        "x-machine-empty", "source", [], (64, 48), 0.05,
+        "x-machine-empty", "source", [], (64, 48), 50,
         [[((0, 300, 255),)] for _ in range(4)], block_size=2, cipher_id="C20P", mode=2,
         machine_roles=())
     emit_invalid("crypt-machine-len-empty",
@@ -1270,7 +1270,7 @@ def main() -> int:
     # ---------------- PROF / LROV / PREV invalid vectors ----------------
 
     def emit_prof_invalid(name, expected, description, **prof_kwargs):
-        raw_p, _, _ = build_vector("x-prof", "source", [], (64, 48), 0.05,
+        raw_p, _, _ = build_vector("x-prof", "source", [], (64, 48), 50,
                                    [[((0, 200, 255),)] for _ in range(4)], block_size=2,
                                    use_dict=False, prof=prof_payload(**prof_kwargs))
         emit_invalid(name, description, expected, raw_p, base=None)
@@ -1286,7 +1286,7 @@ def main() -> int:
                       settings_extra={"normal_exposure_sec": 0.0})
     emit_prof_invalid("prof-settings-layer-height", "prof.settings_layer_height",
                       "PROF settings carry a zero layer height.",
-                      settings_extra={"layer_height_mm": 0.0})
+                      settings_extra={"layer_height_um": 0})
     emit_prof_invalid("prof-cure-curve", "prof.cure_curve",
                       "PROF cure curve has dp_um = 0.0, which no resin can have.",
                       settings_extra={"cure_curve": {"dp_um": 0.0, "ec_mj_cm2": 7.5,
@@ -1299,7 +1299,7 @@ def main() -> int:
                       materials=[])
 
     def emit_lrov_invalid(name, expected, description, overrides):
-        raw_l, _, _ = build_vector("x-lrov", "source", [], (64, 48), 0.05,
+        raw_l, _, _ = build_vector("x-lrov", "source", [], (64, 48), 50,
                                    [[((0, 120, 255),)] for _ in range(10)], block_size=5,
                                    use_dict=False, lrov=lrov_payload(overrides))
         emit_invalid(name, description, expected, raw_l, base=None)
@@ -1318,7 +1318,7 @@ def main() -> int:
                       [{"layer_range": [3, 5], "sector_id": 7, "normal_exposure_sec": 2.8}])
 
     raw_pv, _, layout_pv = build_vector(
-        "x-prev", "source", [], (64, 48), 0.05, [[((0, 90, 255),)] for _ in range(4)],
+        "x-prev", "source", [], (64, 48), 50, [[((0, 90, 255),)] for _ in range(4)],
         block_size=2, use_dict=False, prevs=[(png_preview(24, 18), 1, False)])
 
     b = patch_chunk_flags(raw_pv, layout_pv, b"PREV", 0x21)
@@ -1335,14 +1335,14 @@ def main() -> int:
 
     # a VOXL payload that is neither the V2 magic nor a V1 JSON document
     raw_vx, _, _ = build_vector(
-        "x-voxl", "source", [], (64, 48), 0.05, [[((0, 70, 255),)] for _ in range(4)],
+        "x-voxl", "source", [], (64, 48), 50, [[((0, 70, 255),)] for _ in range(4)],
         block_size=2, use_dict=False, voxl=b'[{"magic": "VOXL", "version": 1}]')
     emit_invalid("voxl-not-voxl",
                  "The embedded scene is a JSON array rather than a VOXL document: the payload begins with neither the V2 magic nor the V1 document marker. A loose reader never looks inside the chunk and must still accept the file; a strict validator rejects it.",
                  "voxl.signature", raw_vx, strict_only=True, base=None)
 
     def emit_extd_invalid(name, expected, description, extds):
-        raw_x, _, _ = build_vector("x-extd", "source", [], (64, 48), 0.05,
+        raw_x, _, _ = build_vector("x-extd", "source", [], (64, 48), 50,
                                    [[((0, 50, 255),)] for _ in range(4)], block_size=2,
                                    use_dict=False, extds=extds)
         emit_invalid(name, description, expected, raw_x, base=None)

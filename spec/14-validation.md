@@ -29,8 +29,8 @@
 
 - [ ] `HDR.total_layers > 0` and `HDR.total_layers == LTBL.layer_count`.
 - [ ] `LTBL.entry_size >= 20`. The layout is fixed through offset 20; future versions may append fields after offset 20, and readers stride by `entry_size` to skip unknown trailing fields.
-- [ ] `HDR.layer_height_mm > 0.0`.
-- [ ] `HDR.build_width_mm > 0.0`, `HDR.build_depth_mm > 0.0`, `HDR.build_height_mm > 0.0`.
+- [ ] `HDR.layer_height_um > 0`.
+- [ ] `HDR.build_width_um > 0`, `HDR.build_depth_um > 0`, `HDR.build_height_um > 0`.
 - [ ] `HDR.encoder_name_len <= 256`, and `HDR.size_uncompressed >= 52 + encoder_name_len` - the fixed fields before and after the name total 52 bytes, so a v1 `HDR` chunk is exactly `52 + encoder_name_len` bytes.
 - [ ] Every `LTBL.entries[i].block_index` is less than `LAYR.block_count`, and the sequence of `block_index` values is non-decreasing in `i`.
 - [ ] (Multi-sector only) For every layer `i` with `LTBL.entries[i].sector_count > 0`, the `sector_count` varint at the start of that layer's data within its block equals `LTBL.entries[i].sector_count` (the LAYR value is authoritative for decoding). Layers with `sector_count == 0` store no bytes at all. In single-sector mode, layer data starts with the encoding tag byte, not a `sector_count` varint.
@@ -38,10 +38,10 @@
 - [ ] `HDR.display_width_px × display_height_px > 0`.
 - [ ] `HDR.physical_width_px` is an integer multiple of `display_width_px`, and `physical_height_px` is an integer multiple of `display_height_px`. A ratio of 1 means one display pixel per physical pixel.
 - [ ] `META.meta_version` is present and recognized.
-- [ ] META JSON contains all required fields (`meta_version`, `normal_exposure_sec`, `bottom_exposure_sec`, `bottom_layer_count`, `transition_layer_count`, `layer_height_mm`, `lift_distance_mm`, `lift_speed_mm_min`, `retract_distance_mm`, `retract_speed_mm_min`).
+- [ ] META JSON contains all required fields (`meta_version`, `normal_exposure_sec`, `bottom_exposure_sec`, `bottom_layer_count`, `transition_layer_count`, `layer_height_um`, `lift_distance_um`, `lift_speed_um_min`, `retract_distance_um`, `retract_speed_um_min`).
 - [ ] `META.normal_exposure_sec > 0.0`.
 - [ ] `META.bottom_exposure_sec > 0.0`.
-- [ ] `META.layer_height_mm > 0.0`.
+- [ ] `META.layer_height_um > 0`.
 - [ ] If `MULTI_SECTOR` flag set, ≥1 `SECT` chunk present.
 - [ ] All `SECT.sector_id` values unique.
 - [ ] If `META.materials` is present, it is a non-empty array and every entry has a non-empty `name`.
@@ -54,13 +54,13 @@
 - [ ] If `PROF` chunk present, `profile_name` and `profile_version` are non-empty strings.
 - [ ] If `PROF` chunk present, `profile_type` is one of `"material"`, `"printer"`, `"combined"`.
 - [ ] If `PROF` chunk present, `settings.normal_exposure_sec > 0.0` and `settings.bottom_exposure_sec > 0.0`.
-- [ ] If `PROF` chunk present, `settings.layer_height_mm > 0.0`.
-- [ ] If `PROF.settings.cure_curve` present, `dp_um > 0.0`, `ec_mj_cm2 > 0.0`, `e0_mj_cm2 >= 0.0`.
+- [ ] If `PROF` chunk present, `settings.layer_height_um > 0`.
+- [ ] If `PROF.settings.cure_curve` present, `dp_um > 0`, `ec_mj_cm2 > 0.0`, `e0_mj_cm2 >= 0.0`.
 - [ ] If `PROF` chunk present with `profile_uuid`, the UUID string is well-formed (36 characters, 8-4-4-4-12 hex pattern).
 - [ ] Every `LROV` entry carries exactly one of `layer` or `layer_range` ([§4.6](05-print-control.md#46-lrov---layer-override-chunk)).
 - [ ] If `PREV` chunk present, `preview_role` is 0–3 and reserved flag bits 5–31 are 0 ([§4.7](05-print-control.md#47-prev---preview-image-chunk)).
 - [ ] (Strict mode) If `PREV` chunk present, its payload begins with the PNG signature and its `IHDR` is well-formed ([§4.7](05-print-control.md#47-prev---preview-image-chunk)).
-- [ ] If `META.cure_curve` present, `dp_um > 0.0`, `ec_mj_cm2 > 0.0`, `e0_mj_cm2 >= 0.0`.
+- [ ] If `META.cure_curve` present, `dp_um > 0`, `ec_mj_cm2 > 0.0`, `e0_mj_cm2 >= 0.0`.
 - [ ] If `META.chamber_temperature_c` or `vat_temperature_c` present, values are in range `[0.0, 120.0]`.
 - [ ] If `LHAS` chunk present, recompute Merkle root from `layer_hashes` and verify it matches `merkle_root`.
 - [ ] (Strict mode) If `LHAS` chunk present, decompress and hash each layer; verify against `layer_hashes`.

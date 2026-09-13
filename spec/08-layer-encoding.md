@@ -354,7 +354,7 @@ Where:
   appropriate for the given layer height.
 
   **Adaptive layer height is not available in v1.** It needs per-layer heights in the
-  file, and v1 has nowhere to put them: `HDR.layer_height_mm` is a single default, and
+  file, and v1 has nowhere to put them: `HDR.layer_height_um` is a single default, and
   the `VLYR` extension is non-critical ([§4.13](07-scene-chunks.md#413-extd---extension-chunk)), so a conforming reader may skip it and
   print at the wrong Z. A future core mechanism - most likely an `LTBL` field - is
   required first. Until then encoders MUST NOT emit variable-height `.lumen` files, and

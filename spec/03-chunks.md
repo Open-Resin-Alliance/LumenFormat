@@ -45,10 +45,10 @@ across format versions without changing the 32-byte magic header.
 | 20+N | 4 | `u32` | `display_height_px` | Logical display height. |
 | 24+N | 4 | `u32` | `physical_width_px` | Physical LCD panel width in pixels (e.g. 11520 for a 12K display). |
 | 28+N | 4 | `u32` | `physical_height_px` | Physical LCD panel height in pixels. |
-| 32+N | 4 | `f32` | `build_width_mm` | Build plate X dimension. |
-| 36+N | 4 | `f32` | `build_depth_mm` | Build plate Y dimension. |
-| 40+N | 4 | `f32` | `build_height_mm` | Build plate Z dimension. |
-| 44+N | 4 | `f32` | `layer_height_mm` | Default layer thickness. |
+| 32+N | 4 | `u32` | `build_width_um` | Build plate X dimension, in micrometres. |
+| 36+N | 4 | `u32` | `build_depth_um` | Build plate Y dimension, in micrometres. |
+| 40+N | 4 | `u32` | `build_height_um` | Build plate Z dimension, in micrometres. |
+| 44+N | 4 | `u32` | `layer_height_um` | Default layer thickness, in micrometres. |
 | 48+N | 4 | `u32` | `total_layers` | Total layer count. |
 
 **Display readiness.** Layer masks are stored exactly as the printer must expose them.
@@ -75,11 +75,11 @@ Human-readable print parameters as a single JSON object.
   "bottom_exposure_sec": 30.0,
   "bottom_layer_count": 4,
   "transition_layer_count": 8,
-  "layer_height_mm": 0.05,
-  "lift_distance_mm": 5.0,
-  "lift_speed_mm_min": 65.0,
-  "retract_distance_mm": 5.0,
-  "retract_speed_mm_min": 150.0
+  "layer_height_um": 50,
+  "lift_distance_um": 5000,
+  "lift_speed_um_min": 65000,
+  "retract_distance_um": 5000,
+  "retract_speed_um_min": 150000
 }
 ```
 
@@ -88,20 +88,20 @@ Human-readable print parameters as a single JSON object.
 ```jsonc
 {
   // Two-stage motion
-  "lift_distance2_mm": 3.0,
-  "lift_speed2_mm_min": 180.0,
-  "retract_distance2_mm": 3.0,
-  "retract_speed2_mm_min": 180.0,
+  "lift_distance2_um": 3000,
+  "lift_speed2_um_min": 180000,
+  "retract_distance2_um": 3000,
+  "retract_speed2_um_min": 180000,
 
   // Bottom-layer overrides (inherit from normal if absent)
-  "bottom_lift_distance_mm": 6.0,
-  "bottom_lift_speed_mm_min": 50.0,
-  "bottom_lift_distance2_mm": 4.0,
-  "bottom_lift_speed2_mm_min": 120.0,
-  "bottom_retract_distance_mm": 6.0,
-  "bottom_retract_speed_mm_min": 100.0,
-  "bottom_retract_distance2_mm": 4.0,
-  "bottom_retract_speed2_mm_min": 120.0,
+  "bottom_lift_distance_um": 6000,
+  "bottom_lift_speed_um_min": 50000,
+  "bottom_lift_distance2_um": 4000,
+  "bottom_lift_speed2_um_min": 120000,
+  "bottom_retract_distance_um": 6000,
+  "bottom_retract_speed_um_min": 100000,
+  "bottom_retract_distance2_um": 4000,
+  "bottom_retract_speed2_um_min": 120000,
 
   // Wait/rest times (seconds)
   "wait_time_before_cure_sec": 1.0,
@@ -129,7 +129,7 @@ Human-readable print parameters as a single JSON object.
   // calculation by Odyssey firmware. If omitted, the printer falls back to
   // the traditional exposure-time model.
   "cure_curve": {
-    "dp_um": 120.0,           // Penetration depth (μm) - how deep UV penetrates before dropping to 1/e
+    "dp_um": 120,           // Penetration depth (μm) - how deep UV penetrates before dropping to 1/e
     "ec_mj_cm2": 7.5,         // Critical exposure (mJ/cm²) - energy at which resin begins to cure
     "e0_mj_cm2": 3.0          // Base energy (mJ/cm²) - energy absorbed before polymerization starts
   },
@@ -186,10 +186,10 @@ Human-readable print parameters as a single JSON object.
 
 | Segment | Distance | Speed |
 |---------|----------|-------|
-| Lift 1 - slow peel, to break the layer away from the film | `lift_distance_mm` | `lift_speed_mm_min` |
-| Lift 2 - fast, the remainder of the lift | `lift_distance2_mm` | `lift_speed2_mm_min` |
-| Retract 1 - fast, most of the return | `retract_distance_mm` | `retract_speed_mm_min` |
-| Retract 2 - slow final approach | `retract_distance2_mm` | `retract_speed2_mm_min` |
+| Lift 1 - slow peel, to break the layer away from the film | `lift_distance_um` | `lift_speed_um_min` |
+| Lift 2 - fast, the remainder of the lift | `lift_distance2_um` | `lift_speed2_um_min` |
+| Retract 1 - fast, most of the return | `retract_distance_um` | `retract_speed_um_min` |
+| Retract 2 - slow final approach | `retract_distance2_um` | `retract_speed2_um_min` |
 
 The total travel of a move is the sum of its two segments. A segment whose distance
 or speed is `0.0` is not performed, so a single-stage move is the degenerate case:
@@ -208,8 +208,13 @@ See [§8](11-layer-timing.md#8-per-layer-settings-model) for the complete layer 
 a one-element array and sector 0 uses element 0. If `materials` is absent, material
 identity is unknown and consumers fall back to their own default.
 
-Readers must accept both integer and floating-point JSON number syntax for `f32`
-fields. Readers must ignore unknown JSON keys.
+Lengths are integer micrometres and speeds integer micrometres per minute, so a reader
+compares them exactly instead of within a tolerance. An encoder holding a finer value
+rounds to the nearest unit; a length or speed below one unit is not expressible, and no
+field carries a fractional micrometre. The remaining numeric fields - exposure and wait
+times, energy densities, temperatures, percentages, densities - are ordinary JSON numbers,
+and readers must accept both integer and floating-point syntax for those. Readers must
+ignore unknown JSON keys.
 
 ### 4.3 PROF - Print Profile Chunk
 
@@ -254,7 +259,7 @@ first.
       "model_pattern": "Ares 12K*",
       "display_width_px": 11520,
       "display_height_px": 6480,
-      "pixel_size_um": 19.0
+      "pixel_size_um": 19
     }
   ],
 
@@ -264,39 +269,39 @@ first.
     "manufacturer": "Open Resin Alliance",
     "display_width_px": 11520,
     "display_height_px": 6480,
-    "pixel_size_um": 19.0,
-    "build_width_mm": 218.0,
-    "build_depth_mm": 123.0,
-    "build_height_mm": 250.0,
+    "pixel_size_um": 19,
+    "build_width_um": 218000,
+    "build_depth_um": 123000,
+    "build_height_um": 250000,
     "bit_depth": 8
   },
 
   // Required: all timing and motion settings (same field names as META)
   "settings": {
-    "layer_height_mm": 0.05,
+    "layer_height_um": 50,
     "normal_exposure_sec": 2.5,
     "bottom_exposure_sec": 30.0,
     "bottom_layer_count": 4,
     "transition_layer_count": 8,
 
-    "lift_distance_mm": 5.0,
-    "lift_speed_mm_min": 65.0,
-    "retract_distance_mm": 5.0,
-    "retract_speed_mm_min": 150.0,
+    "lift_distance_um": 5000,
+    "lift_speed_um_min": 65000,
+    "retract_distance_um": 5000,
+    "retract_speed_um_min": 150000,
 
-    "lift_distance2_mm": 3.0,
-    "lift_speed2_mm_min": 180.0,
-    "retract_distance2_mm": 3.0,
-    "retract_speed2_mm_min": 180.0,
+    "lift_distance2_um": 3000,
+    "lift_speed2_um_min": 180000,
+    "retract_distance2_um": 3000,
+    "retract_speed2_um_min": 180000,
 
-    "bottom_lift_distance_mm": 6.0,
-    "bottom_lift_speed_mm_min": 50.0,
-    "bottom_lift_distance2_mm": 4.0,
-    "bottom_lift_speed2_mm_min": 120.0,
-    "bottom_retract_distance_mm": 6.0,
-    "bottom_retract_speed_mm_min": 100.0,
-    "bottom_retract_distance2_mm": 4.0,
-    "bottom_retract_speed2_mm_min": 120.0,
+    "bottom_lift_distance_um": 6000,
+    "bottom_lift_speed_um_min": 50000,
+    "bottom_lift_distance2_um": 4000,
+    "bottom_lift_speed2_um_min": 120000,
+    "bottom_retract_distance_um": 6000,
+    "bottom_retract_speed_um_min": 100000,
+    "bottom_retract_distance2_um": 4000,
+    "bottom_retract_speed2_um_min": 120000,
 
     "wait_time_before_cure_sec": 1.0,
     "wait_time_after_cure_sec": 0.0,
@@ -319,7 +324,7 @@ first.
     // Resin working curve - experimental ([§5.7](08-layer-encoding.md#57-resin-working-curve-experimental)). If omitted, printer falls back
     // to traditional exposure-time model.
     "cure_curve": {
-      "dp_um": 120.0,
+      "dp_um": 120,
       "ec_mj_cm2": 7.5,
       "e0_mj_cm2": 3.0
     }

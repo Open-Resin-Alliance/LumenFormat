@@ -46,13 +46,15 @@ derived from it store the *total* lift and only the second segment:
 
 | LUMEN | ChiTuBox / GOO v5 |
 |-------|-------------------|
-| `lift_distance_mm` + `lift_distance2_mm` | `LiftHeight` (the total) |
-| `retract_distance_mm` | `RetractHeight` (the first segment) |
-| `retract_distance2_mm` | `RetractHeight2` (the second segment) |
-| `bottom_retract_distance2_mm` | `BottomRetractHeight2` |
+| `lift_distance_um` + `lift_distance2_um` | `LiftHeight` (the total) |
+| `retract_distance_um` | `RetractHeight` (the first segment) |
+| `retract_distance2_um` | `RetractHeight2` (the second segment) |
+| `bottom_retract_distance2_um` | `BottomRetractHeight2` |
 
-A converter that copies `lift_distance_mm` straight into `LiftHeight` lifts only a
+A converter that copies `lift_distance_um` straight into `LiftHeight` lifts only a
 fraction of the intended travel, because ours is the first segment where theirs is
-the sum. Note also that the slicer's CTB timing struct carries a
+the sum. It also has a unit to convert: ChiTuBox stores these as millimetre floats, so
+multiply by 1000 writing Lumen and divide reading ChiTuBox, and expect the float to land
+where the integer cannot - a ChiTuBox value of 5.0005 mm has no exact micrometre form. Note also that the slicer's CTB timing struct carries a
 `bottom_retract_height2_mm` field: it is the same quantity as
-`bottom_retract_distance2_mm`, under the other format's name.
+`bottom_retract_distance2_um`, under the other format's name.

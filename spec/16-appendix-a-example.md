@@ -10,7 +10,7 @@ Single-sector, 100 layers, 1920×1080, no encryption (illustrative estimates):
 Offset    Size    Content
 ------    ----    -------
 0         32      File header: LUMN, v1, dir_offset=<end>, chunk_count=8, flags=0x00
-32        ~60     HDR (uncompressed): encoder="DragonFruit 1.0", 1920×1080, layer_height=0.05, 100 layers
+32        ~60     HDR (uncompressed): encoder="DragonFruit 1.0", 1920×1080, layer_height_um=50, 100 layers
 ~92       ~350    META (zstd-compressed, ~1.2 KB uncompressed): full JSON metadata
 ~442      ~800    PROF (zstd-compressed, ~2.5 KB uncompressed): reusable print profile for Odyssey import
 ~1,242    ~5,200  PREV (uncompressed PNG): 400×300 preview
