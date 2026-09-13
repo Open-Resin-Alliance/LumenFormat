@@ -76,10 +76,10 @@ Human-readable print parameters as a single JSON object.
   "bottom_layer_count": 4,
   "transition_layer_count": 8,
   "layer_height_um": 50,
-  "lift_distance_um": 5000,
-  "lift_speed_um_min": 65000,
-  "retract_distance_um": 5000,
-  "retract_speed_um_min": 150000
+  "lift_slow_distance_um": 5000,
+  "lift_slow_speed_um_min": 65000,
+  "retract_fast_distance_um": 5000,
+  "retract_fast_speed_um_min": 150000
 }
 ```
 
@@ -87,22 +87,21 @@ Human-readable print parameters as a single JSON object.
 
 ```jsonc
 {
-  // Two-stage motion. Stage 1 runs first; a lift usually peels slowly and retracts fast,
-  // and stage 2 covers the rest of the move.
-  "lift_distance2_um": 3000,
-  "lift_speed2_um_min": 180000,
-  "retract_distance2_um": 3000,
-  "retract_speed2_um_min": 180000,
+  // Two-stage motion: a lift runs slow then fast, a retract fast then slow.
+  "lift_fast_distance_um": 3000,
+  "lift_fast_speed_um_min": 180000,
+  "retract_slow_distance_um": 3000,
+  "retract_slow_speed_um_min": 180000,
 
   // Bottom-layer overrides (inherit from normal if absent)
-  "bottom_lift_distance_um": 6000,
-  "bottom_lift_speed_um_min": 50000,
-  "bottom_lift_distance2_um": 4000,
-  "bottom_lift_speed2_um_min": 120000,
-  "bottom_retract_distance_um": 6000,
-  "bottom_retract_speed_um_min": 100000,
-  "bottom_retract_distance2_um": 4000,
-  "bottom_retract_speed2_um_min": 120000,
+  "bottom_lift_slow_distance_um": 6000,
+  "bottom_lift_slow_speed_um_min": 50000,
+  "bottom_lift_fast_distance_um": 4000,
+  "bottom_lift_fast_speed_um_min": 120000,
+  "bottom_retract_fast_distance_um": 6000,
+  "bottom_retract_fast_speed_um_min": 100000,
+  "bottom_retract_slow_distance_um": 4000,
+  "bottom_retract_slow_speed_um_min": 120000,
 
   // Wait/rest times (seconds)
   "wait_time_before_cure_sec": 1.0,
@@ -111,11 +110,6 @@ Human-readable print parameters as a single JSON object.
   "bottom_wait_time_before_cure_sec": 1.5,
   "bottom_wait_time_after_cure_sec": 0.0,
   "bottom_wait_time_after_lift_sec": 1.0,
-
-  // Delay mode: "light_off" or "wait_time". Defaults to "light_off" if omitted.
-  "delay_mode": "light_off",
-  "light_off_delay_sec": 1.0,
-  "bottom_light_off_delay_sec": 1.0,
 
   // PWM (0–255, default 255)
   "light_pwm": 255,
@@ -187,20 +181,25 @@ Human-readable print parameters as a single JSON object.
 
 | Segment | Distance | Speed |
 |---------|----------|-------|
-| Lift 1 - slow peel, to break the layer away from the film | `lift_distance_um` | `lift_speed_um_min` |
-| Lift 2 - fast, the remainder of the lift | `lift_distance2_um` | `lift_speed2_um_min` |
-| Retract 1 - fast, most of the return | `retract_distance_um` | `retract_speed_um_min` |
-| Retract 2 - slow final approach | `retract_distance2_um` | `retract_speed2_um_min` |
+| Lift, slow - the peel, to break the layer away from the film | `lift_slow_distance_um` | `lift_slow_speed_um_min` |
+| Lift, fast - the remainder of the lift | `lift_fast_distance_um` | `lift_fast_speed_um_min` |
+| Retract, fast - most of the return | `retract_fast_distance_um` | `retract_fast_speed_um_min` |
+| Retract, slow - the final approach | `retract_slow_distance_um` | `retract_slow_speed_um_min` |
 
-The number is the order of execution, not the speed: a printer performs stage 1 and then
-stage 2. The roles above are the usual ones rather than a rule, and they are not the same
-in both directions - stage 1 is the slow one for a lift and the fast one for a retract - so
-a field is named for when it runs, not for how fast. An encoder may set either stage faster;
-a reader that cares which is which reads the two speeds.
+A lift runs its slow segment first and its fast segment second; a retract runs its fast
+segment first and its slow segment second. The name says which segment it is, so the order
+of execution is never in doubt, and it is the same fact in both directions - which is why
+the fields are named for the role rather than numbered, since the first segment of a lift
+is the slow one and the first segment of a retract is the fast one.
 
-The total travel of a move is the sum of its two segments. A segment whose distance
-or speed is `0` is not performed, so a single-stage move is the degenerate case:
-set the `*2` fields to `0`. The `bottom_*` fields follow the same model.
+The name does not constrain the speeds: an encoder may set either segment faster than the
+other, and a validator must not require that the slow segment is the slower of the two. The
+name describes the part the segment plays in the move, not a comparison.
+
+The total travel of a move is the sum of its two segments. A segment whose distance or speed
+is `0` is not performed, so a single-stage move is the degenerate case: a single-stage lift
+sets `lift_fast_distance_um` to `0`, and a single-stage retract sets `retract_slow_distance_um`
+to `0`. The `bottom_*` fields follow the same model.
 
 **Field resolution for readers:**
 
@@ -291,24 +290,24 @@ first.
     "bottom_layer_count": 4,
     "transition_layer_count": 8,
 
-    "lift_distance_um": 5000,
-    "lift_speed_um_min": 65000,
-    "retract_distance_um": 5000,
-    "retract_speed_um_min": 150000,
+    "lift_slow_distance_um": 5000,
+    "lift_slow_speed_um_min": 65000,
+    "retract_fast_distance_um": 5000,
+    "retract_fast_speed_um_min": 150000,
 
-    "lift_distance2_um": 3000,
-    "lift_speed2_um_min": 180000,
-    "retract_distance2_um": 3000,
-    "retract_speed2_um_min": 180000,
+    "lift_fast_distance_um": 3000,
+    "lift_fast_speed_um_min": 180000,
+    "retract_slow_distance_um": 3000,
+    "retract_slow_speed_um_min": 180000,
 
-    "bottom_lift_distance_um": 6000,
-    "bottom_lift_speed_um_min": 50000,
-    "bottom_lift_distance2_um": 4000,
-    "bottom_lift_speed2_um_min": 120000,
-    "bottom_retract_distance_um": 6000,
-    "bottom_retract_speed_um_min": 100000,
-    "bottom_retract_distance2_um": 4000,
-    "bottom_retract_speed2_um_min": 120000,
+    "bottom_lift_slow_distance_um": 6000,
+    "bottom_lift_slow_speed_um_min": 50000,
+    "bottom_lift_fast_distance_um": 4000,
+    "bottom_lift_fast_speed_um_min": 120000,
+    "bottom_retract_fast_distance_um": 6000,
+    "bottom_retract_fast_speed_um_min": 100000,
+    "bottom_retract_slow_distance_um": 4000,
+    "bottom_retract_slow_speed_um_min": 120000,
 
     "wait_time_before_cure_sec": 1.0,
     "wait_time_after_cure_sec": 0.0,
@@ -316,10 +315,6 @@ first.
     "bottom_wait_time_before_cure_sec": 1.5,
     "bottom_wait_time_after_cure_sec": 0.0,
     "bottom_wait_time_after_lift_sec": 1.0,
-
-    "delay_mode": "light_off",
-    "light_off_delay_sec": 1.0,
-    "bottom_light_off_delay_sec": 1.0,
 
     "light_pwm": 255,
     "bottom_light_pwm": 255,

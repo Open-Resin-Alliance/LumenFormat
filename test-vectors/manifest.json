@@ -14,8 +14,8 @@
       "description": "LTBL entry 0 has sector_count 0 but data_size 2.",
       "expected_failure": "ltbl.empty_layer_no_bytes",
       "file": "invalid/empty-layer-with-bytes.lumen",
-      "file_sha256": "bdcb381cd78c2aeb06898039226b196b841122750f97220881759ffe50f13c83",
-      "file_size": 979,
+      "file_sha256": "c8a4caae4ce0c1d9a94ca2e70cdff30df7b2eb20fb3cf2a6790e7f2034546f6f",
+      "file_size": 987,
       "name": "empty-layer-with-bytes",
       "strict_only": false
     },
@@ -24,8 +24,8 @@
       "description": "Layer 0 stores all-black as tag 0x00 with run_count 0 instead of the empty-layer form.",
       "expected_failure": "ree.no_run_count_zero",
       "file": "invalid/run-count-zero-all-black.lumen",
-      "file_sha256": "c98fe83d156699919bfb27e8f289a1fd0b96e050b2f089f6ca2b39427d7fa2c1",
-      "file_size": 793,
+      "file_sha256": "9471f727d081449fd84b1304872c1f78ccc0cef34d85b99eb065eca222b35686",
+      "file_size": 801,
       "name": "run-count-zero-all-black",
       "strict_only": true
     },
@@ -34,8 +34,8 @@
       "description": "LTBL entry 1 points at block 99 when the file has three blocks.",
       "expected_failure": "ltbl.block_index_in_range",
       "file": "invalid/block-index-out-of-range.lumen",
-      "file_sha256": "d06e5c66ca516f25a328e45f5c153df670dea4545db6424dff33292d52cba492",
-      "file_size": 979,
+      "file_sha256": "f88177186a26f5ed945071d5138537b3e0c3e79a455ac1c49ee0a45e8d423f46",
+      "file_size": 987,
       "name": "block-index-out-of-range",
       "strict_only": false
     },
@@ -44,8 +44,8 @@
       "description": "Block 1 frame_offset leaves a one-byte gap, breaking contiguity.",
       "expected_failure": "layr.block_table_contiguous",
       "file": "invalid/block-table-gap.lumen",
-      "file_sha256": "08b307349796a19bcc8d1ed834962cadd0a3674816046d4390f9cb2d0d4f0e05",
-      "file_size": 979,
+      "file_sha256": "648f385f5e070e02a0711bd55df3a0f552547108060c63f346b610d18cef93a1",
+      "file_size": 987,
       "name": "block-table-gap",
       "strict_only": false
     },
@@ -54,8 +54,8 @@
       "description": "One byte of merkle_root is flipped, so recomputation from layer_hashes disagrees.",
       "expected_failure": "lhas.root_recompute",
       "file": "invalid/merkle-root-mismatch.lumen",
-      "file_sha256": "ea39c4e566867d8c34adbb3af912066a8276775eff5d07a263acbdb31eef9b50",
-      "file_size": 979,
+      "file_sha256": "68141ba1817cf07853d65db7c6a94993947766e02637a3137d714bee9a3d64ec",
+      "file_size": 987,
       "name": "merkle-root-mismatch",
       "strict_only": false
     },
@@ -64,8 +64,8 @@
       "description": "Layer 0's stored leaf hash is altered and merkle_root recomputed to match, so only hashing the actual bytes catches it.",
       "expected_failure": "lhas.leaf_match",
       "file": "invalid/layer-hash-mismatch.lumen",
-      "file_sha256": "1692b094906dbce0fe861bda2b354e55d7d00f62e7104bc0c5e2dd7b18a47aa0",
-      "file_size": 979,
+      "file_sha256": "cf4c63ea5c990fedd8ae058aabe8f98c87efb13db4f0e5feb952f79c56dcc4fd",
+      "file_size": 987,
       "name": "layer-hash-mismatch",
       "strict_only": true
     },
@@ -74,8 +74,8 @@
       "description": "LTBL entry 2 claims a data_size far beyond its block's decompressed size.",
       "expected_failure": "ltbl.offsets_within_block",
       "file": "invalid/layer-range-past-block.lumen",
-      "file_sha256": "c6a9cb41ee25c2370dab68ab3147c26cfdf88c4d5d0e7ccedd73352d19f54b06",
-      "file_size": 979,
+      "file_sha256": "6a1ee7d128a97c1163286f86c8aa226ff519fff1ff91d788b5a99944eadbb5bd",
+      "file_size": 987,
       "name": "layer-range-past-block",
       "strict_only": false
     },
@@ -84,8 +84,8 @@
       "description": "The trailer CRC-32C does not match the file bytes.",
       "expected_failure": "trailer.crc32c",
       "file": "invalid/trailer-crc-mismatch.lumen",
-      "file_sha256": "9ed6e771d83ddaa984649df7ea0d1b15b949b24abe0b32bd6efc209b720dd3bc",
-      "file_size": 979,
+      "file_sha256": "cff49a6b9ad0975fdd27c92c1e6b4f649f43f3838f4dab661a7f3766323a44d3",
+      "file_size": 987,
       "name": "trailer-crc-mismatch",
       "strict_only": false
     },
@@ -94,8 +94,8 @@
       "description": "The file header sets ENCRYPTED but there is no AUTH chunk, so no session key can ever be derived.",
       "expected_failure": "presence.auth",
       "file": "invalid/encrypted-flag-without-auth.lumen",
-      "file_sha256": "5eaaba1ee3a5e8cd9877417f7844ae47ed0f8a606972b8b2333ecaaa5ea06fbd",
-      "file_size": 979,
+      "file_sha256": "4a3c305bed70f5eb22d77820d58efd544b04d83c67b1925fbd12c8137bff1f58",
+      "file_size": 987,
       "name": "encrypted-flag-without-auth",
       "strict_only": false
     },
@@ -119,8 +119,8 @@
       "description": "AUTH.cipher_id is XXXX, which names no algorithm.",
       "expected_failure": "auth.cipher_known",
       "file": "invalid/auth-cipher-unknown.lumen",
-      "file_sha256": "1d00c62375a7761eca08fc042fbf3bbd43ae1152ba83913207f0461ea70a3aaa",
-      "file_size": 11219,
+      "file_sha256": "a1b400864ec69a70f49d6bd66fe6a07ba35d135c5ced452974e866f17733d011",
+      "file_size": 11227,
       "name": "auth-cipher-unknown",
       "strict_only": false
     },
@@ -142,8 +142,8 @@
       "description": "AUTH.mode is 0: neither a password nor a machine binding is declared, so the session key is unreachable.",
       "expected_failure": "crypt.mode_empty",
       "file": "invalid/crypt-mode-empty.lumen",
-      "file_sha256": "b11c7585229fd273468396830c26bd9ad647fecd2be5ccc61c0fae06c9bd5f17",
-      "file_size": 11219,
+      "file_sha256": "eb0ef49c2c9c702b1b8a4edeaa1459baa6914c18f19a7a241d6eccdc3475aaac",
+      "file_size": 11227,
       "name": "crypt-mode-empty",
       "strict_only": false
     },
@@ -167,8 +167,8 @@
       "description": "The password section declares Argon2id iterations = 99, above the recommended ceiling of 10; it is otherwise coherent, so only the cost rule refuses it.",
       "expected_failure": "crypt.argon2_budget",
       "file": "invalid/crypt-argon2-budget.lumen",
-      "file_sha256": "938406ea09b5c9cb687ebf059be7c577627fed6ea9aa4df0229fba78a7d385eb",
-      "file_size": 1010,
+      "file_sha256": "50d9f7909e38b8ebc53fc946a1d0ede1095be571ffe88a79b8a8c24e3fbb2d30",
+      "file_size": 1018,
       "name": "crypt-argon2-budget",
       "strict_only": false
     },
@@ -192,8 +192,8 @@
       "description": "AUTH declares a 64-byte password section, one byte short of the fixed section size.",
       "expected_failure": "crypt.password_section_len",
       "file": "invalid/crypt-password-len-short.lumen",
-      "file_sha256": "0c5d805b2313cbdbb7ab13545b98fc5fdf20d891d26149edf788ed2676d812ee",
-      "file_size": 1010,
+      "file_sha256": "25625422adcfbb73968efbaf8da6e8ad7b20e890ba24712fb04c0e2939fc3260",
+      "file_size": 1018,
       "name": "crypt-password-len-short",
       "strict_only": false
     },
@@ -210,8 +210,8 @@
       "description": "AUTH.mode sets machine-binding but the machine section is empty: no recipient can ever unwrap the session key.",
       "expected_failure": "crypt.machine_section_len",
       "file": "invalid/crypt-machine-len-empty.lumen",
-      "file_sha256": "707c6e9816ee1356f359a2c1f8d6da7cfef876b65724dd7470d391014bc92573",
-      "file_size": 946,
+      "file_sha256": "c60da459d3916386676927e853d81ff7a9ccfbece7d5850c8670936fd94a80a8",
+      "file_size": 954,
       "name": "crypt-machine-len-empty",
       "strict_only": false
     },
@@ -235,8 +235,8 @@
       "description": "ZDIC's descriptor does not set the encrypted flag although the file is encrypted; its bytes are sealed regardless, so the flag is the only disagreement.",
       "expected_failure": "crypt.chunk_flags",
       "file": "invalid/crypt-plaintext-content.lumen",
-      "file_sha256": "2c600c5be68d6bf2ab4f5d00bec0938e724c828c9650c9ba007152fb5483d976",
-      "file_size": 11219,
+      "file_sha256": "060fc10fb2db5542672dcf4d1934a3b0e7bfe3789adc622c1f9d8def0690977d",
+      "file_size": 11227,
       "name": "crypt-plaintext-content",
       "strict_only": false
     },
@@ -260,8 +260,8 @@
       "description": "One ciphertext byte of LAYR block 0 is flipped, so its AEAD tag must fail; a reader must not decompress or parse a block it cannot authenticate.",
       "expected_failure": "crypt.tag_verify",
       "file": "invalid/crypt-tag-corrupt.lumen",
-      "file_sha256": "57a5946db04d90842bc3fa4768d302d430c072009f62dd543c63353ebd18d4f7",
-      "file_size": 11219,
+      "file_sha256": "bd329b0a222ce075f2dc433e246cd1871a3ae39b128db2c034b55bf96b27de1b",
+      "file_size": 11227,
       "name": "crypt-tag-corrupt",
       "strict_only": false
     },
@@ -270,8 +270,8 @@
       "description": "PROF.profile_type is \"resin\", which is not one of the three defined types.",
       "expected_failure": "prof.profile_type",
       "file": "invalid/prof-type-unknown.lumen",
-      "file_sha256": "6abb314578c6a1738603da44488ab83e15d5bd8b617f48d1b74b99056090aa50",
-      "file_size": 1482,
+      "file_sha256": "486c8b8bc2d97b2df9bcd8ad96f6abe2035f2342382e2348b752690c9f2cae4c",
+      "file_size": 1474,
       "name": "prof-type-unknown",
       "strict_only": false
     },
@@ -280,8 +280,8 @@
       "description": "PROF.profile_name is an empty string.",
       "expected_failure": "prof.profile_identity",
       "file": "invalid/prof-identity-empty.lumen",
-      "file_sha256": "ff58c6e8234f2ba752117d41f94f164925389de929c7921ec82986391961fbc7",
-      "file_size": 1474,
+      "file_sha256": "01362717fe81924d3781698236450f6fa38a9b022e5eb32d762b4492136f0650",
+      "file_size": 1458,
       "name": "prof-identity-empty",
       "strict_only": false
     },
@@ -290,8 +290,8 @@
       "description": "PROF settings carry a zero normal exposure.",
       "expected_failure": "prof.settings_exposure",
       "file": "invalid/prof-settings-exposure.lumen",
-      "file_sha256": "96ff4a51a9fa68a5ea100e3bfa8dc04bc4027139814e831a6ece92623f9ad6f1",
-      "file_size": 1490,
+      "file_sha256": "f34d24ff06fb4174b5f1e3038bdc453835dbf1cbe0f4ecedb486bf0b2bf27bbc",
+      "file_size": 1474,
       "name": "prof-settings-exposure",
       "strict_only": false
     },
@@ -300,8 +300,8 @@
       "description": "PROF settings carry a zero layer height.",
       "expected_failure": "prof.settings_layer_height",
       "file": "invalid/prof-settings-layer-height.lumen",
-      "file_sha256": "9085aa6ede9eefd1710b275e53c9970e24c82dc4bfdc94e68c9ef1a7e0b41374",
-      "file_size": 1490,
+      "file_sha256": "fa438b3a88f7ef5d3de2dba2ee815f7bd7ee940f61468911e52850d7ebfefdee",
+      "file_size": 1474,
       "name": "prof-settings-layer-height",
       "strict_only": false
     },
@@ -310,8 +310,8 @@
       "description": "PROF cure curve has dp_um = 0.0, which no resin can have.",
       "expected_failure": "prof.cure_curve",
       "file": "invalid/prof-cure-curve.lumen",
-      "file_sha256": "14e423c4acdef69c11a2016e9b4b9a15ac07872f4235352b30da5a1c252d258c",
-      "file_size": 1482,
+      "file_sha256": "baf23db373987668e91b11064128ed525a02fde11b1bc7da9db79a4a3cf882b9",
+      "file_size": 1474,
       "name": "prof-cure-curve",
       "strict_only": false
     },
@@ -320,8 +320,8 @@
       "description": "PROF.profile_uuid is not a UUID.",
       "expected_failure": "prof.profile_uuid",
       "file": "invalid/prof-uuid-malformed.lumen",
-      "file_sha256": "f5538a3221f122f01f5d72c76b89dd3a5158f69f3e8317130e740efd079c49c4",
-      "file_size": 1458,
+      "file_sha256": "4549c5b43750e5ffc308ae7e1b16351290567d9bee4122ee2ba1a62e52c2bcf4",
+      "file_size": 1450,
       "name": "prof-uuid-malformed",
       "strict_only": false
     },
@@ -330,8 +330,8 @@
       "description": "PROF.materials is an empty array, which the META.materials shape rules forbid.",
       "expected_failure": "prof.materials_shape",
       "file": "invalid/prof-materials-shape.lumen",
-      "file_sha256": "dbc32284f2fbdbb1d5b471a8cc8af18ebd18374ded7eed8477be9385507c6855",
-      "file_size": 1362,
+      "file_sha256": "99e3b0d052e38bc46a69ece0b4c6b9e846571ff22170647d72a7fc1d9a20858c",
+      "file_size": 1346,
       "name": "prof-materials-shape",
       "strict_only": false
     },
@@ -340,8 +340,8 @@
       "description": "An LROV entry carries both layer and layer_range, which the entry form forbids.",
       "expected_failure": "lrov.entry_form",
       "file": "invalid/lrov-entry-form-both.lumen",
-      "file_sha256": "dc326d77707b237caf3aa106ad8756b1bb8e72117405bee0307c4006310459c8",
-      "file_size": 1258,
+      "file_sha256": "ad959964f76109368c4a6fd3a2d3e930fbc5913f23289f088f8148afee737e49",
+      "file_size": 1266,
       "name": "lrov-entry-form-both",
       "strict_only": false
     },
@@ -350,8 +350,8 @@
       "description": "An LROV entry overrides layer 40 in a ten-layer file.",
       "expected_failure": "lrov.layer_index_range",
       "file": "invalid/lrov-layer-out-of-range.lumen",
-      "file_sha256": "b2977f04c5372c082b04fb13e16d97987b5d41fca3ef00f3e2ae1a432e3d4678",
-      "file_size": 1242,
+      "file_sha256": "bdfc6afb710f72805d2ac6fcfd16796a56484613221c2c76fd8c4125fa0464da",
+      "file_size": 1250,
       "name": "lrov-layer-out-of-range",
       "strict_only": false
     },
@@ -360,8 +360,8 @@
       "description": "An LROV layer_range ends before it begins.",
       "expected_failure": "lrov.layer_range_order",
       "file": "invalid/lrov-range-reversed.lumen",
-      "file_sha256": "2636adfdfa2aaff343cef93bdf9a2a1173dab8cd4a6bd3b947b6609c0d7105ad",
-      "file_size": 1258,
+      "file_sha256": "93ce4bf64eb9b6de3dcf01c4cc5c1652909d648b39c5c07790f0c670220a67f0",
+      "file_size": 1266,
       "name": "lrov-range-reversed",
       "strict_only": false
     },
@@ -370,8 +370,8 @@
       "description": "An LROV entry targets sector 7, which no SECT chunk in this single-sector file defines.",
       "expected_failure": "lrov.sector_id_defined",
       "file": "invalid/lrov-sector-undefined.lumen",
-      "file_sha256": "2ef33ee23a79b7b79f7fb3d1c7aa22fd0c69129c2c2859b7360b68ed200fa8bc",
-      "file_size": 1266,
+      "file_sha256": "94abe865aca681bde91a0b44fec6c5d66015368a4a571dd5a431c994a084f03c",
+      "file_size": 1274,
       "name": "lrov-sector-undefined",
       "strict_only": false
     },
@@ -380,8 +380,8 @@
       "description": "A PREV chunk sets reserved flag bit 5 alongside role 1; only bits 0-3 carry the role.",
       "expected_failure": "prev.flags",
       "file": "invalid/prev-flags.lumen",
-      "file_sha256": "947bf29ed5be37284d149ed1b8f6e10747cb191295fba7eec7a397625872cba3",
-      "file_size": 926,
+      "file_sha256": "86d67519912f3e74a2297281799c9583e335099863008ec76a8a0a8d32ebe218",
+      "file_size": 934,
       "name": "prev-flags",
       "strict_only": false
     },
@@ -390,8 +390,8 @@
       "description": "A PREV payload does not begin with the PNG signature. A loose reader ignores previews and must still accept the file; a strict validator rejects it.",
       "expected_failure": "prev.png_signature",
       "file": "invalid/prev-not-png.lumen",
-      "file_sha256": "5593a5f5f58a1fa3c4137d9e39decb6651e609e81a52ddc4ade852c169a5c024",
-      "file_size": 926,
+      "file_sha256": "9207e3f510826598f59f335d30b99714226bb9fede8e1250f926053761f82032",
+      "file_size": 934,
       "name": "prev-not-png",
       "strict_only": true
     },
@@ -400,8 +400,8 @@
       "description": "The embedded scene is a JSON array rather than a VOXL document: the payload begins with neither the V2 magic nor the V1 document marker. A loose reader never looks inside the chunk and must still accept the file; a strict validator rejects it.",
       "expected_failure": "voxl.signature",
       "file": "invalid/voxl-not-voxl.lumen",
-      "file_sha256": "91d7c3732c134378fe8e9928a082631c40f6304b9ba0477a5d265f5d7eb61101",
-      "file_size": 886,
+      "file_sha256": "944731696e80f3d3a269574ddf76847d3a9f2815226bdc9369717aab505cc843",
+      "file_size": 894,
       "name": "voxl-not-voxl",
       "strict_only": true
     },
@@ -410,8 +410,8 @@
       "description": "An extension sets the critical bit, so a reader that does not implement it must refuse the file rather than print an approximation.",
       "expected_failure": "extd.critical",
       "file": "invalid/extd-critical.lumen",
-      "file_sha256": "82fc38c08e2237618e93e4f02e6b6e02aba44702187a49d4cd5e095d2ae0779d",
-      "file_size": 862,
+      "file_sha256": "450480b2e26e5420ab254f40c80105d547547dde6332114f5c3e3c97100f24ad",
+      "file_size": 870,
       "name": "extd-critical",
       "strict_only": false
     },
@@ -420,8 +420,8 @@
       "description": "An EXTD payload is four bytes, too short to carry ext_version and ext_type.",
       "expected_failure": "extd.frame",
       "file": "invalid/extd-truncated.lumen",
-      "file_sha256": "abc8d4cb94be938a22776697e0f4b1a5377b054d2d315a32acb06166296b0ed8",
-      "file_size": 854,
+      "file_sha256": "fe1f0b0ebc2cca4453e0a0fef51aba8d2b305c62c918f91fc0e10f83f80ea765",
+      "file_size": 862,
       "name": "extd-truncated",
       "strict_only": false
     },
@@ -430,8 +430,8 @@
       "description": "An EXTD chunk sets reserved flag bit 0, which must be 0.",
       "expected_failure": "extd.flags",
       "file": "invalid/extd-reserved-flags.lumen",
-      "file_sha256": "3a3d5abbdcd74ab132626d1dcb0b4bb54209b7686297f898511e99e55148851b",
-      "file_size": 862,
+      "file_sha256": "f1c87ebeeebd0f29294a3311f3a86da2c5825c20d8fca3ab2a284fd9c58296f4",
+      "file_size": 870,
       "name": "extd-reserved-flags",
       "strict_only": false
     },
@@ -440,8 +440,8 @@
       "description": "An EXTD ext_type is four non-ASCII bytes, so no reader can name the extension.",
       "expected_failure": "extd.ext_type",
       "file": "invalid/extd-type-nonascii.lumen",
-      "file_sha256": "27f5401aa61d13d68f65a1aec1d9e161d3e478eee5524480f69ce8d1b8aafc40",
-      "file_size": 862,
+      "file_sha256": "a554348debcf6e3601157da1349d205594f53963cba1ba8e1857f1ee5b0df398",
+      "file_size": 870,
       "name": "extd-type-nonascii",
       "strict_only": false
     },
@@ -450,8 +450,8 @@
       "description": "META's descriptor sets the encrypted bit while the file header does not, so the file carries no AUTH chunk and no key could open it.",
       "expected_failure": "crypt.chunk_flags",
       "file": "invalid/sealed-without-auth.lumen",
-      "file_sha256": "251336df8b2c50c75f1c1a505023846dd27834328c8e442f5ddd0006c8e640ec",
-      "file_size": 979,
+      "file_sha256": "93148f25b44c01d453955dc676ada86b840e872294dba06fb437c6054f04121a",
+      "file_size": 987,
       "name": "sealed-without-auth",
       "strict_only": false
     }
@@ -483,7 +483,7 @@
         "dict_size": 0,
         "present": false
       },
-      "dir_offset": 811,
+      "dir_offset": 819,
       "display_height_px": 48,
       "display_width_px": 64,
       "features": [
@@ -495,8 +495,8 @@
         "no-dictionary"
       ],
       "file": "valid/binary-basic.lumen",
-      "file_sha256": "de228ebdcf25b9f7ba439bdfd6ffe466ce04ef4d4adfa5f1bf534a4ebce57bb1",
-      "file_size": 979,
+      "file_sha256": "ea4b0df57cc4035bc1c01b70560e179a1fbce61cfca1cf8bdedbf41579401fdf",
+      "file_size": 987,
       "header_flags": 0,
       "layer_height_um": 50,
       "layers": [
@@ -581,8 +581,8 @@
       "multi_sector": false,
       "name": "binary-basic",
       "total_layers": 6,
-      "total_uncompressed_size": 895,
-      "trailer_crc32c": "0x7CDE0938"
+      "total_uncompressed_size": 915,
+      "trailer_crc32c": "0xD8FE34F8"
     },
     {
       "block_size_layers": 16,
@@ -615,7 +615,7 @@
         "dict_size": 1024,
         "present": true
       },
-      "dir_offset": 20629,
+      "dir_offset": 20637,
       "display_height_px": 192,
       "display_width_px": 256,
       "features": [
@@ -626,8 +626,8 @@
         "split-ree"
       ],
       "file": "valid/dict-multi-block.lumen",
-      "file_sha256": "f936979776e52b955d3ae5d2a0d80aa81ae88a879a97a2d759aef76b37994af8",
-      "file_size": 20829,
+      "file_sha256": "3edd5d05378f6d4dc15c85173f68904b5a3f6b8e138ac33476fa441b753c256b",
+      "file_size": 20837,
       "header_flags": 0,
       "layer_height_um": 50,
       "layers": [
@@ -1468,8 +1468,8 @@
       "multi_sector": false,
       "name": "dict-multi-block",
       "total_layers": 64,
-      "total_uncompressed_size": 20709,
-      "trailer_crc32c": "0xA69DBA70"
+      "total_uncompressed_size": 20729,
+      "trailer_crc32c": "0x00F1A518"
     },
     {
       "block_size_layers": 2,
@@ -1492,7 +1492,7 @@
         "dict_size": 0,
         "present": false
       },
-      "dir_offset": 861,
+      "dir_offset": 869,
       "display_height_px": 48,
       "display_width_px": 64,
       "features": [
@@ -1502,8 +1502,8 @@
         "binary-ree"
       ],
       "file": "valid/multi-sector.lumen",
-      "file_sha256": "afbb044a1b9fc243fa0e7a63b1f7f91ca1318a09df086ad2ba7051db12954428",
-      "file_size": 1061,
+      "file_sha256": "0df7ff2c1032627d80507719ed371eb8ae032dfd29bec969c8a6d157b610c039",
+      "file_size": 1069,
       "header_flags": 2,
       "layer_height_um": 50,
       "layers": [
@@ -1564,8 +1564,8 @@
       "multi_sector": true,
       "name": "multi-sector",
       "total_layers": 4,
-      "total_uncompressed_size": 1070,
-      "trailer_crc32c": "0xC0931B7B"
+      "total_uncompressed_size": 1090,
+      "trailer_crc32c": "0x87CD0300"
     },
     {
       "block_size_layers": 16,
@@ -1603,7 +1603,7 @@
         "dict_size": 1024,
         "present": true
       },
-      "dir_offset": 10987,
+      "dir_offset": 10995,
       "display_height_px": 192,
       "display_width_px": 256,
       "features": [
@@ -1616,8 +1616,8 @@
         "multi-block"
       ],
       "file": "valid/encrypted-password.lumen",
-      "file_sha256": "5318fa6d687d9562bdb5cacf73d4160d171d9b301b7f7f20d77565a1da5759a7",
-      "file_size": 11219,
+      "file_sha256": "a1dabada96642844827d32e75677cf417403bd7a7c5260e535b7fd4d0cf792ba",
+      "file_size": 11227,
       "header_flags": 8,
       "layer_height_um": 50,
       "layers": [
@@ -2042,8 +2042,8 @@
       "multi_sector": false,
       "name": "encrypted-password",
       "total_layers": 32,
-      "total_uncompressed_size": 11016,
-      "trailer_crc32c": "0xF128135C"
+      "total_uncompressed_size": 11036,
+      "trailer_crc32c": "0xC212D4FA"
     },
     {
       "block_size_layers": 4,
@@ -2071,7 +2071,7 @@
         "dict_size": 0,
         "present": false
       },
-      "dir_offset": 1011,
+      "dir_offset": 1019,
       "display_height_px": 48,
       "display_width_px": 64,
       "features": [
@@ -2084,8 +2084,8 @@
         "low-order-point"
       ],
       "file": "valid/encrypted-machine.lumen",
-      "file_sha256": "e45641a6053328cb011a21220ca8af349220a28600585a6bac87f6e2f0d4a8f9",
-      "file_size": 1211,
+      "file_sha256": "6866bfc77c914badbfaae0119245ad2cd5da55ee007e3260579c038a95e223bc",
+      "file_size": 1219,
       "header_flags": 8,
       "layer_height_um": 50,
       "layers": [
@@ -2144,8 +2144,8 @@
       "multi_sector": false,
       "name": "encrypted-machine",
       "total_layers": 4,
-      "total_uncompressed_size": 1067,
-      "trailer_crc32c": "0x06D6BD04"
+      "total_uncompressed_size": 1087,
+      "trailer_crc32c": "0x2C263C0D"
     },
     {
       "block_size_layers": 2,
@@ -2191,7 +2191,7 @@
         "dict_size": 0,
         "present": false
       },
-      "dir_offset": 1360,
+      "dir_offset": 1368,
       "display_height_px": 48,
       "display_width_px": 64,
       "features": [
@@ -2203,8 +2203,8 @@
         "aes-256-gcm"
       ],
       "file": "valid/encrypted-both.lumen",
-      "file_sha256": "eee71ab1f7e24ce2e99b54ca2b400ca13c3d94077bc76bf293f1dfbaa1b54b9b",
-      "file_size": 1592,
+      "file_sha256": "4bcca9d922c323ef9dd1faa7d9fd63260af68fd938da278a940396c438dfee9d",
+      "file_size": 1600,
       "header_flags": 10,
       "layer_height_um": 50,
       "layers": [
@@ -2291,8 +2291,8 @@
       "multi_sector": true,
       "name": "encrypted-both",
       "total_layers": 6,
-      "total_uncompressed_size": 1510,
-      "trailer_crc32c": "0x38A84624"
+      "total_uncompressed_size": 1530,
+      "trailer_crc32c": "0x30CD2734"
     },
     {
       "block_size_layers": 2,
@@ -2310,7 +2310,7 @@
       ],
       "chunk_count": 7,
       "chunk_payload_sha256": {
-        "PROF": "1dcc130659d16ff2989b14d228cbe43ca3106a1176e070d1260ade5388fd9a1d"
+        "PROF": "6759db4987ca4a107852ab762bef96a12c4e2ee8fd507e795e77bebfde1b4178"
       },
       "crypto": {
         "argon2": {
@@ -2333,7 +2333,7 @@
         "dict_size": 0,
         "present": false
       },
-      "dir_offset": 1482,
+      "dir_offset": 1466,
       "display_height_px": 48,
       "display_width_px": 64,
       "features": [
@@ -2347,8 +2347,8 @@
         "aes-256-gcm"
       ],
       "file": "valid/print-profile.lumen",
-      "file_sha256": "e219e39a17e1a9028d9f3f7c70234dc64c210e8f7255eaca5e6adffc6c125120",
-      "file_size": 1714,
+      "file_sha256": "195d59c9101ca3a3ccbc7318cccddc6f352318ec24140d0e1525ecb1ab8aa4bf",
+      "file_size": 1698,
       "header_flags": 8,
       "layer_height_um": 50,
       "layers": [
@@ -2409,8 +2409,8 @@
       "multi_sector": false,
       "name": "print-profile",
       "total_layers": 4,
-      "total_uncompressed_size": 2377,
-      "trailer_crc32c": "0x8418E64E"
+      "total_uncompressed_size": 2388,
+      "trailer_crc32c": "0x9796575C"
     },
     {
       "block_size_layers": 5,
@@ -2428,7 +2428,7 @@
       ],
       "chunk_count": 6,
       "chunk_payload_sha256": {
-        "LROV": "04b62e07214ac6caaebcc35e82fde2ba2ffab0057f5eca0b1e9c81318b606852"
+        "LROV": "1959d7368f5e3945fbc92f24d5e3fddfa9e28a6bd17c4d4f69a956a5507fb2c4"
       },
       "description": "Ten layers with an LROV chunk covering a single layer, an inclusive layer range scoped to sector 0, and a range that applies to every sector.",
       "dict": {
@@ -2436,7 +2436,7 @@
         "dict_size": 0,
         "present": false
       },
-      "dir_offset": 1146,
+      "dir_offset": 1154,
       "display_height_px": 48,
       "display_width_px": 64,
       "features": [
@@ -2446,8 +2446,8 @@
         "sector-scoped-override"
       ],
       "file": "valid/layer-overrides.lumen",
-      "file_sha256": "59d1b6414a7af903176f9a778cb35fae24546eb45c623aa11aee8a8a192f395f",
-      "file_size": 1346,
+      "file_sha256": "06455bce70e5eeaddee684e880a330362186e77bdb079341b25f04aea4306d1d",
+      "file_size": 1354,
       "header_flags": 0,
       "layer_height_um": 50,
       "layers": [
@@ -2586,8 +2586,8 @@
       "multi_sector": false,
       "name": "layer-overrides",
       "total_layers": 10,
-      "total_uncompressed_size": 1422,
-      "trailer_crc32c": "0xD1756D55"
+      "total_uncompressed_size": 1447,
+      "trailer_crc32c": "0x9F35530B"
     },
     {
       "block_size_layers": 2,
@@ -2631,7 +2631,7 @@
         "dict_size": 0,
         "present": false
       },
-      "dir_offset": 1734,
+      "dir_offset": 1742,
       "display_height_px": 48,
       "display_width_px": 64,
       "features": [
@@ -2644,8 +2644,8 @@
         "aes-256-gcm"
       ],
       "file": "valid/previews.lumen",
-      "file_sha256": "d402e8d794f3010801a071ffabdc6b260554ec57e0674b278ef79d769a9189d3",
-      "file_size": 1998,
+      "file_sha256": "1b027c51a5eb91ac2cc6f98be52fe3070a31e951c07ede1a58927451e7f29d42",
+      "file_size": 2006,
       "header_flags": 8,
       "layer_height_um": 50,
       "layers": [
@@ -2706,8 +2706,8 @@
       "multi_sector": false,
       "name": "previews",
       "total_layers": 4,
-      "total_uncompressed_size": 1752,
-      "trailer_crc32c": "0x6DD71E7F"
+      "total_uncompressed_size": 1772,
+      "trailer_crc32c": "0x74D6C7EF"
     },
     {
       "block_size_layers": 2,
@@ -2748,7 +2748,7 @@
         "dict_size": 0,
         "present": false
       },
-      "dir_offset": 998,
+      "dir_offset": 1006,
       "display_height_px": 48,
       "display_width_px": 64,
       "features": [
@@ -2760,8 +2760,8 @@
         "aes-256-gcm"
       ],
       "file": "valid/embedded-scene.lumen",
-      "file_sha256": "ec7230ab4ae58cf58f5d301629818e2344af3293b4ae8a5a62e8ffab02332f0d",
-      "file_size": 1230,
+      "file_sha256": "f84333dc55e1917358915188680e4e02acbf5c2c244a073bb392dcfe06fb4546",
+      "file_size": 1238,
       "header_flags": 8,
       "layer_height_um": 50,
       "layers": [
@@ -2822,8 +2822,8 @@
       "multi_sector": false,
       "name": "embedded-scene",
       "total_layers": 4,
-      "total_uncompressed_size": 1092,
-      "trailer_crc32c": "0xB4273F00"
+      "total_uncompressed_size": 1112,
+      "trailer_crc32c": "0xDA4A0266"
     },
     {
       "block_size_layers": 2,
@@ -2852,7 +2852,7 @@
         "dict_size": 0,
         "present": false
       },
-      "dir_offset": 726,
+      "dir_offset": 734,
       "display_height_px": 48,
       "display_width_px": 64,
       "features": [
@@ -2863,8 +2863,8 @@
         "skippable-extension"
       ],
       "file": "valid/extensions.lumen",
-      "file_sha256": "53fed1fc6522fc34d59f8c5ae16aa0a8d37853932fc6b418dbdeda71a27b512f",
-      "file_size": 958,
+      "file_sha256": "3262c87ad9dbb2229f150290b3157632710a1c110592e2ed79c946f01c90f3e4",
+      "file_size": 966,
       "header_flags": 0,
       "layer_height_um": 50,
       "layers": [
@@ -2925,8 +2925,8 @@
       "multi_sector": false,
       "name": "extensions",
       "total_layers": 4,
-      "total_uncompressed_size": 784,
-      "trailer_crc32c": "0xF482F95C"
+      "total_uncompressed_size": 804,
+      "trailer_crc32c": "0xC3C1D30F"
     }
   ]
 }

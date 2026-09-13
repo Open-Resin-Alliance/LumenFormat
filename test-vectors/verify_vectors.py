@@ -643,8 +643,8 @@ def validate(path: str, strict: bool, verbose: bool = False, crypto: dict | None
     mats = meta.get("materials")
     chk("meta.required_fields", all(k in meta for k in (
         "meta_version", "normal_exposure_sec", "bottom_exposure_sec", "bottom_layer_count",
-        "transition_layer_count", "layer_height_um", "lift_distance_um", "lift_speed_um_min",
-        "retract_distance_um", "retract_speed_um_min")))
+        "transition_layer_count", "layer_height_um", "lift_slow_distance_um", "lift_slow_speed_um_min",
+        "retract_fast_distance_um", "retract_fast_speed_um_min")))
     chk("meta.materials_shape", materials_shape_ok(mats))
     sects = [json.loads(content_entry(e)) for e in find(b"SECT")]
     chk("sect.sector_id_nonzero", all(s.get("sector_id", 0) >= 1 for s in sects))

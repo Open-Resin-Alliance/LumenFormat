@@ -38,7 +38,7 @@
 - [ ] `HDR.display_width_px × display_height_px > 0`.
 - [ ] `HDR.physical_width_px` is an integer multiple of `display_width_px`, and `physical_height_px` is an integer multiple of `display_height_px`. A ratio of 1 means one display pixel per physical pixel.
 - [ ] `META.meta_version` is present and recognized.
-- [ ] META JSON contains all required fields (`meta_version`, `normal_exposure_sec`, `bottom_exposure_sec`, `bottom_layer_count`, `transition_layer_count`, `layer_height_um`, `lift_distance_um`, `lift_speed_um_min`, `retract_distance_um`, `retract_speed_um_min`).
+- [ ] META JSON contains all required fields (`meta_version`, `normal_exposure_sec`, `bottom_exposure_sec`, `bottom_layer_count`, `transition_layer_count`, `layer_height_um`, `lift_slow_distance_um`, `lift_slow_speed_um_min`, `retract_fast_distance_um`, `retract_fast_speed_um_min`).
 - [ ] `META.normal_exposure_sec > 0.0`.
 - [ ] `META.bottom_exposure_sec > 0.0`.
 - [ ] `META.layer_height_um > 0`.
