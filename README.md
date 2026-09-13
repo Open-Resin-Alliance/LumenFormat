@@ -13,7 +13,15 @@ Written and maintained by Paul Skapczyk.
 Rendered: <https://openresin.org/specs/lumen>
 
 Status: **LUMEN v1.0**, published 2026-09-12. Corrections and discussion are welcome
-as GitHub issues. Changes to the published version follow the change-control policy in the
+as GitHub issues. Once the revision is published, changes follow the change-control policy in the
 specification (§10.3): an erratum may correct a published revision in place, additive
 changes ship as a minor revision, and anything that changes what a conforming encoder
-writes waits for the next major revision.
+writes waits for the next major revision. While `status.json` says `draft`, the revision
+is still being worked on and that policy does not bind it yet.
+
+`status.json` is the machine-readable answer to "which revision is this, and is it
+finished": `version` and `status` (`draft` or `published`) describe the working tree, and
+`stable` names the git ref of the published revision once there is one. The website reads
+this file, so the published specification it shows is the one this repository declares -
+a draft in progress is not published by being pushed. Keep it current with the
+specification.
