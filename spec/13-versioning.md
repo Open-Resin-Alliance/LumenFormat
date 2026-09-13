@@ -36,23 +36,27 @@ sub-version.
 
 ### 10.3 Change Control
 
-LUMEN v1.0 is published, so this specification is a contract: a file that conforms to
-it must keep working. Every change to a published revision falls into one of three
-classes, and the class decides what the change may touch.
+A published revision is a contract: a file that conforms to it must keep working, and its
+text does not change. Every change ships as a new revision, and the kind of change decides
+which number moves.
 
-| Class | What it covers | Version effect |
-|-------|----------------|----------------|
-| **Erratum** | Text that contradicts another part; a wrong offset, length or unit; an undefined term; an ambiguity that two conforming implementations could read two ways. | none |
-| **Additive** | A new optional chunk type, JSON key, reserved code, extension type, or validation check a conforming reader may skip. | that field's own sub-version where it has one; `header.version` unchanged |
-| **Breaking** | A different layout for an existing field, a changed meaning for an existing value, a removed chunk or field, or different constants for an algorithm this document specifies. | `header.version` is bumped |
+| Class | What it covers | Ships as |
+|-------|----------------|----------|
+| **Correction** | Text that contradicts another part; a wrong offset, length or unit; an undefined term; an ambiguity that two conforming implementations could read two ways. It MUST NOT change what a conforming encoder writes for an input the specification already determined. | a patch revision, `v1.0.1` |
+| **Additive** | A new optional chunk type, JSON key, reserved code, extension type, or validation check a conforming reader may skip. | a minor revision, `v1.1`; that field's own sub-version where it has one, and `header.version` unchanged |
+| **Breaking** | A different layout for an existing field, a changed meaning for an existing value, a removed chunk or field, or different constants for an algorithm this document specifies. | a major revision, `v2.0`, with `header.version = 2` |
 
-**Errata** are the only changes that may alter the text of a published revision in
-place. An erratum may resolve an ambiguity, including one this document caused, but
-it MUST NOT change what a conforming encoder writes for an input the specification
-already determined. Where an ambiguity had no single reading, the erratum names the
-reading that is now correct, and a file produced under another reading is not a v1.0
-file. The encryption constants in
-[§4.4.1](04-chunk-auth.md#441-password-section) were fixed this way.
+**A revision is a draft until the repository declares it published, and a draft may be
+revised in place** - that is what the declaration is for. Once published it is immutable:
+the text of `v1.0` is the text of `v1.0` for good, and any change to it, including a
+correction, is a new revision with its own number. An implementation can therefore name the
+revision it was written against and be understood, which is the whole point of the number.
+
+A correction that resolves an ambiguity with no single reading names the reading that is now
+correct, and a file produced under another reading is not a conforming file for that
+revision. The encryption constants in
+[§4.4.1](04-chunk-auth.md#441-password-section) were pinned this way, while this document was
+still a draft.
 
 **Additive** changes ship as a minor revision of this document (`v1.1`) and leave
 `header.version = 1`. A reader that predates one skips what it does not know
@@ -72,8 +76,10 @@ not removed before v2.
   reader, including readers that implement none of its optional chunks.
 - A field's meaning never changes silently. Redefining a value requires that field's
   sub-version or a container version bump.
-- Each published revision records its class and its changes in the repository's
-  release notes, so an implementation can audit itself against it.
+- Each published revision records its class and its changes in the repository's release
+  notes, so an implementation can audit itself against it.
+- A published revision's text never changes. Corrections reach it as a new revision, which
+  an implementation can see and choose to adopt.
 
-A correction that changes what a conforming encoder writes is not an erratum: it waits
-for the next minor or major revision.
+A change that alters what a conforming encoder writes is not a correction: it is additive or
+breaking, and it takes the number that says so.
