@@ -13,6 +13,7 @@ LUMEN v1.0 and are validated against it.
 | `manifest.json` | Golden data for every vector: sizes, offsets, block table, per-layer hashes, Merkle root, CRC-32C, and the credentials and parameters for encrypted vectors |
 | `make_vectors.py` | Reference encoder that regenerates the corpus from the specification |
 | `verify_vectors.py` | Independent reader and validator |
+| `cross_check.py` | Points that validator at files the Rust implementation wrote; see [`../rust/lumen/`](../rust/lumen/) |
 
 `verify_vectors.py` shares no code with `make_vectors.py`: the primitives and the
 reader logic are reimplemented from the spec. Agreement between them is therefore
@@ -26,6 +27,16 @@ pip install zstandard cryptography argon2-cffi
 python verify_vectors.py        # validate the committed corpus
 python verify_vectors.py -v     # print every individual check
 python make_vectors.py          # regenerate valid/, invalid/ and manifest.json
+```
+
+`cross_check.py` runs `verify_vectors.py` against a file written by the Rust
+implementation rather than against the committed corpus, which checks the
+opposite direction of the same claim - an independent reader accepting our
+writer's bytes. It needs those files first:
+
+```sh
+cargo run --manifest-path rust/lumen/Cargo.toml --example make_test_file -- /tmp/sample
+python cross_check.py /tmp/sample
 ```
 
 `verify_vectors.py` exits 0 only if every valid vector passes **and** every invalid
