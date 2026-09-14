@@ -8,6 +8,9 @@ Written and maintained by Paul Skapczyk.
   (`§3.1`) are stable anchors across them.
 - **[test-vectors/](test-vectors/)** — byte-exact conformance vectors and an
   independent validator
+- **[rust/lumen/](rust/lumen/)** — the reference encoder, decoder and validator in
+  Rust, for anything that reads or writes `.lumen` without re-deriving the format
+  from this document
 - **[LICENSE](LICENSE)** — MIT
 
 Rendered: <https://openresin.org/specs/lumen>
