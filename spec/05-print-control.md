@@ -2,7 +2,7 @@
 
 <!-- Part of the LUMEN Format Specification. Section numbers (`§3.1`) are stable anchors across the parts. -->
 
-### 4.5 SECT - Sector Definition Chunk
+## 4.5 SECT - Sector Definition Chunk
 
 **Type tag:** `SECT` (`0x53 0x45 0x43 0x54`). Optional, multiple allowed.
 
@@ -38,7 +38,7 @@ Required only when `MULTI_SECTOR` flag is set. Defines a material/exposure secto
 **Sector composition invariant:** For a given layer, every exposed pixel belongs to
 exactly one sector, and the union of the sector masks is the full layer image ([§7.3](10-sectors.md#73-sector-mask-invariant)).
 
-### 4.6 LROV - Layer Override Chunk
+## 4.6 LROV - Layer Override Chunk
 
 **Type tag:** `LROV` (`0x4C 0x52 0x4F 0x56`). Optional.
 
@@ -76,7 +76,7 @@ than one is present, readers use the first.
   sector-specific entry overrides it for that sector only.
 - Layers with no matching entry use META (or SECT) defaults; LROV never removes them.
 
-### 4.7 PREV - Preview Image Chunk
+## 4.7 PREV - Preview Image Chunk
 
 **Type tag:** `PREV` (`0x50 0x52 0x45 0x56`). Optional, multiple allowed.
 

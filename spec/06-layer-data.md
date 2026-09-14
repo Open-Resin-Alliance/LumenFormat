@@ -2,7 +2,7 @@
 
 <!-- Part of the LUMEN Format Specification. Section numbers (`§3.1`) are stable anchors across the parts. -->
 
-### 4.8 LTBL - Layer Table Chunk
+## 4.8 LTBL - Layer Table Chunk
 
 **Type tag:** `LTBL` (`0x4C 0x54 0x42 0x4C`). Required.
 
@@ -28,7 +28,7 @@ that contains the target layer.
 | 12 | 4 | `u32` | `data_size` | Byte size of this layer's REE data within its block. |
 | 16 | 4 | `u32` | `sector_count` | Sectors active on this layer. 0 = empty layer (all black); in single-sector mode a non-empty layer has exactly `1`. |
 
-### 4.9 ZDIC - Zstd Dictionary Chunk
+## 4.9 ZDIC - Zstd Dictionary Chunk
 
 **Type tag:** `ZDIC` (`0x5A 0x44 0x49 0x43`). Optional.
 
@@ -65,7 +65,7 @@ encrypted alongside the other content chunks when `AUTH` is present.
   Files that need full-artifact integrity rely on the `CRC-32C` trailer or an
   `EXTD`/`SIGN` signature.
 
-### 4.10 LAYR - Layer Data Chunk
+## 4.10 LAYR - Layer Data Chunk
 
 **Type tag:** `LAYR` (`0x4C 0x41 0x59 0x52`). Required.
 
@@ -161,7 +161,7 @@ Empty layers (`sector_count == 0`) store zero bytes in multi-sector mode as well
 there is no `sector_count` varint. The reader learns the layer is empty from
 `LTBL.entries[i].sector_count`; `LTBL.entries[i].data_size` MUST be `0`.
 
-### 4.11 LHAS - Layer Hash Chunk
+## 4.11 LHAS - Layer Hash Chunk
 
 **Type tag:** `LHAS` (`0x4C 0x48 0x41 0x53`). Optional.
 

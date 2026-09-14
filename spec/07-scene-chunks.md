@@ -2,7 +2,7 @@
 
 <!-- Part of the LUMEN Format Specification. Section numbers (`§3.1`) are stable anchors across the parts. -->
 
-### 4.12 VOXL - Embedded Scene Chunk
+## 4.12 VOXL - Embedded Scene Chunk
 
 **Type tag:** `VOXL` (`0x56 0x4F 0x58 0x4C`). Optional.
 
@@ -52,7 +52,7 @@ and a print reader that skips the chunk entirely is conforming.
 - `HDR.display_width_px` etc. should match the VOXL scene's intended printer.
 - `META.materials` / `PROF.materials` should match the resin(s) used in the VOXL scene.
 
-### 4.13 EXTD - Extension Chunk
+## 4.13 EXTD - Extension Chunk
 
 **Type tag:** `EXTD` (`0x45 0x58 0x54 0x44`). Optional, multiple allowed.
 
