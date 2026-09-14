@@ -1,0 +1,137 @@
+name: CI
+
+# The specification, the conformance corpus and the Rust implementation are one
+# artifact: the crate's tests read the corpus, and the corpus is the contract the
+# specification publishes. A change to any of them is a change to what has to keep
+# working, so any of them triggers this.
+on:
+  push:
+    paths:
+      - "rust/**"
+      - "test-vectors/**"
+      - "spec/**"
+      - ".github/workflows/ci.yml"
+  pull_request:
+    paths:
+      - "rust/**"
+      - "test-vectors/**"
+      - "spec/**"
+      - ".github/workflows/ci.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Formatting, lints, the full test suite, and the packaging path an actual
+  # release goes through. `--locked` throughout, because the committed lock is
+  # what CI reproduces and what the declared minimum version is verified against.
+  rust:
+    name: Format, lint, test and package
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rust/lumen
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the toolchain
+        run: rustup toolchain install stable --profile minimal --component clippy --component rustfmt
+
+      - name: Formatting
+        run: cargo +stable fmt --check
+
+      # clippy carries rustc's own lints too, so this is the one gate that has to
+      # stay at zero warnings. Nothing sets RUSTFLAGS globally: that would apply
+      # to dependency builds, where another crate's warning is not our failure.
+      - name: Lints
+        run: cargo +stable clippy --all-targets --locked -- -D warnings
+
+      # Unit, corpus conformance, round trip and doc tests. The conformance tests
+      # read test-vectors/ beside this crate, which is why they run here.
+      - name: Tests
+        run: cargo +stable test --locked
+
+      # The step that caught two real defects before the first release: a crate
+      # that cannot package, or whose tests cannot run once unpacked, is not
+      # publishable even when its tests pass in the working directory.
+      - name: The crate packages and verifies
+        run: cargo +stable publish --dry-run --locked
+
+  # The declared rust-version is a claim about consumers, so it is checked the
+  # same way the stable job is checked: the whole suite, against the same lock.
+  msrv:
+    name: Minimum supported Rust version
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rust/lumen
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the declared toolchain
+        run: rustup toolchain install 1.85.0 --profile minimal
+
+      - name: Tests on the declared floor
+        run: cargo +1.85.0 test --locked
+
+  # DragonFruit builds this crate for its webview, so the wasm target is a real
+  # consumer requirement rather than a nicety. zstd compiles C, so the host needs
+  # clang; it is installed explicitly instead of assumed from the image.
+  wasm:
+    name: wasm32 build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rust/lumen
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install clang
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq clang
+
+      - name: Install the target
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup target add wasm32-unknown-unknown
+
+      - name: Check the DragonFruit target
+        run: cargo +stable check --lib --locked --target wasm32-unknown-unknown
+
+  # Two independent implementations, checking each other in both directions.
+  # `verify_vectors.py` and this crate share no code, so:
+  #   - the corpus itself must validate under the specification's own reader, and
+  #   - files this crate writes must pass that same reader, decrypted with the
+  #     credentials the encoder itself drew.
+  # Neither claim is provable by this crate's own tests.
+  cross-check:
+    name: Cross-implementation check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the corpus validator's dependencies
+        run: python -m pip install --quiet zstandard cryptography argon2-cffi
+
+      - name: The committed corpus validates
+        working-directory: test-vectors
+        run: python verify_vectors.py
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal
+
+      - name: Generate a file with the crate
+        run: |
+          cargo +stable run --locked --manifest-path rust/lumen/Cargo.toml \
+            --example make_test_file -- "$RUNNER_TEMP/sample"
+
+      - name: Validate the crate's output with the corpus reader
+        run: python test-vectors/cross_check.py "$RUNNER_TEMP/sample"
