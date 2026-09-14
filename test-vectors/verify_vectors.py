@@ -455,7 +455,11 @@ def validate(path: str, strict: bool, verbose: bool = False, crypto: dict | None
     chk("presence.layr", len(find(b"LAYR")) == 1)
     if flags & 0x02:
         chk("presence.sect", len(find(b"SECT")) >= 1)
-    chk("presence.lhas", len(find(b"LHAS")) == 1)
+    # LHAS is optional (§4.11), and §10.3 forbids requiring an optional
+    # mechanism in order to decode a file that does not use it - so its absence
+    # is not a failure, and the checks over it below do not apply. The corpus'
+    # valid vectors all carry one, which is why this went unnoticed.
+    lhas_entries = find(b"LHAS")
 
     auth_entries = find(b"AUTH")
     encrypted_flag = bool(flags & ENCRYPTED_FLAG)
@@ -516,14 +520,18 @@ def validate(path: str, strict: bool, verbose: bool = False, crypto: dict | None
 
     # ============================================================ phase 1 (c)
     # LHAS header.  The leaf table and its root are plaintext even when the
-    # layer data is sealed, so the root can be recomputed without a key.
-    lhas = stored(find(b"LHAS")[0])
-    alg, hsize, lhas_count = struct.unpack_from("<BBI", lhas, 0)
-    root = lhas[6:38]
-    leaves = [lhas[38 + 32 * i: 38 + 32 * (i + 1)] for i in range(lhas_count)]
-    chk("lhas.hash_algorithm", alg == 1 and hsize == 32)
-    chk("lhas.layer_count", lhas_count == total_layers)
-    chk("lhas.root_recompute", merkle_root(leaves) == root)
+    # layer data is sealed, so the root can be recomputed without a key.  A file
+    # may omit LHAS entirely (see above), in which case there is nothing here to
+    # check and no leaves for the strict pass to compare against.
+    leaves: list[bytes] = []
+    if lhas_entries:
+        lhas = stored(lhas_entries[0])
+        alg, hsize, lhas_count = struct.unpack_from("<BBI", lhas, 0)
+        root = lhas[6:38]
+        leaves = [lhas[38 + 32 * i: 38 + 32 * (i + 1)] for i in range(lhas_count)]
+        chk("lhas.hash_algorithm", alg == 1 and hsize == 32)
+        chk("lhas.layer_count", lhas_count == total_layers)
+        chk("lhas.root_recompute", merkle_root(leaves) == root)
 
     # ============================================================== phase 2
     # AUTH structure.  If any of this fails the session key cannot be obtained,
@@ -810,7 +818,7 @@ def validate(path: str, strict: bool, verbose: bool = False, crypto: dict | None
             continue
         blob = outputs[e["block_index"]][e["data_offset"]: e["data_offset"] + e["data_size"]]
         layer_data.append(blob)
-    if strict:
+    if strict and leaves:
         chk("lhas.leaf_match",
             all(hashlib.sha256(b"\x00" + layer_data[i]).digest() == leaves[i] for i in range(layer_count)))
 
