@@ -85,12 +85,12 @@ pub struct LumenFile<'a> {
 impl<'a> LumenFile<'a> {
     /// Open without checking the whole of section 11 first.
     ///
-    /// [`LumenFile::open`] validates every slice before it returns, and validating a
-    /// slice means decoding it: on an 800-layer 16K print that is twelve seconds
-    /// before the first layer can be read, which a caller that wants one layer - a
-    /// layer preview, say - pays for nothing. This parses the container and its
-    /// chunks and leaves the streams to [`LumenFile::layer`], which reports a
-    /// malformed stream when it reaches one.
+    /// [`LumenFile::open`] runs every check of section 11 before it returns, and
+    /// one of them walks each slice's stream. A caller that wants a single layer,
+    /// a layer preview for instance, pays for that walk without asking. This
+    /// parses the container and its chunks and checks nothing: it leaves the
+    /// streams to [`LumenFile::layer`], which reports a malformed one when it
+    /// reaches it.
     pub fn open_unvalidated(buf: &'a [u8]) -> Result<LumenFile<'a>> {
         LumenFile::assemble(buf, None, None)
     }

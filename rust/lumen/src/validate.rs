@@ -97,6 +97,52 @@ const CONTENT_CHUNKS: &[Tag] = &[
 /// before it has a key.
 const CLEARTEXT_CHUNKS: &[Tag] = &[Tag::HEAD, Tag::AUTH, Tag::LTBL, Tag::LHAS];
 
+/// Record `[start, end)` of one sector's slice as exposed.
+///
+/// `covered` holds what the layer's earlier sectors exposed and `mine` what this
+/// one has, both as one bit per pixel. A pixel in `covered` that is not in `mine`
+/// was exposed by another sector of the same layer, which section 7.3 forbids.
+/// The ranges are marked a word at a time: a whole 64-pixel word of a detailed
+/// 16K layer costs one test rather than sixty-four.
+fn expose(
+    covered: &mut [u64],
+    mine: &mut [u64],
+    start: u64,
+    end: u64,
+    layer: u32,
+    sector: u32,
+) -> Result<()> {
+    if start >= end {
+        return Ok(());
+    }
+    let first = start as usize / 64;
+    let last = (end - 1) as usize / 64;
+    for word in first..=last {
+        let low = if word == first {
+            start as usize % 64
+        } else {
+            0
+        };
+        let high = if word == last {
+            (end - 1) as usize % 64
+        } else {
+            63
+        };
+        let bits = (u64::MAX << low) & (u64::MAX >> (63 - high));
+        if covered[word] & bits & !mine[word] != 0 {
+            return Err(Error::new(
+                Check::SectorPartition,
+                format!(
+                    "layer {layer}: sector {sector} exposes a pixel another sector already exposes"
+                ),
+            ));
+        }
+        covered[word] |= bits;
+        mine[word] |= bits;
+    }
+    Ok(())
+}
+
 /// How thoroughly to validate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Level {
@@ -1027,11 +1073,13 @@ impl<'a> Ctx<'a> {
     /// Section 7.3's strict rule that one layer's sectors do not overlap.
     ///
     /// A layer's sectors live in different chunks now, so this is a walk over
-    /// layers rather than over one chunk's plaintext: it holds one bitmap, reused
-    /// across layers, plus whatever the chunk cache holds. The rule's other half -
-    /// that the sectors cover every pixel - is what "their union is exactly the
-    /// layer's exposed image" means, and the exposed image need not be every
-    /// pixel, so coverage is not enforced here.
+    /// layers rather than over one chunk's plaintext: it holds two bitmaps, reused
+    /// across layers, plus whatever the chunk cache holds. It reads the pixels a
+    /// slice exposes off the stream rather than out of a decoded mask, which is
+    /// what keeps a 16K layer's four sectors from costing four 94 MB buffers.
+    /// The rule's other half - that the sectors cover every pixel - is what
+    /// "their union is exactly the layer's exposed image" means, and the exposed
+    /// image need not be every pixel, so coverage is not enforced here.
     fn check_partition(
         &self,
         ltbl: &LayerTable,
@@ -1041,7 +1089,15 @@ impl<'a> Ctx<'a> {
         if !self.level.is_strict() || !self.layer_chunks_readable() {
             return Ok(());
         }
+        // `covered` is what the layer's earlier sectors exposed, `mine` what the
+        // sector being walked has. A split stream reports a pixel twice - once
+        // from the core's run and once from the overlay that carries it - so a
+        // pixel this sector has already exposed is not another sector's. Both are
+        // allocated at the first layer that has more than one sector: a file
+        // whose layers each carry one never pays for them.
+        let words = (total_pixels as usize).div_ceil(64);
         let mut covered: Vec<u64> = Vec::new();
+        let mut mine: Vec<u64> = Vec::new();
         for layer in 0..ltbl.layer_count {
             let carrying: Vec<&LayerEntry> = ltbl
                 .layer_entries(layer)
@@ -1051,28 +1107,18 @@ impl<'a> Ctx<'a> {
             if carrying.len() < 2 {
                 continue;
             }
-            covered.clear();
-            covered.resize((total_pixels as usize).div_ceil(64), 0);
+            if covered.len() != words {
+                covered.resize(words, 0);
+                mine.resize(words, 0);
+            }
+            covered.fill(0);
             for entry in carrying {
+                mine.fill(0);
+                let sector = entry.sector_id;
                 let data = self.slice_of(entry, dictionary)?;
-                let mask = ree::decode(&data, total_pixels, true)?;
-                for (index, pixel) in mask.pixels.iter().enumerate() {
-                    if *pixel == 0 {
-                        continue;
-                    }
-                    let (word, bit) = (index / 64, index % 64);
-                    if covered[word] & (1 << bit) != 0 {
-                        return Err(Error::new(
-                            Check::SectorPartition,
-                            format!(
-                                "layer {layer}: sector {} exposes a pixel another sector already \
-                                 exposes",
-                                entry.sector_id
-                            ),
-                        ));
-                    }
-                    covered[word] |= 1 << bit;
-                }
+                ree::exposed_ranges(&data, total_pixels, |start, end| {
+                    expose(&mut covered, &mut mine, start, end, layer, sector)
+                })?;
             }
         }
         Ok(())

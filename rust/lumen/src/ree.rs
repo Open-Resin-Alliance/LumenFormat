@@ -120,24 +120,15 @@ pub fn decode_counted(
     total_pixels: u32,
     strict: bool,
 ) -> Result<(DecodedLayer, usize)> {
-    let Some((&tag, stream)) = data.split_first() else {
-        return Err(Error::new(
-            Check::ReeTag,
-            "layer mask data is empty: the empty-layer form carries no bytes",
-        ));
-    };
-    let mut reader = Reader::checked(stream, Check::ReeVarint);
-    let pixels = match tag {
-        TAG_BINARY => decode_binary(&mut reader, total_pixels, strict)?,
-        TAG_GRAYSCALE => decode_grayscale(&mut reader, total_pixels, strict)?,
-        TAG_SPLIT => decode_split(&mut reader, total_pixels, strict)?,
-        other => {
-            return Err(Error::new(
-                Check::ReeTag,
-                format!("unknown layer encoding tag 0x{other:02X}"),
-            ))
-        }
-    };
+    let (tag, mut reader) = tag_and_stream(data)?;
+    let mut pixels = vec![0u8; total_pixels as usize];
+    read(
+        tag,
+        Sink::Mask(&mut pixels),
+        &mut reader,
+        total_pixels,
+        strict,
+    )?;
     Ok((
         DecodedLayer {
             pixels,
@@ -145,6 +136,50 @@ pub fn decode_counted(
         },
         1 + reader.pos(),
     ))
+}
+
+/// The encoding tag and the stream that follows it.
+///
+/// The tag is one of the three section 5.1 defines; anything else is rejected
+/// here, so a caller's arms never see a tag the format does not have.
+fn tag_and_stream(data: &[u8]) -> Result<(u8, Reader<'_>)> {
+    let Some((&tag, stream)) = data.split_first() else {
+        return Err(Error::new(
+            Check::ReeTag,
+            "layer mask data is empty: the empty-layer form carries no bytes",
+        ));
+    };
+    match tag {
+        TAG_BINARY | TAG_GRAYSCALE | TAG_SPLIT => {}
+        other => {
+            return Err(Error::new(
+                Check::ReeTag,
+                format!("unknown layer encoding tag 0x{other:02X}"),
+            ))
+        }
+    }
+    Ok((tag, Reader::checked(stream, Check::ReeVarint)))
+}
+
+/// Apply a tag's rules to its stream, filling `sink` as it decodes.
+///
+/// This is the one entry point both readers use, so a validator's walk and a
+/// decoder's cannot drift apart: they read the same bytes under the same rules
+/// and differ only in where the pixels go.
+fn read(
+    tag: u8,
+    sink: Sink<'_>,
+    reader: &mut Reader<'_>,
+    total_pixels: u32,
+    strict: bool,
+) -> Result<()> {
+    match tag {
+        TAG_BINARY => read_binary(sink, reader, total_pixels, strict),
+        TAG_GRAYSCALE => read_grayscale(sink, reader, total_pixels, strict),
+        TAG_SPLIT => read_split(sink, reader, total_pixels, strict),
+        // `tag_and_stream` rejects every other tag before its stream is read.
+        _ => unreachable!("tag_and_stream accepts 0x00, 0x01 and 0x02 only"),
+    }
 }
 
 /// Read a run count and reject one above the section 5.2 bound before any buffer
@@ -160,11 +195,6 @@ fn read_run_count(reader: &mut Reader<'_>, total_pixels: u64) -> Result<u64> {
         ));
     }
     Ok(run_count)
-}
-
-/// Fill `mask[start .. end]` with `value`. Both bounds are validated by callers.
-fn fill(mask: &mut [u8], start: u64, end: u64, value: u8) {
-    mask[start as usize..end as usize].fill(value);
 }
 
 /// How many significance planes a varint array is stored in (section 5.3.1).
@@ -223,6 +253,29 @@ impl<'a> Planes<'a> {
             planes,
             at: [0; PLANES],
         })
+    }
+
+    /// The planes of an array that stores no varints at all.
+    ///
+    /// The non-canonical `run_count == 0` form of section 5.3 carries no length
+    /// array, and the single run it decodes to reads nothing from this.
+    fn empty() -> Planes<'a> {
+        Planes {
+            planes: [&[]; PLANES],
+            at: [0; PLANES],
+        }
+    }
+
+    /// The same planes, ready to be read again from the start.
+    ///
+    /// A split stream's overlay is walked more than once - to check it, to
+    /// compare it against the thresholded core, and to write it - and none of
+    /// those walks keeps a decoded position, so each reads the same bytes.
+    fn rewind(&self) -> Planes<'a> {
+        Planes {
+            planes: self.planes,
+            at: [0; PLANES],
+        }
     }
 
     /// The next varint, or `None` once plane 0 is exhausted.
@@ -288,67 +341,276 @@ impl<'a> Planes<'a> {
     }
 }
 
-/// Decode the binary REE stream of section 5.3. The helper is shared with the
-/// split tag, whose binary component is a tagless binary stream.
-fn decode_binary(reader: &mut Reader<'_>, total_pixels: u32, strict: bool) -> Result<Vec<u8>> {
-    let total = u64::from(total_pixels);
-    let first_value = reader.u8()?;
-    if first_value != 0x00 && first_value != 0xFF {
-        return Err(Error::new(
-            Check::ReeFirstValue,
-            format!("binary REE first_value is 0x{first_value:02X}, not 0x00 or 0xFF"),
-        ));
-    }
-    let run_count = read_run_count(reader, total)?;
-    if run_count == 0 {
-        if strict {
-            return Err(Error::new(
-                Check::ReeNoRunCountZero,
-                "binary REE uses the non-canonical run_count == 0 form",
-            ));
-        }
-        return Ok(vec![0u8; total_pixels as usize]);
-    }
-
-    // The first `run_count - 1` run lengths; the last run ends at `total_pixels`.
-    let mut planes = Planes::read(reader, strict)?;
-    let mut mask = vec![0u8; total_pixels as usize];
-    let mut value = first_value;
-    let mut start = 0u64;
-    let mut empty_run = false;
-    for i in 0..run_count - 1 {
-        let delta = planes.varint()?;
-        let end = start
-            .checked_add(delta)
-            .ok_or_else(|| Error::new(Check::ReeEndPositions, "binary REE run lengths overflow"))?;
-        if end > total {
-            return Err(Error::new(
-                Check::ReeEndPositions,
-                format!("binary REE run {i} ends at {end}, past total_pixels {total}"),
-            ));
-        }
-        empty_run |= end == start;
-        fill(&mut mask, start, end, value);
-        value = 255 - value;
-        start = end;
-    }
-    empty_run |= start == total;
-    fill(&mut mask, start, total, value);
-    if strict {
-        if empty_run {
-            return Err(Error::new(
-                Check::ReeRunLengths,
-                "binary REE stores an empty run",
-            ));
-        }
-        planes.check_consumed()?;
-    }
-    Ok(mask)
+/// Where a stream's pixels go as a reader walks it.
+///
+/// The section 11.3 checks need a stream's structure and not its pixel values,
+/// so they walk the same bytes as a decoder and throw the pixels away. On a 16K
+/// layer the mask a decoder fills is 94 MB per slice, and a validator never
+/// allocates it.
+enum Sink<'m> {
+    /// Fill a mask as the runs are walked.
+    Mask(&'m mut [u8]),
+    /// Report the pixels that are not `0x00`, as `[start, end)` ranges.
+    ///
+    /// A split stream is walked in two parts - the thresholded core's runs, then
+    /// the overlay it carries - so a range may cover a pixel an earlier range
+    /// already covered, and a caller wants their union.
+    Exposed(&'m mut dyn FnMut(u64, u64) -> Result<()>),
+    /// Keep nothing: the rules apply, the pixels do not.
+    None,
 }
 
-/// Decode the grayscale REE stream of section 5.4: the run count, every run's
-/// value, then the planes of every length but the last.
-fn decode_grayscale(reader: &mut Reader<'_>, total_pixels: u32, strict: bool) -> Result<Vec<u8>> {
+impl Sink<'_> {
+    /// Fill `[start, end)` with `value`.
+    ///
+    /// A walk rejects an end past `total_pixels` before it calls, so a mask is
+    /// exactly as long as the range it is filled over.
+    #[inline]
+    fn fill(&mut self, start: u64, end: u64, value: u8) -> Result<()> {
+        match self {
+            Sink::Mask(mask) => mask[start as usize..end as usize].fill(value),
+            Sink::Exposed(report) => {
+                if value != 0x00 && start < end {
+                    report(start, end)?;
+                }
+            }
+            Sink::None => {}
+        }
+        Ok(())
+    }
+
+    /// Write the value an overlay pixel carries: the one place a mask is written
+    /// outside a run.
+    #[inline]
+    fn set(&mut self, position: u64, value: u8) -> Result<()> {
+        match self {
+            Sink::Mask(mask) => mask[position as usize] = value,
+            Sink::Exposed(report) => {
+                if value != 0x00 {
+                    report(position, position + 1)?;
+                }
+            }
+            Sink::None => {}
+        }
+        Ok(())
+    }
+}
+
+/// A walk over the runs of a run-length stream: the lengths a planes array
+/// stores, then the implicit final run that ends at `total_pixels`.
+///
+/// The end positions, the empty-run rule and the exact-use rule of a planes
+/// array live here once. A mask decoder fills each run it steps into, a
+/// validator takes the same ranges and keeps none of them, and the split
+/// threshold rule asks which run holds a pixel - so no two readers of one stream
+/// can disagree about it.
+struct Runs<'a> {
+    planes: Planes<'a>,
+    /// The lengths still to read, the implicit final run included.
+    left: u64,
+    /// The run the walk is in, as `[start, end)`.
+    start: u64,
+    end: u64,
+    /// How many runs the walk has stepped into.
+    walked: u64,
+    total: u64,
+    /// What the stream is called in a failure: "binary REE", "grayscale REE".
+    kind: &'static str,
+    /// Whether a run held no pixels.
+    empty: bool,
+}
+
+impl<'a> Runs<'a> {
+    fn new(planes: Planes<'a>, count: u64, total: u64, kind: &'static str) -> Runs<'a> {
+        Runs {
+            planes,
+            left: count,
+            start: 0,
+            end: 0,
+            walked: 0,
+            total,
+            kind,
+            empty: false,
+        }
+    }
+
+    /// Step into the next run, reporting its index, or `None` once every run has
+    /// been stepped into.
+    ///
+    /// The ranges are in order and cover `[0, total_pixels)`. A stored length of
+    /// 0 is legal to a loose read: the walk counts it in [`Runs::empty_run`]
+    /// rather than failing, because the check that rejects it is a later one.
+    fn step(&mut self) -> Result<Option<u64>> {
+        if self.left == 0 {
+            return Ok(None);
+        }
+        self.left -= 1;
+        // The last run's length is implicit: it ends at `total_pixels`.
+        let end = if self.left == 0 {
+            self.total
+        } else {
+            self.end.checked_add(self.planes.varint()?).ok_or_else(|| {
+                Error::new(
+                    Check::ReeEndPositions,
+                    format!("{} run lengths overflow", self.kind),
+                )
+            })?
+        };
+        let (start, index) = (self.end, self.walked);
+        if end > self.total {
+            return Err(Error::new(
+                Check::ReeEndPositions,
+                format!(
+                    "{} run {index} ends at {end}, past total_pixels {}",
+                    self.kind, self.total
+                ),
+            ));
+        }
+        self.empty |= end == start;
+        self.start = start;
+        self.end = end;
+        self.walked = index + 1;
+        Ok(Some(index))
+    }
+
+    /// Step into the run that holds `position`, reporting its index.
+    ///
+    /// Positions are asked in non-decreasing order, so the runs are stepped
+    /// through once. The stream covers `[0, total_pixels)` and a caller asks
+    /// about pixels below it, so a run is always there to step into.
+    fn seek(&mut self, position: u64) -> Result<u64> {
+        while self.end <= position {
+            if self.step()?.is_none() {
+                return Err(Error::new(
+                    Check::ReeEndPositions,
+                    format!("{} holds no run covering pixel {position}", self.kind),
+                ));
+            }
+        }
+        Ok(self.walked.saturating_sub(1))
+    }
+
+    /// The run the walk is in, as `[start, end)`.
+    fn range(&self) -> (u64, u64) {
+        (self.start, self.end)
+    }
+
+    /// Whether a run held no pixels: every stored length is at least 1 and the
+    /// implicit final run has something left for it (section 5.6).
+    fn empty_run(&self) -> bool {
+        self.empty
+    }
+
+    /// The length planes, for the strict rule that they hold exactly the lengths
+    /// read from them (section 5.3.1).
+    fn planes(&self) -> &Planes<'a> {
+        &self.planes
+    }
+}
+
+/// The binary REE core of section 5.3: the value its runs alternate from, and
+/// the lengths of every one but the last.
+///
+/// Section 5.5 reuses it as a split stream's thresholded component, which is why
+/// it is read once and walked as often as its callers need.
+struct Core<'a> {
+    first_value: u8,
+    count: u64,
+    total: u64,
+    planes: Planes<'a>,
+}
+
+impl<'a> Core<'a> {
+    /// Read the core's header and length planes.
+    fn read(reader: &mut Reader<'a>, total_pixels: u32, strict: bool) -> Result<Core<'a>> {
+        let total = u64::from(total_pixels);
+        let first_value = reader.u8()?;
+        if first_value != 0x00 && first_value != 0xFF {
+            return Err(Error::new(
+                Check::ReeFirstValue,
+                format!("binary REE first_value is 0x{first_value:02X}, not 0x00 or 0xFF"),
+            ));
+        }
+        let count = read_run_count(reader, total)?;
+        if count == 0 {
+            if strict {
+                return Err(Error::new(
+                    Check::ReeNoRunCountZero,
+                    "binary REE uses the non-canonical run_count == 0 form",
+                ));
+            }
+            // The non-canonical form is one black run over the whole layer: it
+            // stores no length, and no plane bytes for one to live in.
+            return Ok(Core {
+                first_value: 0x00,
+                count: 1,
+                total,
+                planes: Planes::empty(),
+            });
+        }
+        Ok(Core {
+            first_value,
+            count,
+            total,
+            planes: Planes::read(reader, strict)?,
+        })
+    }
+
+    /// The value run `index` carries: the runs alternate from `first_value`.
+    #[inline]
+    fn value(&self, index: u64) -> u8 {
+        if index % 2 == 0 {
+            self.first_value
+        } else {
+            255 - self.first_value
+        }
+    }
+
+    /// A walk over the runs, from the first.
+    fn runs(&self) -> Runs<'a> {
+        Runs::new(self.planes.rewind(), self.count, self.total, "binary REE")
+    }
+
+    /// Apply the binary REE rules of sections 5.3 and 5.6: walk every run into
+    /// `sink`, and in strict mode refuse a stream that stores an empty run or
+    /// leaves bytes in its planes.
+    fn apply(&self, sink: &mut Sink<'_>, strict: bool) -> Result<()> {
+        let mut runs = self.runs();
+        while let Some(index) = runs.step()? {
+            let (start, end) = runs.range();
+            sink.fill(start, end, self.value(index))?;
+        }
+        if strict {
+            if runs.empty_run() {
+                return Err(Error::new(
+                    Check::ReeRunLengths,
+                    "binary REE stores an empty run",
+                ));
+            }
+            runs.planes().check_consumed()?;
+        }
+        Ok(())
+    }
+}
+
+/// Binary REE (tag `0x00`, section 5.3).
+fn read_binary(
+    mut sink: Sink<'_>,
+    reader: &mut Reader<'_>,
+    total_pixels: u32,
+    strict: bool,
+) -> Result<()> {
+    Core::read(reader, total_pixels, strict)?.apply(&mut sink, strict)
+}
+
+/// Grayscale REE (tag `0x01`, section 5.4): the run count, every run's value,
+/// then the planes of every length but the last.
+fn read_grayscale(
+    mut sink: Sink<'_>,
+    reader: &mut Reader<'_>,
+    total_pixels: u32,
+    strict: bool,
+) -> Result<()> {
     let total = u64::from(total_pixels);
     let run_count = read_run_count(reader, total)?;
     if run_count == 0 {
@@ -358,87 +620,64 @@ fn decode_grayscale(reader: &mut Reader<'_>, total_pixels: u32, strict: bool) ->
                 "grayscale REE uses the non-canonical run_count == 0 form",
             ));
         }
-        return Ok(vec![0u8; total_pixels as usize]);
+        // The non-canonical form is one black run over the whole layer: it
+        // stores no values and no lengths.
+        return sink.fill(0, total, 0x00);
     }
 
     // The values are hoisted out of the run loop, one byte per run.
     let values = reader.bytes(run_count as usize)?;
-    // The first `run_count - 1` run lengths; the last run ends at `total_pixels`.
-    let mut planes = Planes::read(reader, strict)?;
-    let mut mask = vec![0u8; total_pixels as usize];
-    let mut start = 0u64;
+    let mut runs = Runs::new(
+        Planes::read(reader, strict)?,
+        run_count,
+        total,
+        "grayscale REE",
+    );
     let mut previous: Option<u8> = None;
-    let mut empty_run = false;
-    for (i, &value) in values[..values.len() - 1].iter().enumerate() {
-        let length = planes.varint()?;
-        empty_run |= length == 0;
-        let end = start.checked_add(length).ok_or_else(|| {
-            Error::new(Check::ReeEndPositions, "grayscale REE run lengths overflow")
-        })?;
-        if end > total {
-            return Err(Error::new(
-                Check::ReeEndPositions,
-                format!("grayscale REE run {i} ends at {end}, past total_pixels {total}"),
-            ));
-        }
+    while let Some(index) = runs.step()? {
+        let (start, end) = runs.range();
+        let value = values[index as usize];
         if strict && previous == Some(value) {
             return Err(Error::new(
                 Check::ReeGrayscaleRuns,
                 format!("grayscale REE repeats value 0x{value:02X} in adjacent runs"),
             ));
         }
-        fill(&mut mask, start, end, value);
+        sink.fill(start, end, value)?;
         previous = Some(value);
-        start = end;
     }
-
-    let value = values[values.len() - 1];
-    empty_run |= start == total;
-    if strict && previous == Some(value) {
-        return Err(Error::new(
-            Check::ReeGrayscaleRuns,
-            format!("grayscale REE repeats value 0x{value:02X} in adjacent runs"),
-        ));
-    }
-    fill(&mut mask, start, total, value);
     if strict {
-        if empty_run {
+        if runs.empty_run() {
             return Err(Error::new(
                 Check::ReeGrayscaleRuns,
                 "grayscale REE stores a zero-length run",
             ));
         }
-        planes.check_consumed()?;
-        if mask.iter().all(|p| *p == 0x00 || *p == 0xFF) {
+        runs.planes().check_consumed()?;
+        // Every run covers at least one pixel here, so a value the mask holds is
+        // a value this array holds: a stream of nothing but 0x00/0xFF is a layer
+        // that must use tag 0x00.
+        if values.iter().all(|value| *value == 0x00 || *value == 0xFF) {
             return Err(Error::new(
                 Check::ReeGrayscaleAllBinary,
                 "grayscale REE holds only 0x00/0xFF pixels; such a layer must use tag 0x00",
             ));
         }
     }
-    Ok(mask)
+    Ok(())
 }
 
-/// Decode the split stream of section 5.5: a binary REE component followed by a
-/// delta-encoded sparse overlay of anti-aliasing pixels.
-fn decode_split(reader: &mut Reader<'_>, total_pixels: u32, strict: bool) -> Result<Vec<u8>> {
-    let total = u64::from(total_pixels);
-    let mut mask = decode_binary(reader, total_pixels, strict)?;
-
-    let aa_count = reader.varint()?;
-    let bound = total + 1;
-    if aa_count > bound {
-        return Err(Error::new(
-            Check::ReeSplitPositions,
-            format!("aa_pixel_count {aa_count} exceeds total_pixels + 1 ({bound})"),
-        ));
-    }
-    // The positions are stored as planes, then the values as one byte each.
-    let mut planes = Planes::read(reader, strict)?;
-    let count = aa_count as usize;
-    let values = reader.bytes(count)?;
-
-    let mut positions: Vec<u32> = Vec::with_capacity(count);
+/// Walk an overlay's positions, which are delta-encoded and must increase.
+///
+/// `f` sees each position in the order the stream stores it, and nothing is kept
+/// between walks: the passes that need the positions read them again from the
+/// same planes.
+fn walk_positions(
+    planes: &mut Planes<'_>,
+    count: u64,
+    total: u64,
+    mut f: impl FnMut(u64, usize) -> Result<()>,
+) -> Result<()> {
     let mut position = 0u64;
     for i in 0..count {
         let delta = planes.varint()?;
@@ -457,39 +696,83 @@ fn decode_split(reader: &mut Reader<'_>, total_pixels: u32, strict: bool) -> Res
                 format!("split overlay position {position} is not below total_pixels {total}"),
             ));
         }
-        positions.push(position as u32);
+        f(position, i as usize)?;
     }
+    Ok(())
+}
+
+/// Split REE (tag `0x02`, section 5.5): a binary REE component followed by a
+/// delta-encoded sparse overlay of anti-aliasing pixels.
+fn read_split(
+    mut sink: Sink<'_>,
+    reader: &mut Reader<'_>,
+    total_pixels: u32,
+    strict: bool,
+) -> Result<()> {
+    let total = u64::from(total_pixels);
+    let core = Core::read(reader, total_pixels, strict)?;
+    // The component's own rules come first: a reader applies them before it
+    // looks at the overlay.
+    core.apply(&mut sink, strict)?;
+
+    let aa_count = reader.varint()?;
+    let bound = total + 1;
+    if aa_count > bound {
+        return Err(Error::new(
+            Check::ReeSplitPositions,
+            format!("aa_pixel_count {aa_count} exceeds total_pixels + 1 ({bound})"),
+        ));
+    }
+    // The positions are stored as planes, then the values as one byte each.
+    let positions = Planes::read(reader, strict)?;
+    let values = reader.bytes(aa_count as usize)?;
+
     if strict {
-        planes.check_consumed()?;
-        for (i, &pixel) in positions.iter().enumerate() {
+        // Every position is checked, and the planes are required to hold exactly
+        // them, before any position is compared with the core: a reader that
+        // reported a threshold failure ahead of a later malformed position would
+        // name the wrong check. None of the three walks keeps a position, so
+        // each reads the same bytes. A loose read needs only the last one.
+        let mut checked = positions.rewind();
+        walk_positions(&mut checked, aa_count, total, |_, _| Ok(()))?;
+        checked.check_consumed()?;
+        // Section 5.5: an overlay value is neither 0x00 nor 0xFF, and it
+        // thresholds to the core it overrides. The positions and the core's runs
+        // both increase, so one walk over the two compares every overlay pixel,
+        // and nothing has to hold a mask to ask which value the core carries.
+        let mut runs = core.runs();
+        walk_positions(&mut positions.rewind(), aa_count, total, |position, i| {
             let value = values[i];
-            let binary = mask[pixel as usize];
+            let binary = core.value(runs.seek(position)?);
             if value == 0x00 || value == 0xFF || threshold(value) != binary {
                 return Err(Error::new(
                     Check::ReeSplitThreshold,
                     format!(
-                        "split overlay pixel {pixel} holds 0x{value:02X} over binary 0x{binary:02X}"
+                        "split overlay pixel {position} holds 0x{value:02X} over binary \
+                         0x{binary:02X}"
                     ),
                 ));
             }
+            Ok(())
+        })?;
+        // Every overlay pixel is neither 0x00 nor 0xFF, so an overlay that holds
+        // no pixel at all is the one case where the decoded slice is all
+        // 0x00/0xFF: it has no anti-aliasing to carry, and section 5.6 asks for
+        // tag 0x00.
+        if aa_count == 0 {
+            return Err(Error::new(
+                Check::ReeSplitAllBinary,
+                "split REE holds only 0x00/0xFF pixels: it has no anti-aliasing to overlay, \
+                 and such a layer must use tag 0x00",
+            ));
         }
     }
-    for (i, &pixel) in positions.iter().enumerate() {
-        mask[pixel as usize] = values[i];
-    }
-    // The rule is about the decoded pixels, so it is checked once the overlay has
-    // been written: before that the mask is the thresholded core, which is binary
-    // by construction. In strict mode every overlay value is neither 0x00 nor 0xFF
-    // and must threshold to the core, so an all-binary mask here means the overlay
-    // was empty.
-    if strict && mask.iter().all(|p| *p == 0x00 || *p == 0xFF) {
-        return Err(Error::new(
-            Check::ReeSplitAllBinary,
-            "split REE holds only 0x00/0xFF pixels: it has no anti-aliasing to overlay, \
-             and such a layer must use tag 0x00",
-        ));
-    }
-    Ok(mask)
+    // The overlay is written once it has been checked - and, for a loose read,
+    // checked as it is written: a mask never holds a value a strict reader
+    // rejected.
+    walk_positions(&mut positions.rewind(), aa_count, total, |position, i| {
+        sink.set(position, values[i])
+    })
 }
 
 /// Reject a mask whose length is not the layer's pixel count.
@@ -993,14 +1276,44 @@ fn encode_split_source(source: RunSource<'_>) -> Result<Vec<u8>> {
     Ok(writer.into_vec())
 }
 
-/// Re-check a stream against the canonical rules and report the bytes it used.
+/// Check a stream against the canonical rules and report the bytes it used.
 ///
 /// `data` is the same one-byte tag plus stream that [`decode`] takes - the
-/// canonical rules of section 5.6 depend on the tag - and the decoded mask is
-/// discarded. The returned length is the stream's exact extent, so a caller
-/// holding the layer's stored range can reject padding after it.
+/// canonical rules of section 5.6 depend on the tag - and no mask is built: the
+/// walk reads the same bytes under the same rules with a sink that keeps
+/// nothing, which is what takes a 16K layer's validation from the 94 MB a slice
+/// decodes to down to the stream itself. The returned length is the stream's
+/// exact extent, so a caller holding the layer's stored range can reject padding
+/// after it.
 pub fn validate_stream(data: &[u8], total_pixels: u32, strict: bool) -> Result<usize> {
-    decode_counted(data, total_pixels, strict).map(|(_, len)| len)
+    let (tag, mut reader) = tag_and_stream(data)?;
+    read(tag, Sink::None, &mut reader, total_pixels, strict)?;
+    Ok(1 + reader.pos())
+}
+
+/// Walk the pixels a slice exposes, as `[start, end)` ranges.
+///
+/// A slice exposes every pixel its mask decodes to something other than `0x00`,
+/// which is what the sector partition rule ([`spec/10-sectors.md`] section 7.3)
+/// compares between the sectors of one layer. The ranges come from the stream's
+/// structure, so the rule costs no mask: a split stream reports its thresholded
+/// core's runs and then the overlay it carries, whose pixels a strict reader has
+/// already required to be neither `0x00` nor `0xFF`, and a caller that wants the
+/// exposed pixels keeps their union.
+pub(crate) fn exposed_ranges(
+    data: &[u8],
+    total_pixels: u32,
+    report: impl FnMut(u64, u64) -> Result<()>,
+) -> Result<()> {
+    let (tag, mut reader) = tag_and_stream(data)?;
+    let mut report = report;
+    read(
+        tag,
+        Sink::Exposed(&mut report),
+        &mut reader,
+        total_pixels,
+        true,
+    )
 }
 
 #[cfg(test)]
@@ -1866,6 +2179,102 @@ mod tests {
                 "layer mask data is empty: the empty-layer form carries no bytes"
             ))
         );
+    }
+
+    /// Which pixels a set of ranges covers.
+    fn covered(ranges: &[(u64, u64)], total: usize) -> Vec<bool> {
+        let mut pixels = vec![false; total];
+        for &(start, end) in ranges {
+            for pixel in &mut pixels[start as usize..end as usize] {
+                *pixel = true;
+            }
+        }
+        pixels
+    }
+
+    /// Every mask of `total` pixels over an alphabet that spans the threshold,
+    /// the two binary ends and a pair that merges under it.
+    fn every_small_mask(total: usize, mut f: impl FnMut(&[u8])) {
+        const ALPHABET: [u8; 5] = [0x00, 0x01, 0x7F, 0x80, 0xFF];
+        let mut pixels = vec![0u8; total];
+        for index in 0..ALPHABET.len().pow(total as u32) {
+            let mut rest = index;
+            for pixel in pixels.iter_mut() {
+                *pixel = ALPHABET[rest % ALPHABET.len()];
+                rest /= ALPHABET.len();
+            }
+            f(&pixels);
+        }
+    }
+
+    #[test]
+    fn the_exposed_walk_matches_the_mask_it_decodes_to() {
+        let mut compared = 0usize;
+        for total in 1usize..=5 {
+            every_small_mask(total, |pixels| {
+                for mode in MODES {
+                    let Ok(Some((_, data))) = encode(pixels, total as u32, mode) else {
+                        continue;
+                    };
+                    // The tag a caller asks for is not always the canonical one
+                    // for the mask - a grayscale stream over a binary mask is
+                    // legal, and a strict read refuses it - so the walk and the
+                    // decoder are compared either way, and the pixels are
+                    // compared where either of them has pixels to show.
+                    let decoded = decode(&data, total as u32, true);
+                    let mut ranges: Vec<(u64, u64)> = Vec::new();
+                    let walked = exposed_ranges(&data, total as u32, |start, end| {
+                        ranges.push((start, end));
+                        Ok(())
+                    });
+                    match (decoded, walked) {
+                        (Ok(mask), Ok(())) => {
+                            // A split stream reports its core's runs and then its
+                            // overlay, so the ranges are a union and not a
+                            // partition.
+                            assert_eq!(
+                                covered(&ranges, total),
+                                mask.pixels.iter().map(|p| *p != 0).collect::<Vec<_>>(),
+                                "{pixels:?} as {mode:?}"
+                            );
+                        }
+                        (Err(decoded), Err(walked)) => {
+                            assert_eq!(decoded.check(), walked.check(), "{pixels:?} as {mode:?}")
+                        }
+                        (decoded, walked) => {
+                            panic!("{pixels:?} as {mode:?}: {decoded:?} but {walked:?}")
+                        }
+                    }
+                    compared += 1;
+                }
+            });
+        }
+
+        // The walk is only ever asked about a slice a strict read has already
+        // passed, and its verdicts are that read's: a stream it refuses is one
+        // `decode` refuses, and the other way round.
+        for hex in [LAYER_BINARY, LAYER_GRAYSCALE, LAYER_SPLIT] {
+            let data = bytes(hex);
+            for at in 0..data.len() {
+                for byte in [0x00, 0x01, 0x7F, 0x80, 0xFF, 0x02] {
+                    for stream in [data[..at].to_vec(), {
+                        let mut changed = data.clone();
+                        changed[at] = byte;
+                        changed
+                    }] {
+                        let decoded = decode(&stream, TOTAL, true).is_ok();
+                        let walked = exposed_ranges(&stream, TOTAL, |_, _| Ok(())).is_ok();
+                        assert_eq!(
+                            decoded, walked,
+                            "{hex} with byte {at} set to 0x{byte:02X}: decoded {decoded}, \
+                             walked {walked}"
+                        );
+                        compared += 1;
+                    }
+                }
+            }
+        }
+        println!("{compared} streams compared");
     }
 
     #[test]
