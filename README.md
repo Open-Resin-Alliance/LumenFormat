@@ -70,6 +70,7 @@ file, a single `header.version` lineage, and no constraints kept for legacy comp
 | [`rust/lumen/`](rust/lumen/) | The reference implementation: encoder, decoder and validator (crate `lumen-format`) |
 | [`rust/corpus-gen/`](rust/corpus-gen/) | `make_vectors`: regenerates the corpus from the specification, independently of the reference crate |
 | [`rust/corpus/`](rust/corpus/) | `verify_vectors` and `cross_check`: the specification's own reader, independent of both |
+| Repository root | The DragonFruit plugin for `.lumen` (`pluginDefinition.ts` and `slicing/`), which DragonFruit imports as the submodule at its `plugins/lumen` |
 | [`status.json`](status.json) | The machine-readable revision declaration: version, status, published git ref |
 | [`.github/workflows/ci.yml`](.github/workflows/ci.yml) | Runs the corpus, the crate and the cross-check on every change |
 | [`LICENSE`](LICENSE) | MIT |
@@ -148,8 +149,8 @@ independently of the specification's own encoder:
 
 | Path | Contents |
 |------|----------|
-| `valid/*.lumen` | 12 files a conforming reader must accept, each pinning the structures it contains |
-| `invalid/*.lumen` | 56 files a conforming reader must reject, each failing the check its manifest entry names - and failing it *first* |
+| `valid/*.lumen` | 13 files a conforming reader must accept, each pinning the structures it contains |
+| `invalid/*.lumen` | 57 files a conforming reader must reject, each failing the check its manifest entry names - and failing it *first* |
 | `manifest.json` | Golden data for every vector: sizes, offsets, the layer table, each `LAYR` chunk's frame, per-layer hashes, Merkle root, CRC-32C, the timing a conforming reader must resolve for a sample of `(layer, sector)` points, and the credentials for encrypted vectors |
 | [`rust/corpus-gen/`](rust/corpus-gen/) | `make_vectors`: reference encoder that regenerates the corpus from the specification |
 | [`rust/corpus/`](rust/corpus/) | `verify_vectors`: independent reader and validator, sharing no code with the generator. `cross_check` runs it against files the reference crate wrote |
@@ -195,7 +196,10 @@ on crates.io yet, so consume it from this repository:
 
 ```toml
 [dependencies]
+# Beside a checkout of this repository:
 lumen-format = { path = "../LumenFormat/rust/lumen" }
+# Inside DragonFruit, where this repository is the plugins/lumen submodule:
+lumen-format = { path = "plugins/lumen/rust/lumen" }
 ```
 
 Consumers are adapters over it rather than parallel implementations - DragonFruit maps its

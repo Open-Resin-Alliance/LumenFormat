@@ -1,0 +1,10 @@
+{
+  "LUMEN": {
+    "extensions": [
+      ".lumen"
+    ],
+    "displayName": "LUMEN",
+    "version": "1.0",
+    "notes": "Run-end encoded layers with zstd block compression"
+  }
+}
