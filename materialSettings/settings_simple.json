@@ -9,14 +9,16 @@
     { "id": "burn-in", "title": "Burn In Layers", "tabId": "simple", "order": 10 },
     { "id": "normal", "title": "Normal Layers", "tabId": "simple", "order": 20 },
     { "id": "timing", "title": "Timing", "tabId": "simple", "order": 30 },
-    { "id": "light", "title": "Light Settings", "tabId": "simple", "order": 40 }
+    { "id": "light", "title": "Light Settings", "tabId": "simple", "order": 40 },
+    { "id": "scene", "title": "Scene", "tabId": "simple", "order": 60 }
   ],
   "cards": [
     { "id": "global-settings", "title": "General Settings", "tabId": "simple", "sectionId": "normal", "order": 9 },
     { "id": "burn-in-settings", "title": "Burn In Layers", "tabId": "simple", "sectionId": "burn-in", "order": 10 },
     { "id": "normal-settings", "title": "Normal Layers", "tabId": "simple", "sectionId": "normal", "order": 20 },
     { "id": "timing-settings", "title": "Timing", "tabId": "simple", "sectionId": "timing", "order": 30 },
-    { "id": "light-settings", "title": "Light Settings", "tabId": "simple", "sectionId": "light", "order": 40 }
+    { "id": "light-settings", "title": "Light Settings", "tabId": "simple", "sectionId": "light", "order": 40 },
+    { "id": "scene-settings", "title": "Scene", "tabId": "simple", "sectionId": "scene", "order": 10 }
   ],
   "fields": [
     {
@@ -29,6 +31,18 @@
       "step": 0.001,
       "placement": { "tabId": "simple", "sectionId": "global", "cardId": "global-settings", "order": 10 },
       "metadataPath": "material.layerHeightMm"
+    },
+    {
+      "key": "zstdLevel",
+      "label": "Compression Level",
+      "kind": "integer",
+      "defaultValue": 6,
+      "min": 1,
+      "max": 22,
+      "step": 1,
+      "placement": { "tabId": "simple", "sectionId": "global", "cardId": "global-settings", "order": 20 },
+      "metadataPath": "lumen.zstdLevel",
+      "description": "zstd level for layer frames. 3 slices fastest and gives the largest files, 6 is the default, 19 is smallest and costs seconds on a large print."
     },
     {
       "key": "bottomLayerCount",
@@ -183,6 +197,15 @@
       "step": 1,
       "placement": { "tabId": "simple", "sectionId": "light", "cardId": "light-settings", "order": 70 },
       "metadataPath": "lumen.projectorPwmPercent"
+    },
+    {
+      "key": "embedVoxlScene",
+      "label": "Embed VOXL Scene",
+      "kind": "boolean",
+      "defaultValue": false,
+      "description": "Write the scene this print came from into the .lumen file, so the file carries its own scene. The scene's bytes are added to the file, which grows it by the scene's size.",
+      "placement": { "tabId": "simple", "sectionId": "scene", "cardId": "scene-settings", "order": 10 },
+      "metadataPath": "lumen.embedVoxlScene"
     }
   ]
 }
