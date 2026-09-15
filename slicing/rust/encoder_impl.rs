@@ -28,6 +28,7 @@ mod lumen_types;
 use std::path::Path;
 use std::sync::Arc;
 
+use base64::Engine;
 use lumen::reader::LumenFile;
 use lumen::ree::{encode_runs, EncodeMode, Run};
 use lumen::writer::{EncodedLayer, Encoder};
@@ -110,14 +111,61 @@ fn encode_layer(runs: &[RleRun], total_pixels: u32) -> Result<Vec<u8>, SlicerV3E
     Ok(encoded.map(|(_tag, stream)| stream).unwrap_or_default())
 }
 
+/// The scene the profile asked to embed, decoded and checked, or `None` when it did
+/// not ask for one.
+///
+/// With `lumen.embedVoxlScene` off, a payload the job happens to carry is ignored.
+/// On with nothing under `lumen.voxlSceneBase64` is an error naming that key rather
+/// than a file quietly missing the scene the profile promised, and a payload that is
+/// not VOXL is refused by the reference crate's own validator, so a stray blob never
+/// ends up in a chunk that claims to be a scene. Both callers reach this before the
+/// encoder writes anything, so a refusal leaves no output file behind.
+fn embedded_scene(metadata: &LumenMetadata) -> Result<Option<Vec<u8>>, SlicerV3Error> {
+    if !metadata.embed_voxl_scene {
+        return Ok(None);
+    }
+    let encoded = metadata
+        .voxl_scene_base64
+        .as_deref()
+        .map(str::trim)
+        .filter(|encoded| !encoded.is_empty())
+        .ok_or_else(|| {
+            SlicerV3Error::UnsupportedOutput(format!(
+                "{} is on, but the job carries no {} scene payload to embed",
+                lumen_metadata::EMBED_VOXL_SCENE_PATH,
+                lumen_metadata::VOXL_SCENE_PATH
+            ))
+        })?;
+    let payload = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .map_err(|error| {
+            SlicerV3Error::UnsupportedOutput(format!(
+                "{} is not valid base64: {error}",
+                lumen_metadata::VOXL_SCENE_PATH
+            ))
+        })?;
+    lumen::chunks::voxl::require_voxl(&payload).map_err(|error| {
+        SlicerV3Error::UnsupportedOutput(format!(
+            "{} does not carry a VOXL scene: {error}",
+            lumen_metadata::VOXL_SCENE_PATH
+        ))
+    })?;
+    Ok(Some(payload))
+}
+
 /// A writer configured the way this print asked for.
-fn open_encoder(metadata: &LumenMetadata) -> Encoder {
+fn open_encoder(metadata: &LumenMetadata) -> Result<Encoder, SlicerV3Error> {
     let mut encoder = Encoder::new(metadata.head.clone(), metadata.meta.clone());
     encoder.set_layers_per_chunk(metadata.layers_per_chunk);
     encoder.set_zstd_level(metadata.zstd_level);
     encoder.set_dictionary(true);
     encoder.set_layer_hashes(true);
-    encoder
+    // `VOXL` is opaque to LUMEN and optional everywhere, so it is only ever the
+    // profile's flag that puts one in the file.
+    if let Some(scene) = embedded_scene(metadata)? {
+        encoder.set_voxl(scene);
+    }
+    Ok(encoder)
 }
 
 /// The reference crate's refusals, reported as this engine's errors.
@@ -160,7 +208,7 @@ impl RleStreamEncoder for LumenRleStreamEncoder {
                 "no rendered layers were provided for LUMEN encoding".to_string(),
             ));
         }
-        let mut encoder = open_encoder(&self.metadata);
+        let mut encoder = open_encoder(&self.metadata)?;
         for (index, slot) in std::mem::take(&mut self.layers).into_iter().enumerate() {
             let layer = match slot {
                 LayerSlot::Empty => EncodedLayer::Empty,
@@ -277,7 +325,7 @@ impl FormatEncoder for LumenPluginEncoder {
             )
         })?;
         let metadata = lumen_metadata::build(job)?;
-        let mut encoder = open_encoder(&metadata);
+        let mut encoder = open_encoder(&metadata)?;
         for mask in masks {
             encoder.push_layer(mask).map_err(lumen_error)?;
         }

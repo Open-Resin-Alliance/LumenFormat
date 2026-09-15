@@ -38,12 +38,30 @@ pub const HEAD_VERSION: u32 = 1;
 /// `META.meta_version`: the schema version of the payload.
 pub const META_VERSION: u32 = 1;
 
+/// The settings key that asks for the scene to be embedded.
+///
+/// The LUMEN settings profile (`materialSettings/`) owns it, so it lives under
+/// `lumen.*` and nowhere else: no ChiTuBox profile has an equivalent, which is why
+/// both scene keys are read by their exact path rather than through the containers
+/// the other settings fall back through.
+pub const EMBED_VOXL_SCENE_PATH: &str = "lumen.embedVoxlScene";
+
+/// The settings key that carries the scene's bytes, base64-encoded.
+pub const VOXL_SCENE_PATH: &str = "lumen.voxlSceneBase64";
+
 /// Everything the encoder needs from the job besides the masks themselves.
 pub struct LumenMetadata {
     pub head: Head,
     pub meta: Meta,
     pub layers_per_chunk: u32,
     pub zstd_level: i32,
+    /// `lumen.embedVoxlScene`: whether this print's file should carry its scene.
+    pub embed_voxl_scene: bool,
+    /// `lumen.voxlSceneBase64`: the scene's bytes, base64, when the job carries them.
+    ///
+    /// Read here and left encoded: telling a VOXL payload from anything else is the
+    /// writer's business, so the encoder decodes and validates it.
+    pub voxl_scene_base64: Option<String>,
 }
 
 /// Containers a settings value may live in, most specific first.
@@ -109,6 +127,16 @@ impl Values {
             .as_u64()
             .or_else(|| value.as_f64().map(|number| number as u64))
             .and_then(|number| u32::try_from(number).ok())
+    }
+
+    /// A dotted path read as a boolean, false when it is absent.
+    ///
+    /// The export orchestrator coerces a `boolean` field to a JSON boolean before it
+    /// writes it, so anything else under the path - a string, a number, a node - is a
+    /// profile that was written by hand, and reading `"false"` as false is the only
+    /// interpretation that cannot turn the feature on behind the user's back.
+    fn boolean_at(&self, path: &str) -> bool {
+        self.at(path).and_then(Value::as_bool).unwrap_or(false)
     }
 }
 
@@ -370,6 +398,12 @@ pub fn build(job: &SliceJobV3) -> Result<LumenMetadata, SlicerV3Error> {
             .number("zstdLevel")
             .map(|level| (level.round() as i64).clamp(1, 22) as i32)
             .unwrap_or(DEFAULT_ZSTD_LEVEL),
+        // The embedded scene. Both keys are read whatever the flag says, so the
+        // encoder can tell "off, with a payload nobody asked for" - which it ignores -
+        // from "on, with no payload", which is an error rather than a file that
+        // silently lacks the scene the profile promised.
+        embed_voxl_scene: values.boolean_at(EMBED_VOXL_SCENE_PATH),
+        voxl_scene_base64: values.text_at(VOXL_SCENE_PATH),
     })
 }
 
