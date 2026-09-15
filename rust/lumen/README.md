@@ -179,6 +179,12 @@ integrity tree, and round trip through password and machine-binding encryption.
 `tests/memory.rs` measures what validating a file actually allocates, since
 "one block at a time" is a claim that a small test cannot show.
 
+The `make_test_file` example writes four sample files - a full-featured
+single-sector print, the same without the optional integrity tree, the same sealed
+with a password, and a two-resin print with per-layer settings. Appendix A of the
+specification documents what is in each of them, with the numbers the command just
+printed.
+
 ```sh
 cargo test                                   # unit, conformance and round trip
 cargo test --test conformance                # the corpus only

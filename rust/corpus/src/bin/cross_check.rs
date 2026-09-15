@@ -76,6 +76,9 @@ fn main() -> ExitCode {
         // optional mechanism, so the reference reader must accept it.
         ("sample-no-lhas.lumen", None),
         ("sample-encrypted.lumen", Some("lumen-example")),
+        // Two sectors with per-layer settings: the sector rules, the partition
+        // invariant and the `LROV` deltas, read back by the independent validator.
+        ("sample-multi-sector.lumen", None),
     ];
 
     if !crc32c_self_test() {

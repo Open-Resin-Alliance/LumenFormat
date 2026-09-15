@@ -6,6 +6,11 @@
 //! several `LAYR` chunks, a trained dictionary, the bottom/transition timing
 //! blend, a material library, a reusable profile, a preview and an extension.
 //!
+//! A second sample is written beside it, `sample-multi-sector.lumen`: two resins,
+//! each with its own base exposure (and one with its own burn-in range), with
+//! per-layer settings over both - the shape a slicer produces when an operator
+//! adjusts single layers of a multi-resin print.
+//!
 //! `cargo run --example make_test_file`
 //! `cargo run --example make_test_file -- /tmp`
 
@@ -15,11 +20,11 @@ use lumen::chunks::extd::Extension;
 use lumen::chunks::head::Head;
 use lumen::chunks::preview::PreviewRole;
 use lumen::crypto::Cipher;
-use lumen::json::{AntiAliasing, Material, Meta, Printer, Profile, Timing};
+use lumen::json::{AntiAliasing, Material, Meta, Printer, Profile, Sector, Timing};
 use lumen::reader::LumenFile;
 use lumen::ree::DecodedLayer;
 use lumen::validate::Level;
-use lumen::writer::{Argon2Params, Encoder, EncryptOptions};
+use lumen::writer::{Argon2Params, Encoder, EncryptOptions, Override};
 use sha2::{Digest, Sha256};
 
 /// The lower-case hex of a byte slice.
@@ -94,6 +99,24 @@ fn main() {
         encrypted_path.display()
     );
     describe(&encrypted, Some("lumen-example"));
+
+    // A second shape: two resins, each with its own exposure, with per-layer
+    // settings over them.
+    let multi_sector = build_multi_sector();
+    let multi_path = out_dir.join("sample-multi-sector.lumen");
+    std::fs::write(&multi_path, &multi_sector).expect("writable");
+    println!(
+        "wrote {} ({} bytes)",
+        multi_path.display(),
+        multi_sector.len()
+    );
+
+    println!(
+        "\n=== {} (two sectors, per-layer settings) ===",
+        multi_path.display()
+    );
+    describe(&multi_sector, None);
+    describe_sectors(&multi_sector);
 }
 
 /// The print: twelve layers that between them use every encoding the format has.
@@ -292,6 +315,197 @@ fn preview_png() -> Vec<u8> {
     ihdr.extend_from_slice(&lumen::container::crc32c(&ihdr[4..]).to_be_bytes());
     png.extend_from_slice(&ihdr);
     png
+}
+
+/// The two-resin print: ten layers of a model beside a support column.
+///
+/// The two sectors are disjoint, which is what the partition rule asks: a pixel
+/// belongs to exactly one sector at a layer. The model finishes one layer before
+/// the print does, so the last layer carries the support column alone - the layer
+/// whose sector-0 entry holds no bytes.
+const MULTI_LAYERS: u32 = 10;
+
+fn multi_sector_layers() -> Vec<Vec<(u32, Vec<u8>)>> {
+    let mut out = Vec::new();
+    for index in 0..MULTI_LAYERS {
+        let mut model = vec![0u8; PIXELS];
+        if index + 1 < MULTI_LAYERS {
+            let half = 10 + index as usize;
+            for y in 12..36usize {
+                for x in (32 - half)..(32 + half) {
+                    model[y * WIDTH as usize + x] = 255;
+                }
+            }
+        }
+        let mut support = vec![0u8; PIXELS];
+        let (top, bottom) = if index + 1 == MULTI_LAYERS {
+            (20, 28)
+        } else {
+            (8, 40)
+        };
+        for y in top..bottom {
+            for x in 54..58usize {
+                support[y * WIDTH as usize + x] = 255;
+            }
+        }
+        out.push(vec![(0, model), (1, support)]);
+    }
+    out
+}
+
+fn material(name: &str, color: [u8; 4]) -> Material {
+    Material {
+        name: name.to_string(),
+        brand: Some("DragonFruit".to_string()),
+        family: Some("standard".to_string()),
+        density_g_ml: Some(1.1),
+        color_rgba: Some(color),
+        bottle_price: None,
+        bottle_capacity_ml: None,
+        extra: serde_json::Map::new(),
+    }
+}
+
+/// META for the two-resin print: both resins in the library, and a sector that
+/// carries its own base exposure and its own burn-in range.
+fn multi_sector_meta() -> Meta {
+    let mut meta = meta();
+    meta.materials = Some(vec![
+        material("Model Resin", [200, 200, 205, 255]),
+        material("Support Resin", [20, 200, 120, 255]),
+    ]);
+    meta.sectors = Some(vec![Sector {
+        sector_id: 1,
+        name: Some("Support Resin".to_string()),
+        material_index: Some(1),
+        color_rgba: Some([20, 200, 120, 255]),
+        timing: Timing {
+            // What this resin wants, and how many layers it burns in for: its own
+            // range, longer than META's two, while it inherits META's transition
+            // count and every field it does not name.
+            normal_exposure_ms: Some(3000),
+            bottom_exposure_ms: Some(26_000),
+            bottom_layer_count: Some(5),
+            ..Timing::default()
+        },
+    }]);
+    meta
+}
+
+/// The per-layer settings: one `(layer, sector)` delta per entry, each becoming
+/// its own `LROV` chunk that the layer table points at.
+fn multi_sector_overrides() -> Vec<Override> {
+    let mut overrides = Vec::new();
+
+    // A layer with a large cross-section peels harder, so it gets more exposure
+    // and a longer slow lift - on the model's sector only, because that is the
+    // resin it is about.
+    overrides.push(Override {
+        layer: 3,
+        sector_id: 0,
+        timing: Timing {
+            normal_exposure_ms: Some(4000),
+            lift_slow_distance_um: Some(7000),
+            ..Timing::default()
+        },
+    });
+
+    // A taper towards the top: the same three layers at a lower exposure. A range
+    // is still one chunk per layer - the entry that names a chunk is what places
+    // it - so this is three `LROV` chunks and not one.
+    for layer in 6..=8 {
+        overrides.push(Override {
+            layer,
+            sector_id: 0,
+            timing: Timing {
+                normal_exposure_ms: Some(2000),
+                ..Timing::default()
+            },
+        });
+    }
+
+    // The support tips cure harder than the rest of their sector.
+    overrides.push(Override {
+        layer: 9,
+        sector_id: 1,
+        timing: Timing {
+            normal_exposure_ms: Some(5000),
+            ..Timing::default()
+        },
+    });
+
+    overrides
+}
+
+fn build_multi_sector() -> Vec<u8> {
+    let layers = multi_sector_layers();
+    let mut encoder = Encoder::new(head(layers.len() as u32), multi_sector_meta());
+    for sectors in &layers {
+        encoder
+            .push_layer_sectors(sectors)
+            .expect("a pushable layer");
+    }
+    encoder.set_layers_per_chunk(5);
+    encoder.set_zstd_level(6);
+    encoder.set_dictionary(true);
+    encoder.set_layer_hashes(true);
+    encoder
+        .set_overrides(multi_sector_overrides())
+        .expect("one override set per (layer, sector)");
+    encoder.finish().expect("a writable file")
+}
+
+/// What a reader resolves for every `(layer, sector)`: META, the sector's own
+/// entry, the bottom and transition blend, and the override its entry names.
+fn describe_sectors(bytes: &[u8]) {
+    let file = LumenFile::open(bytes, Level::Strict).expect("the generated file opens");
+    let sectors: Vec<u32> = std::iter::once(0)
+        .chain(file.meta_sectors().iter().map(|s| s.sector_id))
+        .collect();
+
+    println!("\ntiming per (layer, sector), through the section 8 pipeline:");
+    print!("  {:>5}", "layer");
+    for sector in &sectors {
+        print!(" {:>12}", format!("sector {sector}"));
+    }
+    println!("   overrides");
+
+    for index in 0..file.layer_count() {
+        print!("  {index:>5}");
+        for sector in &sectors {
+            let timing = file.timing_for(index, *sector).expect("resolvable timing");
+            print!(" {:>12}", format!("{} ms", timing.exposure_ms));
+        }
+        let overridden: Vec<String> = file
+            .layer_table()
+            .layer_entries(index)
+            .iter()
+            .filter(|entry| entry.first_lrov != 0)
+            .map(|entry| format!("sector {} -> LROV {}", entry.sector_id, entry.first_lrov))
+            .collect();
+        println!(
+            "   {}",
+            if overridden.is_empty() {
+                "-".to_string()
+            } else {
+                overridden.join(", ")
+            }
+        );
+    }
+
+    println!(
+        "\nsectors: {}, every layer's sectors: {}",
+        sectors.len(),
+        (0..file.layer_count())
+            .map(|index| file.layer_table().layer_entries(index).len())
+            .map(|n| n.to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    println!(
+        "a single-material reader prints one sector per layer: is that complete here? {}",
+        file.is_single_material_complete()
+    );
 }
 
 fn describe(bytes: &[u8], password: Option<&str>) {

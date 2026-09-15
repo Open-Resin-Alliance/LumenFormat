@@ -101,7 +101,7 @@ chunk group can be read on its own.
 | [`13-versioning.md`](spec/13-versioning.md) | §10 | Revision numbering, forward compatibility, change control |
 | [`14-validation.md`](spec/14-validation.md) | §11 | Every check a conforming reader runs, loose and strict |
 | [`15-comparison.md`](spec/15-comparison.md) | §12 | LUMEN against CTB, GOO, AFZ and NanoDLP |
-| [`16-appendix-a-example.md`](spec/16-appendix-a-example.md) | Appendix A | A worked file layout, chunk by chunk |
+| [`16-appendix-a-example.md`](spec/16-appendix-a-example.md) | Appendix A | The example files the reference implementation writes, layout by layout |
 | [`17-appendix-b-encoder.md`](spec/17-appendix-b-encoder.md) | Appendix B | Encoder integration and the unit conversions it needs |
 | [`18-appendix-c-references.md`](spec/18-appendix-c-references.md) | Appendix C | Standards, RFCs and related format specifications |
 | [`19-license.md`](spec/19-license.md) | - | MIT text and format governance |
