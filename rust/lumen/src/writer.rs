@@ -13,6 +13,13 @@
 //! chunk holds the layer's run, where in that chunk's decompressed output the
 //! run sits, and which `LROV` chunk carries the (layer, sector)'s overrides.
 //!
+//! Two of `finish`'s passes are a function of one item each: one zstd frame per
+//! (sector, layer-group) chunk, and one `LHAS` leaf per layer. Neither reads
+//! another's result, so both run across worker threads
+//! ([`Encoder::set_worker_threads`]) - which is where the time of a long print
+//! sits once its masks are encoded. The file does not depend on how many: an
+//! item is placed by the index it came from, not by the order it finished in.
+//!
 //! `finish` produces the container in the order section 3 recommends: `HEAD`,
 //! `META`, the optional chunks, `LTBL`, `LAYR`, and the directory at the end.
 //! Payloads are 8-byte aligned, as section 3.2 prefers, and the trailer's
@@ -43,6 +50,7 @@ use crate::io::Writer;
 use crate::json::{Meta, Profile, Sector, Timing};
 use crate::ree::{self, EncodeMode, Run};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Argon2id parameters for password-mode encryption.
 ///
@@ -101,7 +109,7 @@ impl EncryptOptions {
 }
 
 /// The layers one `LAYR` chunk spans, which a fresh encoder starts with
-/// (section 4.10 recommends 32-64).
+/// (section 4.9 recommends 32-64).
 pub const DEFAULT_LAYERS_PER_CHUNK: u32 = 64;
 /// The zstd level a fresh encoder starts with.
 pub const DEFAULT_ZSTD_LEVEL: i32 = 6;
@@ -205,6 +213,7 @@ pub struct Encoder {
     zstd_level: i32,
     dictionary: bool,
     layer_hashes: bool,
+    worker_threads: usize,
     encryption: Option<EncryptOptions>,
     session: Option<SessionKey>,
     layers: Vec<EncodedLayer>,
@@ -227,6 +236,7 @@ impl Encoder {
             zstd_level: DEFAULT_ZSTD_LEVEL,
             dictionary: true,
             layer_hashes: true,
+            worker_threads: 0,
             encryption: None,
             session: None,
             layers: Vec::new(),
@@ -304,6 +314,26 @@ impl Encoder {
     /// Whether to emit an `LHAS` integrity tree.
     pub fn set_layer_hashes(&mut self, enabled: bool) {
         self.layer_hashes = enabled;
+    }
+
+    /// How many threads `finish` may frame chunks and hash layers on.
+    ///
+    /// `0`, what a fresh encoder starts with, means one per available core, and
+    /// a request above that is capped by it: this is CPU-bound work on data
+    /// already in memory, so a thread beyond the cores available would take time
+    /// from another rather than spend a wait. `1` is the serial path, and it
+    /// writes the same bytes any other count does - the output of this encoder
+    /// is a function of its input and settings alone, as section 5.6 intends.
+    pub fn set_worker_threads(&mut self, threads: usize) {
+        self.worker_threads = threads;
+    }
+
+    /// The worker count `finish` will use, never zero.
+    fn workers(&self) -> usize {
+        match self.worker_threads {
+            0 => available_parallelism(),
+            threads => threads.min(available_parallelism()),
+        }
     }
 
     /// Encrypt the file.
@@ -547,36 +577,38 @@ impl Encoder {
         };
         let dict_bytes = dictionary.as_ref().map(|d| d.dict_bytes.as_slice());
 
-        // 5. Compress each chunk's plaintext into its frame.
-        let frames: Vec<Vec<u8>> = chunk_plaintexts
-            .iter()
-            .map(|plaintext| {
-                let frame = chunks::compress(plaintext, self.zstd_level, dict_bytes)?;
-                // A reader sizes the frame's output from the frame's own header,
-                // so a writer must set its content size; refusing here keeps the
-                // guarantee in the writer rather than in a comment.
-                chunks::frame_content_size(&frame)?;
-                Ok(frame)
-            })
-            .collect::<Result<_>>()?;
+        // 5. Compress each chunk's plaintext into its frame, on the worker
+        //    threads: one frame is a function of one plaintext and the
+        //    dictionary, and no frame is a function of another.
+        let workers = self.workers();
+        let level = self.zstd_level;
+        let frames: Vec<Vec<u8>> = map_ordered(&chunk_plaintexts, workers, |_, plaintext| {
+            let frame = chunks::compress(plaintext, level, dict_bytes)?;
+            // A reader sizes the frame's output from the frame's own header,
+            // so a writer must set its content size; refusing here keeps the
+            // guarantee in the writer rather than in a comment.
+            chunks::frame_content_size(&frame)?;
+            Ok(frame)
+        })?;
 
         // 6. LHAS, over each layer's slices concatenated in ascending sector_id -
         //    read back out of the chunk plaintexts, so the leaves are over the
-        //    very bytes a reader will reconstruct.
+        //    very bytes a reader will reconstruct - and on the worker threads,
+        //    a leaf being a function of one layer and nothing else.
         let hashes = if self.layer_hashes {
-            let mut leaves = Vec::with_capacity(pushed as usize);
-            for index in 0..pushed {
+            let leaves = map_ordered(&sector_sets, workers, |index, sectors| {
                 let mut data = Vec::new();
-                for sector in &sector_sets[index as usize] {
-                    if let Some(&(ordinal, offset, size)) = placement.get(&(index, *sector)) {
+                for sector in sectors {
+                    let key = (index as u32, *sector);
+                    if let Some(&(ordinal, offset, size)) = placement.get(&key) {
                         let start = offset as usize;
                         data.extend_from_slice(
                             &chunk_plaintexts[ordinal as usize][start..start + size as usize],
                         );
                     }
                 }
-                leaves.push(lhas::leaf_hash(&data));
-            }
+                Ok(lhas::leaf_hash(&data))
+            })?;
             Some(LayerHashes {
                 hash_algorithm: lhas::HASH_ALGORITHM_SHA256,
                 hash_size: lhas::HASH_SIZE_SHA256,
@@ -783,7 +815,7 @@ impl Encoder {
         for index in 0..pushed {
             let ids = &sector_sets[index as usize];
             let additional = (ids.len() - 1) as u32;
-            // Every entry names a `LAYR` chunk, as section 4.10 requires, even
+            // Every entry names a `LAYR` chunk, as section 4.9 requires, even
             // when the (layer, sector) holds no bytes: an entry with no run of
             // its own takes the chunk of the layer's first run, or the file's
             // first chunk when the layer has none at all.
@@ -890,6 +922,84 @@ impl Encoder {
             recipients,
         }))
     }
+}
+
+/// One worker per core the platform reports, and one where it reports none.
+///
+/// `wasm32-unknown-unknown` is a target this crate is built for - DragonFruit
+/// renders its UI with it - and it can neither report parallelism nor spawn a
+/// thread, so an encoder running there takes the serial path however many workers
+/// it is asked for.
+fn available_parallelism() -> usize {
+    #[cfg(target_arch = "wasm32")]
+    {
+        1
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::thread::available_parallelism().map_or(1, |threads| threads.get())
+    }
+}
+
+/// Map `items` through `f` on up to `workers` threads, keeping the input order.
+///
+/// This is what `finish` runs its per-item passes on. Work is handed out one item
+/// at a time rather than as a block per thread: the items are not equally
+/// expensive - a dense layer's zstd frame costs many times an empty one's - so a
+/// block-sized slice of the print would leave every other worker waiting behind
+/// whichever one of them drew the hard chunk.
+///
+/// A result is placed by the index it came from and never by the order it
+/// completed in, so the returned vector is the one a single thread would have
+/// built. `f` sees the item's index because an item may need to say where it
+/// sits: an `LHAS` leaf names the layer it hashes.
+fn map_ordered<T, R>(
+    items: &[T],
+    workers: usize,
+    f: impl Fn(usize, &T) -> Result<R> + Sync,
+) -> Result<Vec<R>>
+where
+    T: Sync,
+    R: Send,
+{
+    if workers <= 1 || items.len() <= 1 {
+        return items
+            .iter()
+            .enumerate()
+            .map(|(index, item)| f(index, item))
+            .collect();
+    }
+    let next = AtomicUsize::new(0);
+    let mut ordered: Vec<Option<R>> = (0..items.len()).map(|_| None).collect();
+    std::thread::scope(|scope| -> Result<()> {
+        let handles: Vec<_> = (0..workers.min(items.len()))
+            .map(|_| {
+                scope.spawn(|| -> Result<Vec<(usize, R)>> {
+                    let mut finished = Vec::new();
+                    loop {
+                        // Relaxed: the counter orders nothing but itself, and
+                        // every value it hands out is filled by whoever took it.
+                        let index = next.fetch_add(1, Ordering::Relaxed);
+                        let Some(item) = items.get(index) else {
+                            break;
+                        };
+                        finished.push((index, f(index, item)?));
+                    }
+                    Ok(finished)
+                })
+            })
+            .collect();
+        for handle in handles {
+            for (index, value) in handle.join().expect("a worker does not panic")? {
+                ordered[index] = Some(value);
+            }
+        }
+        Ok(())
+    })?;
+    Ok(ordered
+        .into_iter()
+        .map(|value| value.expect("every index is taken by one worker"))
+        .collect())
 }
 
 /// Reject a mask whose pixel count disagrees with the display.
@@ -1034,6 +1144,32 @@ mod tests {
         let expected = from_masks.finish().expect("a writable file");
         assert_eq!(from_runs.finish().expect("a writable file"), expected);
         assert_eq!(encoded.finish().expect("a writable file"), expected);
+    }
+
+    /// The worker threads `finish` uses are a wall-clock knob, not a format one:
+    /// a print written on a machine asked for two threads is the file it would
+    /// have been on one asked for eight, `LHAS` and all.
+    #[test]
+    fn the_worker_thread_count_does_not_change_the_file() {
+        let masks = masks();
+        let layers = masks.len() as u32;
+
+        let write = |threads: usize| {
+            let mut encoder = Encoder::new(head(layers), meta());
+            // One layer per chunk, so `finish` has one item per layer to hand to
+            // its workers and the parallel path is the one that runs.
+            encoder.set_layers_per_chunk(1);
+            encoder.set_worker_threads(threads);
+            for pixels in &masks {
+                encoder.push_layer(pixels).expect("a pushable mask");
+            }
+            encoder.finish().expect("a writable file")
+        };
+
+        let serial = write(1);
+        for threads in [2, 4, 8] {
+            assert_eq!(write(threads), serial, "with {threads} workers");
+        }
     }
 
     /// A layer's sectors are sorted by id, and a layer with no sector data is the

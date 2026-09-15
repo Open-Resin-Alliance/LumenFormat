@@ -101,7 +101,7 @@ use lumen::writer::Encoder;
 # let layers: Vec<Vec<u8>> = Vec::new();
 
 let mut encoder = Encoder::new(head, meta);
-encoder.set_block_layers(64);
+encoder.set_layers_per_chunk(64);
 encoder.set_zstd_level(6);
 for mask in &layers {
     encoder.push_layer(mask)?;
@@ -112,8 +112,12 @@ let bytes = encoder.finish()?;
 
 The encoder is deterministic: identical input and settings produce identical
 bytes, which is what makes re-slicing a scene produce the same file and the same
-`LHAS` hashes (§5.6). Encrypted output is of course not deterministic - it draws
-a fresh session key, salts and nonces from the OS CSPRNG, as §9.4 requires.
+`LHAS` hashes (§5.6). Framing each `LAYR` chunk and hashing each layer are
+per-item passes, so `finish` runs them on worker threads - one per core unless
+`Encoder::set_worker_threads` says otherwise - and that count is not one of the
+settings: it moves the wall clock and not a byte. Encrypted output is of course
+not deterministic - it draws a fresh session key, salts and nonces from the OS
+CSPRNG, as §9.4 requires.
 
 ## Validating
 
