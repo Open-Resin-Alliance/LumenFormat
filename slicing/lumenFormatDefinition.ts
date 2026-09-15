@@ -11,10 +11,7 @@ export const LUMEN_FORMAT_DEFINITION: SlicingFormatDefinition = {
     { value: 'v1', label: 'V1', isDefault: true }
   ],
   settingsModes: [
-    { value: 'simple', label: 'Simple', isDefault: true },
-    { value: 'twostage', label: 'Two Stage' },
-    { value: 'tilting', label: 'Tilting Vat' },
-    { value: 'allfields', label: 'All Fields Single Step Motion'}
+    { value: 'standard', label: 'Standard', isDefault: true }
   ],
   rustModulePath: 'formats::lumen',
   wasmExportName: 'encode_lumen_container',
