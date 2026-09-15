@@ -103,16 +103,20 @@ better cross-layer patterns.
   to exactly `total_pixels` ([§5.6](#56-canonical-encoding)).
 
 **Encoding algorithm.** Each value written after `run_count` is a run length, derived
-from the end positions:
+from the end positions. The lengths are stored as significance planes
+([§5.3.1](#531-significance-planes)), so a length's high byte does not sit between two
+noisy low bytes:
 
 ```
 write first_value as u8
 write run_count as varint
 prev = 0
+lengths = []
 for i in 0..K-1:
     delta = end_pos[i] - prev
-    write delta as varint
+    lengths.append(delta)
     prev = end_pos[i]
+write PLANES(lengths)
 ```
 
 The decoder reverses this:
@@ -120,9 +124,10 @@ The decoder reverses this:
 ```
 first_value = read_u8()
 run_count = read_varint()
+planes = read_planes()     // always present: four lengths, zero when nothing is stored
 cumulative = 0
 for i in 0..K-1:
-    delta = read_varint()
+    delta = planes.next_varint()
     cumulative += delta
     end_pos[i] = cumulative
 ```
@@ -135,19 +140,58 @@ Absolute end positions are recovered by accumulating the stored lengths.
 total_pixels = display_width_px × display_height_px
 first_value = read_u8()        // 0x00 or 0xFF
 run_count = read_varint()
-if run_count == 0: fill 0; return
+if run_count == 0: fill 0; return   // non-canonical, and may carry no plane header
+planes = read_planes()     // always present: four lengths, zero when nothing is stored
 if run_count == 1: fill first_value; return
 
 value = first_value
+cumulative = 0
 start = 0
 for i in 0..run_count:
-    end_pos = (i == run_count-1) ? total_pixels : read_and_accumulate_delta()
-                                    // read_and_accumulate_delta: read varint, add to cumulative, return result
-                                    // (see delta decoder pseudocode above)
+    if i == run_count-1:
+        end_pos = total_pixels
+    else:
+        cumulative += planes.next_varint()
+        end_pos = cumulative
     fill_mask[start .. end_pos] = value
     value = 255 - value       // toggle
     start = end_pos
 ```
+
+### 5.3.1 Significance Planes
+
+A run-length varint array is stored as four *significance planes* rather than as a
+stream of interleaved varints. The bytes of a varint are the least significant seven
+bits first; byte `j` of every varint goes to plane `j`, and the four plane lengths
+are written ahead of the planes themselves:
+
+```
+PLANES(n varints):
+  plane_lengths : 4 × varint    - byte length of planes 0..3, 0 when empty
+  plane bytes   : plane_0 ‖ plane_1 ‖ plane_2 ‖ plane_3
+```
+
+A decoder reads the four lengths, then walks the planes in step: to read a varint it
+takes one byte from plane 0, another from plane 1 while the continuation bit is set,
+and so on. No count of varints is needed to find the end of a plane, and a varint's
+length is implied by its own bytes.
+
+The arrangement exists for the compressor. A run length of a few thousand pixels is
+two or three bytes whose high bytes are nearly constant along a scanline, and whose
+low bytes are essentially random; interleaved, the constant bytes are separated by
+random ones and zstd can match neither. Grouped, the high planes collapse: measured
+on an 801-layer 15120×6230 print, the length planes held 1 841 442, 1 605 303, 845
+and 804 bytes and compressed to 994 454, 43 614, 718 and 49 - plane 1 by a factor of
+37, and the print by a factor of 1.21 overall.
+
+Two rules follow. The planes are **prefix-closed**: a varint that reaches plane `j`
+also occupies planes `0..j-1`, so a non-empty plane may not follow an empty one, and
+a strict-mode validator rejects streams that break this. The four lengths are always
+written, so a stream with no stored varints costs four zero bytes - four bytes per
+layer, against the 21% the arrangement returns on a detailed print. A stream that
+ends immediately after its run count is therefore **not** canonical; a decoder MAY
+accept it for the non-canonical `run_count == 0` form, which strict mode rejects
+anyway ([§5.3](#53-binary-ree-no-anti-aliasing)).
 
 ### 5.4 Grayscale REE (Anti-Aliased)
 
@@ -156,35 +200,36 @@ Used when pixels may have any 8-bit value (0-255).
 **Stream format:**
 
 ```
-run_count  : varint    - Number of runs. 0 = all black.
-value_0    : u8        - Value of the first run (typically 0x00 for black, 0xFF for white).
-end_pos_0  : varint
-value_1    : u8
-end_pos_1  : varint
-...
-value_{K-1}: u8        - Note: last end_pos is stored (unlike binary REE).
-end_pos_{K-1}: varint   - Must equal total_pixels.
+run_count  : varint     - Number of runs. 0 = all black.
+values     : u8[run_count]        - the value of every run, in order
+lengths    : PLANES(run_count - 1) - the length of every run but the last
 ```
+
+The final run's length is implicit: it ends at `total_pixels`, which the reader
+knows already.
 
 **Decoding algorithm:**
 
 ```
 run_count = read_varint()
 if run_count == 0: fill 0; return
-
+values = read_bytes(run_count)
+planes = read_planes()     // always present: four lengths, zero when nothing is stored
 start = 0
 for i in 0..run_count:
-    value = read_u8()
-    end_pos = read_varint()
-    fill_mask[start .. end_pos] = value
-    start = end_pos
+    length = (i == run_count-1) ? total_pixels - start : planes.next_varint()
+    fill_mask[start .. start + length] = values[i]
+    start += length
 assert start == total_pixels
 ```
 
-**Why the last end_pos is stored for grayscale:** In binary REE the final run value
-is known (it alternates from the first). In grayscale REE it is not. Storing the
-last end_pos (= total_pixels) costs 1 varint (~1–4 bytes) and keeps the decoder
-loop uniform.
+**Why the values are hoisted and the final length is implicit:** a reader knows
+`total_pixels`, so the final run's length is whatever remains; storing it - as
+earlier drafts did, as an absolute end position equal to `total_pixels` - carried no
+information and cost up to four bytes. Writing the values as one array rather than
+interleaving them with the lengths is also what the split encoding's overlay does:
+an edge's values are a few repeated bytes, and keeping them out of the length stream
+leaves that stream smooth for the planes of [§5.3.1](#531-significance-planes).
 
 **Canonical form.** Every run length is `>= 1` (so the end positions are strictly
 increasing), the final end position equals `total_pixels`, and no two adjacent runs carry
@@ -193,9 +238,11 @@ the same value - they would be a single run. `run_count == 0` decodes to all bla
 data_size == 0`). A layer whose pixels are all `0x00` or `0xFF` MUST use binary REE
 instead ([§5.6](#56-canonical-encoding)).
 
-**Grayscale REE is NOT delta-encoded** before zstd (the u8 values break the
-pure-delta stream; the compression gain from delta encoding is marginal with
-explicit values present).
+**Grayscale REE stores lengths, not end positions.** Absolute end positions grow with
+the layer's pixel count, so every run past pixel 127 paid an extra varint byte a
+length does not, and they repeat neither within a layer nor across layers - the
+worst input for a compressor. Lengths are bounded by the row width and cluster, which
+is what the planes of [§5.3.1](#531-significance-planes) then exploit.
 
 ### 5.5 Split Encoding: Binary REE + Sparse AA Overlay (tag `0x02`)
 
@@ -222,14 +269,16 @@ output than full grayscale REE for AA prints at high resolutions.
 tag                : u8 = 0x02
 binary_ree         : binary REE stream ([§5.3](#53-binary-ree-no-anti-aliasing)) for the thresholded mask
 aa_pixel_count     : varint    - number of AA pixels in the overlay
-aa_positions       : varint[aa_pixel_count]  - delta-encoded absolute pixel indices
+aa_positions       : PLANES(aa_pixel_count)  - delta-encoded absolute pixel indices
 aa_values          : u8[aa_pixel_count]      - grayscale values (0–255)
 ```
 
 The `aa_positions` array uses delta encoding: `positions[0]` is the first AA pixel
 index; for `i > 0`, `positions[i] = aa_pixel_index[i] - aa_pixel_index[i-1]`.
 Since AA pixels cluster along geometry edges, consecutive deltas are small
-(often 1–8 pixels), making them highly compressible via varint.
+(often 1–8 pixels), and the significance planes of [§5.3.1](#531-significance-planes)
+keep the occasional large delta from spoiling a stream that is otherwise a run of
+ones.
 
 **Decoding algorithm:**
 
