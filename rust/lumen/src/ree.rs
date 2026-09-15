@@ -29,6 +29,27 @@ pub enum EncodeMode {
     Split,
 }
 
+/// One maximal run of equal pixels, in row-major order.
+///
+/// A run list is a mask's canonical decomposition: adjacent runs never carry the
+/// same value and the lengths sum to the layer's pixel count. A rasterizer that
+/// produces runs hands them to [`encode_runs`] directly, so the pixel mask a
+/// layer decodes to never has to exist.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Run {
+    /// How many pixels the run covers. At least 1.
+    pub length: u32,
+    /// The value every pixel of the run carries.
+    pub value: u8,
+}
+
+impl Run {
+    /// A run of `length` pixels carrying `value`.
+    pub fn new(length: u32, value: u8) -> Self {
+        Run { length, value }
+    }
+}
+
 /// A decoded layer mask.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DecodedLayer {
@@ -356,61 +377,262 @@ fn require_pixels(pixels: &[u8]) -> Result<()> {
     Ok(())
 }
 
-/// Write the tagless binary REE stream of section 5.3 for `pixels`, mapping each
-/// pixel through `value_of` so the split encoder can threshold without
-/// materializing a second mask.
+/// Reject a run list that is not a canonical cover of `total_pixels` pixels.
+///
+/// The two canonical-form rules report the check a strict reader reports for the
+/// same stream: `ree.run_lengths` for a zero-length run and `ree.grayscale_runs`
+/// for a value repeated by adjacent runs - they would be a single run. A cover of
+/// the wrong size is the run form of a mask of the wrong length, so it reports
+/// `ree.data_size` like [`encode`] does.
+fn check_runs(runs: &[Run], total_pixels: u32) -> Result<()> {
+    let mut covered = 0u64;
+    let mut previous: Option<u8> = None;
+    for run in runs {
+        if run.length == 0 {
+            return Err(Error::new(
+                Check::ReeRunLengths,
+                "run length 0: a run covers at least one pixel",
+            ));
+        }
+        if previous == Some(run.value) {
+            return Err(Error::new(
+                Check::ReeGrayscaleRuns,
+                format!(
+                    "adjacent runs both carry 0x{:02X}: they are a single run",
+                    run.value
+                ),
+            ));
+        }
+        covered += u64::from(run.length);
+        previous = Some(run.value);
+    }
+    if covered != u64::from(total_pixels) {
+        return Err(Error::new(
+            Check::ReeDataSize,
+            format!("runs cover {covered} pixels, total_pixels is {total_pixels}"),
+        ));
+    }
+    Ok(())
+}
+
+/// A layer's runs, from either a pixel mask or a caller's run slice.
+///
+/// One walk yields every maximal run in row-major order and does so lazily: the
+/// pixel form derives each run as it goes and never materializes them, which is
+/// what keeps a dense 16K layer - up to 94 million runs - from needing a vector
+/// of runs. `map` is applied to each value and adjacent equal mapped values are
+/// merged, so the split tag's thresholded core sees the same runs either way.
+#[derive(Clone, Copy)]
+enum RunSource<'a> {
+    /// One byte per pixel, in row-major order.
+    Pixels(&'a [u8]),
+    /// Runs already checked to be a canonical cover of the layer.
+    Runs(&'a [Run]),
+}
+
+impl RunSource<'_> {
+    /// Call `f(length, value)` once per run, in row-major order, with every value
+    /// passed through `map` and adjacent equal mapped values merged.
+    fn walk<F>(self, map: impl Fn(u8) -> u8 + Copy, mut f: F) -> Result<()>
+    where
+        F: FnMut(u64, u8) -> Result<()>,
+    {
+        match self {
+            RunSource::Pixels(pixels) => {
+                let mut pixels = pixels.iter().copied();
+                let Some(first) = pixels.next() else {
+                    return Ok(());
+                };
+                let mut value = map(first);
+                let mut length = 1u64;
+                for pixel in pixels {
+                    let mapped = map(pixel);
+                    if mapped == value {
+                        length += 1;
+                        continue;
+                    }
+                    f(length, value)?;
+                    value = mapped;
+                    length = 1;
+                }
+                f(length, value)
+            }
+            RunSource::Runs(runs) => {
+                let mut pending: Option<(u64, u8)> = None;
+                for run in runs {
+                    let value = map(run.value);
+                    match pending {
+                        Some((length, previous)) if previous == value => {
+                            pending = Some((length + u64::from(run.length), value));
+                        }
+                        Some((length, previous)) => {
+                            f(length, previous)?;
+                            pending = Some((u64::from(run.length), value));
+                        }
+                        None => pending = Some((u64::from(run.length), value)),
+                    }
+                }
+                match pending {
+                    Some((length, value)) => f(length, value),
+                    None => Ok(()),
+                }
+            }
+        }
+    }
+
+    /// Whether every pixel is `0x00`: that layer is the empty-layer form and has
+    /// no stream at all.
+    fn is_all_black(self) -> bool {
+        match self {
+            RunSource::Pixels(pixels) => pixels.iter().all(|pixel| *pixel == 0),
+            RunSource::Runs(runs) => runs.iter().all(|run| run.value == 0),
+        }
+    }
+
+    /// Whether every pixel is `0x00` or `0xFF`, which tag `0x00` requires.
+    fn is_binary(self) -> bool {
+        match self {
+            RunSource::Pixels(pixels) => pixels.iter().all(|pixel| *pixel == 0 || *pixel == 255),
+            RunSource::Runs(runs) => runs.iter().all(|run| run.value == 0 || run.value == 255),
+        }
+    }
+}
+
+/// Write the tagless binary REE stream of section 5.3 for `source`, mapping each
+/// value through `map` so the split encoder can threshold without materializing a
+/// second mask.
 fn write_binary_stream(
     writer: &mut Writer,
-    pixels: &[u8],
-    value_of: impl Fn(u8) -> u8,
+    source: RunSource<'_>,
+    map: impl Fn(u8) -> u8 + Copy,
 ) -> Result<()> {
-    let Some(&first) = pixels.first() else {
+    // Runs alternate strictly, so the value after the first is determined.
+    let mut first_value: Option<u8> = None;
+    let mut last: Option<u8> = None;
+    let mut run_count = 0u64;
+    source.walk(map, |_, value| {
+        match last {
+            None => {
+                if value != 0x00 && value != 0xFF {
+                    return Err(Error::new(
+                        Check::ReeFirstValue,
+                        format!("binary REE first_value is 0x{value:02X}, not 0x00 or 0xFF"),
+                    ));
+                }
+                first_value = Some(value);
+            }
+            Some(previous) if value != 255 - previous => {
+                return Err(Error::new(
+                    Check::ReeFirstValue,
+                    format!("binary REE cannot hold pixel 0x{value:02X}"),
+                ));
+            }
+            Some(_) => {}
+        }
+        last = Some(value);
+        run_count += 1;
+        Ok(())
+    })?;
+    let Some(first_value) = first_value else {
         return Err(Error::new(
             Check::ReeDataSize,
             "a binary stream needs at least one pixel",
         ));
     };
-    let first_value = value_of(first);
-    if first_value != 0x00 && first_value != 0xFF {
-        return Err(Error::new(
-            Check::ReeFirstValue,
-            format!("binary REE first_value is 0x{first_value:02X}, not 0x00 or 0xFF"),
-        ));
-    }
-
-    // Runs alternate strictly, so the value after the first is determined.
-    let mut run_count = 1u64;
-    let mut value = first_value;
-    for &pixel in pixels {
-        let mapped = value_of(pixel);
-        if mapped == value {
-            continue;
-        }
-        if mapped != 255 - value {
-            return Err(Error::new(
-                Check::ReeFirstValue,
-                format!("binary REE cannot hold pixel 0x{mapped:02X}"),
-            ));
-        }
-        run_count += 1;
-        value = mapped;
-    }
 
     writer.u8(first_value);
     writer.varint(run_count);
     // Every run length except the last, whose end is implicitly total_pixels.
-    let mut value = first_value;
-    let mut length = 0u64;
-    for &pixel in pixels {
-        if value_of(pixel) == value {
-            length += 1;
-        } else {
+    let mut remaining = run_count;
+    source.walk(map, |length, _| {
+        remaining -= 1;
+        if remaining > 0 {
             writer.varint(length);
-            value = value_of(pixel);
-            length = 1;
         }
-    }
-    Ok(())
+        Ok(())
+    })
+}
+
+/// Write the tagless grayscale REE stream of section 5.4 for `source`: the run
+/// count, then every run's value and its absolute end position.
+fn write_grayscale_stream(writer: &mut Writer, source: RunSource<'_>) -> Result<()> {
+    let mut run_count = 0u64;
+    source.walk(
+        |value| value,
+        |_, _| {
+            run_count += 1;
+            Ok(())
+        },
+    )?;
+    writer.varint(run_count);
+
+    // The last run ends at total_pixels, which the source's own lengths pin: the
+    // mask is exactly as long as the layer, or the runs sum to it.
+    let mut end = 0u64;
+    source.walk(
+        |value| value,
+        |length, value| {
+            end += length;
+            writer.u8(value);
+            writer.varint(end);
+            Ok(())
+        },
+    )
+}
+
+/// Write the tagless split REE stream of section 5.5 for `source`: a binary core
+/// over the thresholded values, then the sparse overlay of the anti-aliasing
+/// pixels.
+///
+/// The overlay costs one varint per anti-aliasing pixel, which is unavoidable:
+/// those bytes *are* the stream. The run walk around them stays lazy, so no
+/// per-pixel data is ever materialized.
+fn write_split_stream(writer: &mut Writer, source: RunSource<'_>) -> Result<()> {
+    write_binary_stream(writer, source, threshold)?;
+
+    // The overlay is exactly the pixels whose value is neither 0x00 nor 0xFF.
+    let mut count = 0u64;
+    source.walk(
+        |value| value,
+        |length, value| {
+            if value != 0x00 && value != 0xFF {
+                count += length;
+            }
+            Ok(())
+        },
+    )?;
+    writer.varint(count);
+
+    // Positions are absolute then delta-encoded, and strictly increasing, so
+    // every delta after the first is at least 1.
+    let mut start = 0u64;
+    let mut previous = 0u64;
+    source.walk(
+        |value| value,
+        |length, value| {
+            if value != 0x00 && value != 0xFF {
+                for position in start..start + length {
+                    writer.varint(position - previous);
+                    previous = position;
+                }
+            }
+            start += length;
+            Ok(())
+        },
+    )?;
+
+    // The values, in the same order.
+    source.walk(
+        |value| value,
+        |length, value| {
+            if value != 0x00 && value != 0xFF {
+                for _ in 0..length {
+                    writer.u8(value);
+                }
+            }
+            Ok(())
+        },
+    )
 }
 
 /// Encode a layer mask, choosing the tag per `mode`.
@@ -421,23 +643,53 @@ fn write_binary_stream(
 /// The returned bytes are the mask data a layer stores: the tag, then the
 /// stream. The tag is returned alongside them so a caller can log or branch on
 /// the choice, not so it can be re-prepended.
+///
+/// The mask is walked run by run as it is encoded, so no vector of runs is built
+/// for it; [`encode_runs`] is the same encoder for a caller who already holds the
+/// runs.
 pub fn encode(pixels: &[u8], total_pixels: u32, mode: EncodeMode) -> Result<Option<(u8, Vec<u8>)>> {
     check_mask(pixels, total_pixels)?;
-    if pixels.iter().all(|pixel| *pixel == 0) {
+    encode_source(RunSource::Pixels(pixels), mode)
+}
+
+/// Encode a layer given as runs rather than pixels, choosing the tag per `mode`.
+///
+/// Same tags, same canonical rules, same bytes as [`encode`] does for the mask
+/// the runs describe - without anyone ever building that mask. A rasterizer whose
+/// output is run-length encoded therefore feeds the encoder directly.
+///
+/// The run list must be canonical: every `length` is at least 1, no two adjacent
+/// runs carry the same `value` (they would be one run), and the lengths sum to
+/// `total_pixels`. Returns `None` for an all-black layer, which is stored as the
+/// empty-layer form with no bytes at all.
+pub fn encode_runs(
+    runs: &[Run],
+    total_pixels: u32,
+    mode: EncodeMode,
+) -> Result<Option<(u8, Vec<u8>)>> {
+    check_runs(runs, total_pixels)?;
+    encode_source(RunSource::Runs(runs), mode)
+}
+
+/// Encode one layer's runs, choosing the tag per `mode`. The source's runs are
+/// already known to be a canonical cover of the layer, so the walk needs no
+/// further validation.
+fn encode_source(source: RunSource<'_>, mode: EncodeMode) -> Result<Option<(u8, Vec<u8>)>> {
+    if source.is_all_black() {
         return Ok(None);
     }
     let encoded = match mode {
-        EncodeMode::Binary => (TAG_BINARY, encode_binary(pixels, total_pixels)?),
-        EncodeMode::Grayscale => (TAG_GRAYSCALE, encode_grayscale(pixels, total_pixels)?),
-        EncodeMode::Split => (TAG_SPLIT, encode_split(pixels, total_pixels)?),
+        EncodeMode::Binary => (TAG_BINARY, encode_binary_source(source)?),
+        EncodeMode::Grayscale => (TAG_GRAYSCALE, encode_grayscale_source(source)?),
+        EncodeMode::Split => (TAG_SPLIT, encode_split_source(source)?),
         EncodeMode::Auto => {
-            if pixels.iter().all(|pixel| *pixel == 0 || *pixel == 255) {
-                (TAG_BINARY, encode_binary(pixels, total_pixels)?)
+            if source.is_binary() {
+                (TAG_BINARY, encode_binary_source(source)?)
             } else {
                 // Section 5.6: the encoder picks the smaller of the two, and a
                 // tie goes to grayscale.
-                let grayscale = encode_grayscale(pixels, total_pixels)?;
-                let split = encode_split(pixels, total_pixels)?;
+                let grayscale = encode_grayscale_source(source)?;
+                let split = encode_split_source(source)?;
                 if split.len() < grayscale.len() {
                     (TAG_SPLIT, split)
                 } else {
@@ -453,9 +705,14 @@ pub fn encode(pixels: &[u8], total_pixels: u32, mode: EncodeMode) -> Result<Opti
 pub fn encode_binary(pixels: &[u8], total_pixels: u32) -> Result<Vec<u8>> {
     check_mask(pixels, total_pixels)?;
     require_pixels(pixels)?;
+    encode_binary_source(RunSource::Pixels(pixels))
+}
+
+/// Tag `0x00` for a source already known to hold at least one pixel.
+fn encode_binary_source(source: RunSource<'_>) -> Result<Vec<u8>> {
     let mut writer = Writer::new();
     writer.u8(TAG_BINARY);
-    write_binary_stream(&mut writer, pixels, |pixel| pixel)?;
+    write_binary_stream(&mut writer, source, |pixel| pixel)?;
     Ok(writer.into_vec())
 }
 
@@ -463,38 +720,14 @@ pub fn encode_binary(pixels: &[u8], total_pixels: u32) -> Result<Vec<u8>> {
 pub fn encode_grayscale(pixels: &[u8], total_pixels: u32) -> Result<Vec<u8>> {
     check_mask(pixels, total_pixels)?;
     require_pixels(pixels)?;
+    encode_grayscale_source(RunSource::Pixels(pixels))
+}
+
+/// Tag `0x01` for a source already known to hold at least one pixel.
+fn encode_grayscale_source(source: RunSource<'_>) -> Result<Vec<u8>> {
     let mut writer = Writer::new();
     writer.u8(TAG_GRAYSCALE);
-
-    // One run per maximal stretch of equal pixels.
-    let mut run_count = 0u64;
-    let mut previous: Option<u8> = None;
-    for &pixel in pixels {
-        if previous != Some(pixel) {
-            run_count += 1;
-            previous = Some(pixel);
-        }
-    }
-    writer.varint(run_count);
-
-    // Every run's value and its absolute end position; the last ends at
-    // total_pixels.
-    let mut end = 0u64;
-    let mut previous: Option<u8> = None;
-    for &pixel in pixels {
-        end += 1;
-        if previous != Some(pixel) {
-            if let Some(value) = previous {
-                writer.u8(value);
-                writer.varint(end - 1);
-            }
-            previous = Some(pixel);
-        }
-    }
-    if let Some(value) = previous {
-        writer.u8(value);
-        writer.varint(end);
-    }
+    write_grayscale_stream(&mut writer, source)?;
     Ok(writer.into_vec())
 }
 
@@ -502,35 +735,14 @@ pub fn encode_grayscale(pixels: &[u8], total_pixels: u32) -> Result<Vec<u8>> {
 pub fn encode_split(pixels: &[u8], total_pixels: u32) -> Result<Vec<u8>> {
     check_mask(pixels, total_pixels)?;
     require_pixels(pixels)?;
+    encode_split_source(RunSource::Pixels(pixels))
+}
+
+/// Tag `0x02` for a source already known to hold at least one pixel.
+fn encode_split_source(source: RunSource<'_>) -> Result<Vec<u8>> {
     let mut writer = Writer::new();
     writer.u8(TAG_SPLIT);
-    write_binary_stream(&mut writer, pixels, threshold)?;
-
-    // The overlay is exactly the pixels whose value is neither 0x00 nor 0xFF.
-    let mut count = 0u64;
-    for &pixel in pixels {
-        if pixel != 0x00 && pixel != 0xFF {
-            count += 1;
-        }
-    }
-    writer.varint(count);
-
-    // Positions are absolute then delta-encoded, and strictly increasing, so
-    // every delta after the first is at least 1.
-    let mut previous = 0u64;
-    for (index, &pixel) in pixels.iter().enumerate() {
-        if pixel == 0x00 || pixel == 0xFF {
-            continue;
-        }
-        let position = index as u64;
-        writer.varint(position - previous);
-        previous = position;
-    }
-    for &pixel in pixels {
-        if pixel != 0x00 && pixel != 0xFF {
-            writer.u8(pixel);
-        }
-    }
+    write_split_stream(&mut writer, source)?;
     Ok(writer.into_vec())
 }
 
@@ -582,6 +794,73 @@ mod tests {
 
     fn bytes(hex: &str) -> Vec<u8> {
         hex::decode(hex).unwrap()
+    }
+
+    /// The canonical `Run` list of a mask.
+    fn runs_of(pixels: &[u8]) -> Vec<Run> {
+        runs(pixels)
+            .into_iter()
+            .map(|(value, length)| Run::new(length as u32, value))
+            .collect()
+    }
+
+    /// The `Run` list of `(value, length)` pairs.
+    fn run_list(spec: &[(u8, usize)]) -> Vec<Run> {
+        spec.iter()
+            .map(|(value, length)| Run::new(*length as u32, *value))
+            .collect()
+    }
+
+    /// Every encoding, so a mismatch in any of them is caught.
+    const MODES: [EncodeMode; 4] = [
+        EncodeMode::Auto,
+        EncodeMode::Binary,
+        EncodeMode::Grayscale,
+        EncodeMode::Split,
+    ];
+
+    /// One corpus stream: the hex it is stored as, its mask as `(value, length)`
+    /// pairs, the tag it carries, and the mode that selects that tag.
+    type CorpusCase = (&'static str, Vec<(u8, usize)>, u8, EncodeMode);
+
+    /// The corpus masks as runs, with the tag each one is stored under and the
+    /// mode that selects that tag. The split mask is stored as split by the
+    /// corpus' own preference, not because it is the smaller stream.
+    fn corpus_cases() -> [CorpusCase; 3] {
+        [
+            (
+                LAYER_BINARY,
+                vec![(0, 100), (255, 200), (0, 2772)],
+                TAG_BINARY,
+                EncodeMode::Binary,
+            ),
+            (
+                LAYER_GRAYSCALE,
+                vec![(0, 100), (128, 20), (0, 100), (255, 100), (0, 2752)],
+                TAG_GRAYSCALE,
+                EncodeMode::Grayscale,
+            ),
+            (
+                LAYER_SPLIT,
+                vec![(0, 100), (200, 30), (0, 20), (255, 50), (0, 2872)],
+                TAG_SPLIT,
+                EncodeMode::Split,
+            ),
+        ]
+    }
+
+    /// The run path must return the pixel path's bytes for a mask, or fail the
+    /// same named check when the mode cannot represent it.
+    fn assert_run_path_matches(pixels: &[u8], runs: &[Run], total: u32, mode: EncodeMode) {
+        match (encode(pixels, total, mode), encode_runs(runs, total, mode)) {
+            (Ok(pixel_path), Ok(run_path)) => assert_eq!(pixel_path, run_path, "mode {mode:?}"),
+            (Err(pixel_path), Err(run_path)) => {
+                assert_eq!(pixel_path.check(), run_path.check(), "mode {mode:?}")
+            }
+            (pixel_path, run_path) => {
+                panic!("{mode:?}: pixel path {pixel_path:?}, run path {run_path:?}")
+            }
+        }
     }
 
     fn check_of(data: &[u8], total: u32, strict: bool) -> Check {
@@ -1030,6 +1309,180 @@ mod tests {
                 Check::ReeTag,
                 "layer mask data is empty: the empty-layer form carries no bytes"
             ))
+        );
+    }
+
+    #[test]
+    fn run_path_encodes_the_corpus_masks_byte_for_byte() {
+        for (hex, spec, tag, chosen) in corpus_cases() {
+            let pixels = mask(&spec);
+            let runs = run_list(&spec);
+            assert_eq!(
+                encode_runs(&runs, TOTAL, chosen).unwrap(),
+                Some((tag, bytes(hex))),
+                "the corpus stream is what the run path must produce"
+            );
+            for mode in MODES {
+                assert_run_path_matches(&pixels, &runs, TOTAL, mode);
+            }
+        }
+    }
+
+    /// A 1920 x 1080 mask whose white block carries a 64-pixel anti-aliased ramp
+    /// on each side: a rasterizer's output, with the split overlay at its busiest.
+    fn large_mask() -> Vec<u8> {
+        const W: usize = 1920;
+        const H: usize = 1080;
+        const MARGIN: usize = 480;
+        const RAMP: usize = 64;
+        let mut pixels = vec![0u8; W * H];
+        for row in 0..H {
+            let line = &mut pixels[row * W..(row + 1) * W];
+            for offset in 0..RAMP {
+                line[MARGIN + offset] = (offset * 4) as u8;
+                line[W - MARGIN - RAMP + offset] = 255 - (offset * 4) as u8;
+            }
+            line[MARGIN + RAMP..W - MARGIN - RAMP].fill(255);
+        }
+        pixels
+    }
+
+    #[test]
+    fn run_path_matches_the_pixel_path_on_a_large_anti_aliased_mask() {
+        let pixels = large_mask();
+        let runs = runs_of(&pixels);
+        let total = pixels.len() as u32;
+        assert_eq!(total, 1920 * 1080);
+        assert!(
+            pixels.iter().any(|pixel| *pixel != 0x00 && *pixel != 0xFF),
+            "the mask must exercise the split overlay"
+        );
+        for mode in MODES {
+            assert_run_path_matches(&pixels, &runs, total, mode);
+        }
+    }
+
+    #[test]
+    fn run_path_matches_the_pixel_path_over_every_small_mask() {
+        // Every five-pixel mask over an alphabet that spans both sides of the
+        // 128 threshold, the two binary values, and a pair that merges under it.
+        // Small enough to exhaust, and dense enough that the odd cases -
+        // anti-aliasing at position 0, a single run, an all-black layer, a tie
+        // between split and grayscale - all appear.
+        const ALPHABET: [u8; 5] = [0x00, 0x01, 0x7F, 0x80, 0xFF];
+        let mut pixels = [0u8; 5];
+        let mut counter = 0usize;
+        while counter < ALPHABET.len().pow(pixels.len() as u32) {
+            let mut rest = counter;
+            for pixel in &mut pixels {
+                *pixel = ALPHABET[rest % ALPHABET.len()];
+                rest /= ALPHABET.len();
+            }
+            counter += 1;
+            let runs = runs_of(&pixels);
+            for mode in MODES {
+                assert_run_path_matches(&pixels, &runs, 5, mode);
+            }
+        }
+    }
+
+    #[test]
+    fn split_core_merges_runs_that_threshold_alike() {
+        // Adjacent runs of 90 and 100 both threshold to 0x00, so the binary core
+        // holds one run for the three pixels and the overlay keeps each pixel's
+        // own value - which is what the pixel path does.
+        let pixels = [90u8, 100, 90, 255, 255];
+        let runs = runs_of(&pixels);
+        assert_eq!(runs.len(), 4, "the mask's own runs do not merge");
+        assert_eq!(runs[0], Run::new(1, 90));
+        assert_eq!(runs[1], Run::new(1, 100));
+        assert_run_path_matches(&pixels, &runs, 5, EncodeMode::Split);
+        // The core is `first_value 0x00`, two runs, one stored length of 3.
+        let (tag, data) = encode_runs(&runs, 5, EncodeMode::Split).unwrap().unwrap();
+        assert_eq!(tag, TAG_SPLIT);
+        assert_eq!(&data[..5], &[TAG_SPLIT, 0x00, 0x02, 0x03, 0x03]);
+        assert_eq!(decode(&data, 5, true).unwrap().pixels, pixels);
+    }
+
+    #[test]
+    fn run_path_rejects_non_canonical_runs() {
+        // A run of length 0, at either end: a run covers at least one pixel.
+        assert_eq!(
+            encode_runs(&[Run::new(0, 0), Run::new(4, 255)], 4, EncodeMode::Auto)
+                .unwrap_err()
+                .check(),
+            Check::ReeRunLengths
+        );
+        assert_eq!(
+            encode_runs(
+                &[Run::new(4, 255), Run::new(0, 0)],
+                4,
+                EncodeMode::Grayscale
+            )
+            .unwrap_err()
+            .check(),
+            Check::ReeRunLengths
+        );
+
+        // Adjacent runs carrying the same value are one run, in every mode.
+        for mode in MODES {
+            assert_eq!(
+                encode_runs(&[Run::new(2, 0), Run::new(2, 0)], 4, mode)
+                    .unwrap_err()
+                    .check(),
+                Check::ReeGrayscaleRuns,
+                "mode {mode:?}"
+            );
+        }
+        assert_eq!(
+            encode_runs(
+                &[Run::new(1, 200), Run::new(1, 200), Run::new(2, 0)],
+                4,
+                EncodeMode::Split
+            )
+            .unwrap_err()
+            .check(),
+            Check::ReeGrayscaleRuns
+        );
+
+        // A cover of the wrong size, in either direction, and no cover at all.
+        for runs in [
+            vec![Run::new(2, 0), Run::new(1, 255)],
+            vec![Run::new(5, 255)],
+            vec![],
+        ] {
+            assert_eq!(
+                encode_runs(&runs, 4, EncodeMode::Auto).unwrap_err().check(),
+                Check::ReeDataSize
+            );
+        }
+
+        // A layer with no pixels, and an all-black cover, are both the
+        // empty-layer form rather than an error.
+        assert_eq!(encode_runs(&[], 0, EncodeMode::Auto).unwrap(), None);
+        assert_eq!(
+            encode_runs(&[Run::new(4, 0)], 4, EncodeMode::Auto).unwrap(),
+            None
+        );
+        assert_eq!(
+            encode_runs(&[Run::new(1, 0), Run::new(3, 0)], 4, EncodeMode::Auto)
+                .unwrap_err()
+                .check(),
+            Check::ReeGrayscaleRuns
+        );
+
+        // Binary REE still refuses a value that is neither black nor white.
+        assert_eq!(
+            encode_runs(&[Run::new(1, 0), Run::new(3, 7)], 4, EncodeMode::Binary)
+                .unwrap_err()
+                .check(),
+            Check::ReeFirstValue
+        );
+        assert_eq!(
+            encode_runs(&[Run::new(4, 7)], 4, EncodeMode::Binary)
+                .unwrap_err()
+                .check(),
+            Check::ReeFirstValue
         );
     }
 }
