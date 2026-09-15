@@ -13,8 +13,8 @@
       "order": 20
     },
     {
-      "id": "metadata",
-      "title": "Metadata",
+      "id": "advanced",
+      "title": "Advanced",
       "order": 30
     }
   ],
@@ -38,45 +38,45 @@
       "order": 30
     },
     {
-      "id": "motion",
-      "title": "Lift and Retract",
-      "tabId": "standard",
-      "order": 40
-    },
-    {
       "id": "timing",
       "title": "Timing",
       "tabId": "standard",
-      "order": 50
+      "order": 40
     },
     {
       "id": "light",
       "title": "Light Settings",
       "tabId": "standard",
-      "order": 60
+      "order": 50
     },
     {
       "id": "two-stage-burn-in-motion",
-      "title": "Burn-In Motion",
+      "title": "Burn-In Two-Stage Motion",
       "tabId": "two-stage",
       "order": 10
     },
     {
       "id": "two-stage-motion",
-      "title": "Normal Motion",
+      "title": "Two-Stage Motion",
       "tabId": "two-stage",
       "order": 20
     },
     {
+      "id": "burn-in-waits",
+      "title": "Burn-In Waits",
+      "tabId": "advanced",
+      "order": 10
+    },
+    {
       "id": "temperature",
       "title": "Temperature",
-      "tabId": "metadata",
+      "tabId": "meta",
       "order": 10
     },
     {
       "id": "file",
       "title": "File",
-      "tabId": "metadata",
+      "tabId": "meta",
       "order": 20
     }
   ],
@@ -96,32 +96,11 @@
       "order": 10
     },
     {
-      "id": "bottom-wait-times",
-      "title": "Extended Wait Time",
-      "tabId": "standard",
-      "sectionId": "burn-in",
-      "order": 20
-    },
-    {
       "id": "normal-settings",
       "title": "Normal Layers",
       "tabId": "standard",
       "sectionId": "normal",
       "order": 10
-    },
-    {
-      "id": "burn-in-motion-settings",
-      "title": "Burn-In Motion",
-      "tabId": "standard",
-      "sectionId": "motion",
-      "order": 10
-    },
-    {
-      "id": "normal-motion-settings",
-      "title": "Normal Motion",
-      "tabId": "standard",
-      "sectionId": "motion",
-      "order": 20
     },
     {
       "id": "timing-settings",
@@ -139,29 +118,36 @@
     },
     {
       "id": "two-stage-burn-in-settings",
-      "title": "Burn-In Motion",
+      "title": "Burn-In Two-Stage Motion",
       "tabId": "two-stage",
       "sectionId": "two-stage-burn-in-motion",
       "order": 10
     },
     {
       "id": "two-stage-settings",
-      "title": "Normal Motion",
+      "title": "Two-Stage Motion",
       "tabId": "two-stage",
       "sectionId": "two-stage-motion",
       "order": 10
     },
     {
+      "id": "bottom-wait-times",
+      "title": "Extended Wait Time",
+      "tabId": "advanced",
+      "sectionId": "burn-in-waits",
+      "order": 10
+    },
+    {
       "id": "temperature-settings",
       "title": "Temperature",
-      "tabId": "metadata",
+      "tabId": "meta",
       "sectionId": "temperature",
       "order": 10
     },
     {
       "id": "scene-settings",
       "title": "Scene",
-      "tabId": "metadata",
+      "tabId": "meta",
       "sectionId": "file",
       "order": 10
     }
@@ -201,22 +187,6 @@
       "description": "zstd level for layer frames. 3 slices fastest and gives the largest files, 6 is the default, 19 is smallest and costs seconds on a large print."
     },
     {
-      "key": "bottomExposureSec",
-      "label": "Burn-in Exposure (s)",
-      "kind": "number",
-      "defaultValue": 25,
-      "min": 0,
-      "max": 300,
-      "step": 0.1,
-      "placement": {
-        "tabId": "standard",
-        "sectionId": "burn-in",
-        "cardId": "burn-in-settings",
-        "order": 30
-      },
-      "metadataPath": "material.bottomExposureSec"
-    },
-    {
       "key": "bottomLayerCount",
       "label": "Burn-in Layers",
       "kind": "integer",
@@ -249,68 +219,20 @@
       "metadataPath": "lumen.transitionLayerCount"
     },
     {
-      "key": "bottomWaitTimeAfterCureSec",
-      "label": "Extended Wait After Cure (s)",
+      "key": "bottomExposureSec",
+      "label": "Burn-in Exposure (s)",
       "kind": "number",
-      "defaultValue": 0,
+      "defaultValue": 25,
       "min": 0,
-      "max": 120,
-      "step": 0.01,
+      "max": 300,
+      "step": 0.1,
       "placement": {
         "tabId": "standard",
         "sectionId": "burn-in",
-        "cardId": "bottom-wait-times",
+        "cardId": "burn-in-settings",
         "order": 30
       },
-      "metadataPath": "lumen.bottomWaitTimeAfterCureSec"
-    },
-    {
-      "key": "bottomWaitTimeAfterLiftSec",
-      "label": "Extended Wait After Lift (s)",
-      "kind": "number",
-      "defaultValue": 0,
-      "min": 0,
-      "max": 120,
-      "step": 0.01,
-      "placement": {
-        "tabId": "standard",
-        "sectionId": "burn-in",
-        "cardId": "bottom-wait-times",
-        "order": 40
-      },
-      "metadataPath": "lumen.bottomWaitTimeAfterLiftSec"
-    },
-    {
-      "key": "bottomWaitTimeBeforeCureSec",
-      "label": "Extended Wait Before Cure (s)",
-      "kind": "number",
-      "defaultValue": 0,
-      "min": 0,
-      "max": 120,
-      "step": 0.01,
-      "placement": {
-        "tabId": "standard",
-        "sectionId": "burn-in",
-        "cardId": "bottom-wait-times",
-        "order": 20
-      },
-      "metadataPath": "lumen.bottomWaitTimeBeforeCureSec"
-    },
-    {
-      "key": "waitTimeBottomLayerCount",
-      "label": "Extended Wait Time Layers From Bottom",
-      "kind": "number",
-      "defaultValue": 5,
-      "min": 0,
-      "max": 200,
-      "step": 1,
-      "placement": {
-        "tabId": "standard",
-        "sectionId": "burn-in",
-        "cardId": "bottom-wait-times",
-        "order": 10
-      },
-      "metadataPath": "material.waitTimeBottomLayerCount"
+      "metadataPath": "material.bottomExposureSec"
     },
     {
       "key": "normalExposureSec",
@@ -329,118 +251,20 @@
       "metadataPath": "material.normalExposureSec"
     },
     {
-      "key": "bottomLiftDistanceMm",
-      "label": "Burn-in Lift Distance (mm)",
+      "key": "waitTimeBeforeCureSec",
+      "label": "Wait Before Cure (s)",
       "kind": "number",
-      "defaultValue": 3,
+      "defaultValue": 0,
       "min": 0,
-      "max": 50,
+      "max": 120,
       "step": 0.01,
       "placement": {
         "tabId": "standard",
-        "sectionId": "motion",
-        "cardId": "burn-in-motion-settings",
+        "sectionId": "timing",
+        "cardId": "timing-settings",
         "order": 10
       },
-      "metadataPath": "lumen.bottomLiftDistanceMm",
-      "tag": "Slow",
-      "color": "#f59e0b",
-      "splitWithKey": "bottomLiftDistance2Mm"
-    },
-    {
-      "key": "bottomLiftSpeedMmMin",
-      "label": "Burn-in Lift Speed (mm/min)",
-      "kind": "number",
-      "defaultValue": 60,
-      "min": 0,
-      "max": 100000,
-      "step": 1,
-      "placement": {
-        "tabId": "standard",
-        "sectionId": "motion",
-        "cardId": "burn-in-motion-settings",
-        "order": 20
-      },
-      "metadataPath": "lumen.bottomLiftSpeedMmMin",
-      "tag": "Slow",
-      "color": "#f59e0b",
-      "splitWithKey": "bottomLiftSpeed2MmMin"
-    },
-    {
-      "key": "bottomRetractSpeedMmMin",
-      "label": "Burn-in Retract Speed (mm/min)",
-      "kind": "number",
-      "defaultValue": 180,
-      "min": 0,
-      "max": 100000,
-      "step": 1,
-      "placement": {
-        "tabId": "standard",
-        "sectionId": "motion",
-        "cardId": "burn-in-motion-settings",
-        "order": 30
-      },
-      "metadataPath": "lumen.bottomRetractSpeedMmMin",
-      "tag": "Fast",
-      "color": "#22c55e",
-      "splitWithKey": "bottomRetractSpeed2MmMin"
-    },
-    {
-      "key": "liftDistanceMm",
-      "label": "Lift Distance (mm)",
-      "kind": "number",
-      "defaultValue": 1,
-      "min": 0,
-      "max": 50,
-      "step": 0.01,
-      "placement": {
-        "tabId": "standard",
-        "sectionId": "motion",
-        "cardId": "normal-motion-settings",
-        "order": 10
-      },
-      "metadataPath": "material.liftDistanceMm",
-      "tag": "Slow",
-      "color": "#f59e0b",
-      "splitWithKey": "liftDistance2Mm"
-    },
-    {
-      "key": "liftSpeedMmMin",
-      "label": "Lift Speed (mm/min)",
-      "kind": "number",
-      "defaultValue": 60,
-      "min": 0,
-      "max": 100000,
-      "step": 1,
-      "placement": {
-        "tabId": "standard",
-        "sectionId": "motion",
-        "cardId": "normal-motion-settings",
-        "order": 20
-      },
-      "metadataPath": "material.liftSpeedMmMin",
-      "tag": "Slow",
-      "color": "#f59e0b",
-      "splitWithKey": "liftSpeed2MmMin"
-    },
-    {
-      "key": "retractSpeedMmMin",
-      "label": "Retract Speed (mm/min)",
-      "kind": "number",
-      "defaultValue": 240,
-      "min": 0,
-      "max": 100000,
-      "step": 1,
-      "placement": {
-        "tabId": "standard",
-        "sectionId": "motion",
-        "cardId": "normal-motion-settings",
-        "order": 30
-      },
-      "metadataPath": "material.retractSpeedMmMin",
-      "tag": "Fast",
-      "color": "#22c55e",
-      "splitWithKey": "retractSpeed2MmMin"
+      "metadataPath": "lumen.waitTimeBeforeCureSec"
     },
     {
       "key": "waitTimeAfterCureSec",
@@ -475,20 +299,20 @@
       "metadataPath": "lumen.waitTimeAfterLiftSec"
     },
     {
-      "key": "waitTimeBeforeCureSec",
-      "label": "Wait Before Cure (s)",
+      "key": "projectorPwmPercent",
+      "label": "Projector PWM (%)",
       "kind": "number",
-      "defaultValue": 0,
-      "min": 0,
-      "max": 120,
-      "step": 0.01,
+      "defaultValue": 100,
+      "min": 1,
+      "max": 100,
+      "step": 1,
       "placement": {
         "tabId": "standard",
-        "sectionId": "timing",
-        "cardId": "timing-settings",
+        "sectionId": "light",
+        "cardId": "light-settings",
         "order": 10
       },
-      "metadataPath": "lumen.waitTimeBeforeCureSec"
+      "metadataPath": "lumen.projectorPwmPercent"
     },
     {
       "key": "bottomProjectorPwmPercent",
@@ -507,20 +331,23 @@
       "metadataPath": "lumen.bottomProjectorPwmPercent"
     },
     {
-      "key": "projectorPwmPercent",
-      "label": "Projector PWM (%)",
+      "key": "bottomLiftDistanceMm",
+      "label": "Burn-in Lift Distance (mm)",
       "kind": "number",
-      "defaultValue": 100,
-      "min": 1,
-      "max": 100,
-      "step": 1,
+      "defaultValue": 3,
+      "min": 0,
+      "max": 50,
+      "step": 0.01,
       "placement": {
-        "tabId": "standard",
-        "sectionId": "light",
-        "cardId": "light-settings",
+        "tabId": "two-stage",
+        "sectionId": "two-stage-burn-in-motion",
+        "cardId": "two-stage-burn-in-settings",
         "order": 10
       },
-      "metadataPath": "lumen.projectorPwmPercent"
+      "metadataPath": "lumen.bottomLiftDistanceMm",
+      "tag": "Slow",
+      "color": "#f59e0b",
+      "splitWithKey": "bottomLiftDistance2Mm"
     },
     {
       "key": "bottomLiftDistance2Mm",
@@ -541,6 +368,25 @@
       "metadataPath": "lumen.bottomLiftDistance2Mm"
     },
     {
+      "key": "bottomLiftSpeedMmMin",
+      "label": "Burn-in Lift Speed (mm/min)",
+      "kind": "number",
+      "defaultValue": 60,
+      "min": 0,
+      "max": 100000,
+      "step": 1,
+      "placement": {
+        "tabId": "two-stage",
+        "sectionId": "two-stage-burn-in-motion",
+        "cardId": "two-stage-burn-in-settings",
+        "order": 20
+      },
+      "metadataPath": "lumen.bottomLiftSpeedMmMin",
+      "tag": "Slow",
+      "color": "#f59e0b",
+      "splitWithKey": "bottomLiftSpeed2MmMin"
+    },
+    {
       "key": "bottomLiftSpeed2MmMin",
       "label": "Burn-In Lift Speed 2 (mm/min)",
       "kind": "number",
@@ -557,6 +403,25 @@
         "order": 20
       },
       "metadataPath": "lumen.bottomLiftSpeed2MmMin"
+    },
+    {
+      "key": "bottomRetractSpeedMmMin",
+      "label": "Burn-in Retract Speed (mm/min)",
+      "kind": "number",
+      "defaultValue": 180,
+      "min": 0,
+      "max": 100000,
+      "step": 1,
+      "placement": {
+        "tabId": "two-stage",
+        "sectionId": "two-stage-burn-in-motion",
+        "cardId": "two-stage-burn-in-settings",
+        "order": 30
+      },
+      "metadataPath": "lumen.bottomRetractSpeedMmMin",
+      "tag": "Fast",
+      "color": "#22c55e",
+      "splitWithKey": "bottomRetractSpeed2MmMin"
     },
     {
       "key": "bottomRetractSpeed2MmMin",
@@ -577,6 +442,25 @@
       "metadataPath": "lumen.bottomRetractSpeed2MmMin"
     },
     {
+      "key": "liftDistanceMm",
+      "label": "Lift Distance (mm)",
+      "kind": "number",
+      "defaultValue": 1,
+      "min": 0,
+      "max": 50,
+      "step": 0.01,
+      "placement": {
+        "tabId": "two-stage",
+        "sectionId": "two-stage-motion",
+        "cardId": "two-stage-settings",
+        "order": 10
+      },
+      "metadataPath": "material.liftDistanceMm",
+      "tag": "Slow",
+      "color": "#f59e0b",
+      "splitWithKey": "liftDistance2Mm"
+    },
+    {
       "key": "liftDistance2Mm",
       "label": "Lift Distance 2 (mm)",
       "kind": "number",
@@ -593,6 +477,25 @@
         "order": 10
       },
       "metadataPath": "lumen.liftDistance2Mm"
+    },
+    {
+      "key": "liftSpeedMmMin",
+      "label": "Lift Speed (mm/min)",
+      "kind": "number",
+      "defaultValue": 60,
+      "min": 0,
+      "max": 100000,
+      "step": 1,
+      "placement": {
+        "tabId": "two-stage",
+        "sectionId": "two-stage-motion",
+        "cardId": "two-stage-settings",
+        "order": 20
+      },
+      "metadataPath": "material.liftSpeedMmMin",
+      "tag": "Slow",
+      "color": "#f59e0b",
+      "splitWithKey": "liftSpeed2MmMin"
     },
     {
       "key": "liftSpeed2MmMin",
@@ -613,6 +516,25 @@
       "metadataPath": "lumen.liftSpeed2MmMin"
     },
     {
+      "key": "retractSpeedMmMin",
+      "label": "Retract Speed (mm/min)",
+      "kind": "number",
+      "defaultValue": 240,
+      "min": 0,
+      "max": 100000,
+      "step": 1,
+      "placement": {
+        "tabId": "two-stage",
+        "sectionId": "two-stage-motion",
+        "cardId": "two-stage-settings",
+        "order": 30
+      },
+      "metadataPath": "material.retractSpeedMmMin",
+      "tag": "Fast",
+      "color": "#22c55e",
+      "splitWithKey": "retractSpeed2MmMin"
+    },
+    {
       "key": "retractSpeed2MmMin",
       "label": "Retract Speed 2 (mm/min)",
       "kind": "number",
@@ -631,6 +553,54 @@
       "metadataPath": "lumen.retractSpeed2MmMin"
     },
     {
+      "key": "bottomWaitTimeBeforeCureSec",
+      "label": "Extended Wait Before Cure (s)",
+      "kind": "number",
+      "defaultValue": 0,
+      "min": 0,
+      "max": 120,
+      "step": 0.01,
+      "placement": {
+        "tabId": "advanced",
+        "sectionId": "burn-in-waits",
+        "cardId": "bottom-wait-times",
+        "order": 10
+      },
+      "metadataPath": "lumen.bottomWaitTimeBeforeCureSec"
+    },
+    {
+      "key": "bottomWaitTimeAfterCureSec",
+      "label": "Extended Wait After Cure (s)",
+      "kind": "number",
+      "defaultValue": 0,
+      "min": 0,
+      "max": 120,
+      "step": 0.01,
+      "placement": {
+        "tabId": "advanced",
+        "sectionId": "burn-in-waits",
+        "cardId": "bottom-wait-times",
+        "order": 20
+      },
+      "metadataPath": "lumen.bottomWaitTimeAfterCureSec"
+    },
+    {
+      "key": "bottomWaitTimeAfterLiftSec",
+      "label": "Extended Wait After Lift (s)",
+      "kind": "number",
+      "defaultValue": 0,
+      "min": 0,
+      "max": 120,
+      "step": 0.01,
+      "placement": {
+        "tabId": "advanced",
+        "sectionId": "burn-in-waits",
+        "cardId": "bottom-wait-times",
+        "order": 30
+      },
+      "metadataPath": "lumen.bottomWaitTimeAfterLiftSec"
+    },
+    {
       "key": "chamberTemperatureC",
       "label": "Chamber Temperature (°C)",
       "kind": "number",
@@ -638,7 +608,7 @@
       "max": 120,
       "step": 0.1,
       "placement": {
-        "tabId": "metadata",
+        "tabId": "meta",
         "sectionId": "temperature",
         "cardId": "temperature-settings",
         "order": 10
@@ -653,7 +623,7 @@
       "max": 120,
       "step": 0.1,
       "placement": {
-        "tabId": "metadata",
+        "tabId": "meta",
         "sectionId": "temperature",
         "cardId": "temperature-settings",
         "order": 20
@@ -667,7 +637,7 @@
       "defaultValue": false,
       "description": "Write the scene this print came from into the .lumen file, so the file carries its own scene. The scene's bytes are added to the file, which grows it by the scene's size.",
       "placement": {
-        "tabId": "metadata",
+        "tabId": "meta",
         "sectionId": "file",
         "cardId": "scene-settings",
         "order": 10

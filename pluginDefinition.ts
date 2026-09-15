@@ -9,16 +9,24 @@ import { LUMEN_FORMAT_DEFINITION } from './slicing/lumenFormatDefinition';
 import lumenStandardMaterialSettings from './materialSettings/settings_standard.json';
 
 /**
- * LUMEN's one settings page.
+ * LUMEN's settings, filed under four tabs.
  *
- * The format needs a single page: META always carries both the lift and the retract
- * segment, and the `lumen.*` namespace the encoder reads is already the everything
- * set, so a two-stage page and an all-fields page described the same settings twice.
- * A tilting vat's motion belongs to the printer's firmware, and META's lift and
+ * Standard carries the everyday print settings. Two-Stage carries the motion in
+ * CTB's paired form: each first segment sits beside the second segment of the
+ * same move, so a row shows both halves, the tags say which end is slow and
+ * which is fast, and a single-stage machine reads the half it leaves at zero.
+ * Advanced holds the extended burn-in waits, and the temperatures and the scene
+ * switch sit on the profile's own Meta tab, which the app renders for any format
+ * that places fields there.
+ *
+ * The format needs one mode: META always carries both the lift and the retract
+ * segment, and the `lumen.*` namespace the encoder reads is already the
+ * everything set, so a second mode would describe the same settings twice. A
+ * tilting vat's motion belongs to the printer's firmware, and META's lift and
  * retract values stay required, so there is no tilting page either.
  *
  * The source still goes through the differential resolver the other formats use, so a
- * later mode can inherit this page by name.
+ * later mode can inherit these tabs by name.
  */
 const LUMEN_STANDARD_SETTINGS = lumenStandardMaterialSettings as MaterialSettingsSource;
 
