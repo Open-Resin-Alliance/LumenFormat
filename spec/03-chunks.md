@@ -8,23 +8,31 @@ A LUMEN file is composed of typed chunks. The table below summarizes every
 chunk defined by this specification. Developers can scan this to understand
 the file's capabilities at a glance; detailed binary layouts follow.
 
-| Tag | Name | Required | Encrypted | Purpose |
-|-----|------|----------|-----------|---------|
-| `HDR\0` | Header | Yes | No | Display dimensions, layer count, encoder identity |
-| `META` | Metadata | Yes | Yes | Print parameters as JSON (exposure, lift, motion) |
-| `PROF` | Print Profile | No | Yes | Named, versioned, reusable profile for Odyssey import |
-| `AUTH` | Authentication | No | No | Encryption metadata, key wrapping, machine binding |
-| `SECT` | Sector Definition | No* | Yes | Per-material exposure groups for multi-material printing |
-| `LROV` | Layer Override | No | Yes | Per-layer or per-range timing overrides |
-| `PREV` | Preview Image | No | Optional | PNG preview images, multiple roles supported |
-| `LTBL` | Layer Table | Yes | No | Per-layer block index and byte offsets for random access |
-| `ZDIC` | Zstd Dictionary | No | Yes | Trained dictionary shared by all LAYR block frames |
-| `LAYR` | Layer Data | Yes | Yes | Layer masks as independent zstd block frames |
-| `LHAS` | Layer Hashes | No | No | SHA-256 Merkle tree for integrity verification |
-| `VOXL` | Embedded Scene | No | Yes | Complete VOXL scene file for round-trip re-editing |
-| `EXTD` | Extension | No | Per-extension | Vendor-specific or future standard extensions |
+| Tag | Name | Required | Reader support | Encrypted | Purpose |
+|-----|------|----------|----------------|-----------|---------|
+| `HDR\0` | Header | Yes | Required | No | Display dimensions, layer count, encoder identity |
+| `META` | Metadata | Yes | Required | Yes | Print parameters as JSON (exposure, lift, motion) |
+| `PROF` | Print Profile | No | Optional | Yes | Named, versioned, reusable profile for Odyssey import |
+| `AUTH` | Authentication | No | Required when the file is encrypted | No | Encryption metadata, key wrapping, machine binding |
+| `SECT` | Sector Definition | No* | Required, or decode sector 0 and report the rest ([§7.2](10-sectors.md#72-sector-0-convention-and-single-material-degradation)) | Yes | Per-material exposure groups for multi-material printing |
+| `LROV` | Layer Override | No | **Required** - refuse a file you cannot honor ([§4.6](05-print-control.md#46-lrov---layer-override-chunk)) | Yes | Per-layer or per-range timing overrides |
+| `PREV` | Preview Image | No | Optional | Optional | PNG preview images, multiple roles supported |
+| `LTBL` | Layer Table | Yes | Required | No | Per-layer block index and byte offsets for random access |
+| `ZDIC` | Zstd Dictionary | No | Required when present | Yes | Trained dictionary shared by all LAYR block frames |
+| `LAYR` | Layer Data | Yes | Required | Yes | Layer masks as independent zstd block frames |
+| `LHAS` | Layer Hashes | No | Optional | No | SHA-256 Merkle tree for integrity verification |
+| `VOXL` | Embedded Scene | No | Optional (opaque) | Yes | Complete VOXL scene file for round-trip re-editing |
+| `EXTD` | Extension | No | Per-extension: refuse a `critical` one you do not implement | Per-extension | Vendor-specific or future standard extensions |
 
 \* Required when `MULTI_SECTOR` flag is set.
+
+The **Required** column is about presence in a file: what an encoder must write. **Reader
+support** is the separate obligation on the other side, and the two do not line up - a
+chunk may be optional to write and still mandatory to honor. An entry that says *Required*
+means a reader that cannot meet it MUST refuse the file rather than print an approximation
+of it. The chunks that carry the print itself - `HDR`, `META`, `LTBL`, `LAYR` - are joined
+there by `LROV`, because a printer that ignores overrides prints those layers at the wrong
+exposure, and nothing in the file says so afterwards.
 
 ### 4.1 HDR - File Header Chunk
 

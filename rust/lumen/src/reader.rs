@@ -501,6 +501,13 @@ impl<'a> LumenFile<'a> {
     }
 
     /// Resolve one layer's timing, optionally for one sector.
+    ///
+    /// The returned values already carry the sector definition, the bottom and
+    /// transition blend, and every matching `LROV` entry. Overrides are not opt-in
+    /// ([`spec/05-print-control.md`] section 4.6): a reader that does not apply them
+    /// must refuse a file that carries an `LROV` chunk, because printing the layer
+    /// at META's exposure instead of its override fails quietly. This method is
+    /// therefore the only supported way to read a layer's timing.
     pub fn timing_for(&self, layer: u32, sector_id: u32) -> Result<Resolved> {
         let sector = self.sectors.iter().find(|s| s.sector_id == sector_id);
         timing::resolve(&self.meta, sector, self.lrov.as_ref(), layer, sector_id)

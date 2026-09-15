@@ -34,7 +34,9 @@ The layer timing pipeline resolves as follows for each layer index `i`:
    taken verbatim from META.
 3. **LROV overrides:** Any matching `layer` or `layer_range` entry in LROV overrides
    the interpolated value for the sectors it targets (`sector_id` absent = all
-   sectors). The last matching entry wins per `(layer, sector)` pair.
+   sectors). The last matching entry wins per `(layer, sector)` pair. A conforming reader
+   MUST apply them: a printer that cannot honor overrides refuses the file rather than
+   print these layers at the wrong exposure ([§4.6](05-print-control.md#46-lrov---layer-override-chunk)).
 
 This models the existing bottom/normal/transition behavior while allowing arbitrary
 per-layer overrides.

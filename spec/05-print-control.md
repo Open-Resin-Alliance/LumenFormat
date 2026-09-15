@@ -76,6 +76,22 @@ than one is present, readers use the first.
   sector-specific entry overrides it for that sector only.
 - Layers with no matching entry use META (or SECT) defaults; LROV never removes them.
 
+**Reader support: REQUIRED.** Writing the chunk is the encoder's choice - a slicer may write
+per-layer settings or leave them out, and a file without an `LROV` chunk is complete either
+way. Honoring it is not a choice. A conforming reader MUST apply every entry that matches a
+layer it prints, and a reader that does not implement overrides MUST refuse a file that
+carries an `LROV` chunk rather than print it with META and SECT values alone.
+
+The reason is that this is the one degradation a printer cannot notice. A layer printed at
+META's exposure instead of its override is a print that fails quietly: the file is
+structurally valid, every checksum still passes, and nothing in the output says a chunk was
+ignored. So the rule is the same one [§4.13](07-scene-chunks.md#413-extd---extension-chunk)
+applies to an unimplemented `critical` extension, and the same principle as
+[§7.2](10-sectors.md#72-sector-0-convention-and-single-material-degradation): a capability a
+reader lacks makes a file unprintable to it, not printable with approximations. A slicer
+that knows its target cannot honor overrides should not write them; a printer that meets
+them must.
+
 ## 4.7 PREV - Preview Image Chunk
 
 **Type tag:** `PREV` (`0x50 0x52 0x45 0x56`). Optional, multiple allowed.

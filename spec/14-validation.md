@@ -115,7 +115,10 @@
 ### 11.5 Validation Levels
 
 - **Loose** (default for printing): Accept structurally valid files. Skip unknown
-  chunks/fields.
+  chunks and fields - ones this revision does not define, or that the reader has no use
+  for, such as `PREV`, `PROF` or `LHAS`. Skipping never reaches a chunk the reader must act
+  on: an `LROV` chunk it does not implement makes the file unprintable to it, not printable
+  without overrides ([§4.6](05-print-control.md#46-lrov---layer-override-chunk)).
 - **Strict** (file verification tools): Enforce all semantic validations. Warn on
   non-critical issues, error on critical ones.
 
