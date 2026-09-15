@@ -246,7 +246,8 @@ pub fn build(job: &SliceJobV3) -> Result<LumenMetadata, SlicerV3Error> {
     // Motion. LUMEN keeps the peel and the remainder as two segments per direction
     // (Appendix B), and DragonFruit's settings already carry both, so these map one
     // to one. A second segment of zero is the specification's way of saying the
-    // motion is single-stage, which is exactly what the simple settings mode means.
+    // motion is single-stage, which is what a profile that leaves the fast segment
+    // at zero asks for.
     timing.lift_slow_distance_um = Some(um_from_mm(values.number("liftDistanceMm").unwrap_or(0.0)));
     timing.lift_slow_speed_um_min = Some(um_from_mm(values.number("liftSpeedMmMin").unwrap_or(0.0)));
     timing.lift_fast_distance_um = Some(um_from_mm(values.number("liftDistance2Mm").unwrap_or(0.0)));
