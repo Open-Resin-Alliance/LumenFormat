@@ -806,9 +806,9 @@ fn explicit_encoding_modes_round_trip() {
                 }
                 // Section 5.6: a mask whose pixels are all 0x00/0xFF MUST use tag
                 // 0x00, and section 11.3 makes a strict validator reject one
-                // stored as grayscale. Forcing another tag on such a mask
-                // therefore builds a stream no strict reader accepts, which is
-                // not a property worth asserting.
+                // stored as grayscale or as split. Forcing another tag on such a
+                // mask therefore builds a stream no strict reader accepts, which
+                // is not a property worth asserting.
                 EncodeMode::Grayscale | EncodeMode::Split if binary => continue,
                 _ => {}
             }

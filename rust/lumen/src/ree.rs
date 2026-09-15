@@ -477,6 +477,18 @@ fn decode_split(reader: &mut Reader<'_>, total_pixels: u32, strict: bool) -> Res
     for (i, &pixel) in positions.iter().enumerate() {
         mask[pixel as usize] = values[i];
     }
+    // The rule is about the decoded pixels, so it is checked once the overlay has
+    // been written: before that the mask is the thresholded core, which is binary
+    // by construction. In strict mode every overlay value is neither 0x00 nor 0xFF
+    // and must threshold to the core, so an all-binary mask here means the overlay
+    // was empty.
+    if strict && mask.iter().all(|p| *p == 0x00 || *p == 0xFF) {
+        return Err(Error::new(
+            Check::ReeSplitAllBinary,
+            "split REE holds only 0x00/0xFF pixels: it has no anti-aliasing to overlay, \
+             and such a layer must use tag 0x00",
+        ));
+    }
     Ok(mask)
 }
 
@@ -1600,18 +1612,23 @@ mod tests {
             Check::ReeSplitThreshold
         );
 
-        // An empty overlay is canonical: the positions still carry their four
-        // zero plane lengths.
+        // An empty overlay over a thresholded core: the slice is all-0x00/0xFF,
+        // so section 5.6 requires tag 0x00 and a strict read refuses the split
+        // form. A loose read accepts it, and it still round-trips: the encoder
+        // writes what the caller asked for, as it does for a grayscale stream
+        // over a binary mask.
         let no_overlay = [
             TAG_SPLIT, 0x00, 0x02, 0x01, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00,
         ];
         let expected = mask(&[(0, 4), (255, 4)]);
-        for strict in [false, true] {
-            assert_eq!(
-                decode(&no_overlay, SPLIT_TOTAL, strict).unwrap().pixels,
-                expected
-            );
-        }
+        assert_eq!(
+            decode(&no_overlay, SPLIT_TOTAL, false).unwrap().pixels,
+            expected
+        );
+        assert_eq!(
+            check_of(&no_overlay, SPLIT_TOTAL, true),
+            Check::ReeSplitAllBinary
+        );
         assert_eq!(encode_split(&expected, SPLIT_TOTAL).unwrap(), no_overlay);
 
         // The binary component's own rules still apply.
@@ -1751,14 +1768,85 @@ mod tests {
             Check::ReeVarint
         );
 
-        // A split whose core is a single run still carries the core's header,
-        // which is what lines the overlay count up behind it, and an empty
-        // overlay carries its own.
+        // A split whose core is a single run and whose overlay is not empty: the
+        // core's header is what lines the overlay count up behind it, and the
+        // whole stream is consumed in strict mode too.
+        let split = [
+            TAG_SPLIT, 0xFF, 0x01, 0x00, 0x00, 0x00, 0x00, // core: one run of 0xFF
+            0x07, // aa_count
+            0x07, 0x00, 0x00, 0x00, // positions: plane 0 holds seven bytes
+            0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, // deltas
+            0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, // values
+        ];
+        assert_eq!(validate_stream(&split, 7, true), Ok(split.len()));
+        assert_eq!(decode(&split, 7, true).unwrap().pixels, vec![0x80u8; 7]);
+
+        // The same core with an empty overlay is the shape a strict read refuses
+        // (section 5.6's tag choice), but a loose read still consumes both four
+        // zero plane headers rather than leaving them behind.
         let split = [
             TAG_SPLIT, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         ];
-        assert_eq!(validate_stream(&split, 7, true), Ok(split.len()));
-        assert_eq!(decode(&split, 7, true).unwrap().pixels, vec![0u8; 7]);
+        assert_eq!(validate_stream(&split, 7, false), Ok(split.len()));
+        assert_eq!(decode(&split, 7, false).unwrap().pixels, vec![0u8; 7]);
+        assert_eq!(check_of(&split, 7, true), Check::ReeSplitAllBinary);
+    }
+
+    #[test]
+    fn a_split_over_an_all_binary_mask_is_strict_only() {
+        // Section 5.6's tag choice, enforced for tag 0x02 as it is for tag 0x01:
+        // an all-0x00/0xFF slice has no anti-aliasing to overlay, so a strict
+        // read refuses the split form and a loose read accepts it. The stream is
+        // the canonical shape of an empty overlay: PLANES(0) for its positions.
+        let empty_overlay = [
+            TAG_SPLIT, 0x00, 0x02, 0x01, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ];
+        let expected = mask(&[(0, 4), (255, 4)]);
+        assert_eq!(
+            decode(&empty_overlay, SPLIT_TOTAL, false).unwrap().pixels,
+            expected
+        );
+        assert_eq!(
+            check_of(&empty_overlay, SPLIT_TOTAL, true),
+            Check::ReeSplitAllBinary
+        );
+        assert_eq!(
+            validate_stream(&empty_overlay, SPLIT_TOTAL, true)
+                .unwrap_err()
+                .check(),
+            Check::ReeSplitAllBinary
+        );
+
+        // The same layer under tag 0x00 is what the rule asks for, and it is
+        // accepted by both modes.
+        let binary = encode_binary(&expected, SPLIT_TOTAL).unwrap();
+        assert_eq!(
+            validate_stream(&binary, SPLIT_TOTAL, true),
+            Ok(binary.len())
+        );
+
+        // A grayscale stream over the same mask reports its own check, so the two
+        // rules stay distinguishable.
+        let grayscale = encode_grayscale(&expected, SPLIT_TOTAL).unwrap();
+        assert_eq!(
+            check_of(&grayscale, SPLIT_TOTAL, true),
+            Check::ReeGrayscaleAllBinary
+        );
+
+        // The rule is about the decoded pixels, so an overlay that changes
+        // nothing does not evade it: this one writes 0x00 over a 0xFF core, which
+        // the threshold rule refuses first.
+        let zero_overlay = [
+            TAG_SPLIT, 0x00, 0x02, 0x01, 0x00, 0x00, 0x00,
+            0x04, // core, one stored length of 4
+            0x01, // aa_count
+            0x01, 0x00, 0x00, 0x00, 0x04, // one position: 4
+            0x00, // the value it carries
+        ];
+        assert_eq!(
+            check_of(&zero_overlay, SPLIT_TOTAL, true),
+            Check::ReeSplitThreshold
+        );
     }
 
     #[test]

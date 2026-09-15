@@ -235,6 +235,9 @@ pub enum Check {
     ReeGrayscaleRuns,
     /// An all-`0x00`/`0xFF` layer is stored as grayscale REE (strict).
     ReeGrayscaleAllBinary,
+    /// An all-`0x00`/`0xFF` layer is stored as split REE, with no anti-aliasing
+    /// to overlay (strict).
+    ReeSplitAllBinary,
     /// The split binary component does not threshold at `v >= 128` (strict).
     ReeSplitThreshold,
     /// Split overlay positions are not strictly increasing, or out of range.
@@ -374,6 +377,7 @@ impl Check {
             ReeRunLengths => "ree.run_lengths",
             ReeGrayscaleRuns => "ree.grayscale_runs",
             ReeGrayscaleAllBinary => "ree.grayscale_all_binary",
+            ReeSplitAllBinary => "ree.split_all_binary",
             ReeSplitThreshold => "ree.split_threshold",
             ReeSplitPositions => "ree.split_positions",
             ReeEndPositions => "ree.end_positions",
@@ -406,6 +410,7 @@ impl Check {
                 | ReeRunLengths
                 | ReeGrayscaleRuns
                 | ReeGrayscaleAllBinary
+                | ReeSplitAllBinary
                 | ReeSplitThreshold
                 | SectorPartition
                 | LhasLeafMatch

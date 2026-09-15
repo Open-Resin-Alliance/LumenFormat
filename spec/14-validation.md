@@ -116,6 +116,7 @@ companion field left to contradict. What replaced them is named in the lists bel
 - [ ] (Strict mode) Binary REE (tag `0x00`): every stored run length is `>= 1`, the implicit final run length is `>= 1`, and the lengths sum to exactly `total_pixels` (`ree.run_lengths`).
 - [ ] (Strict mode) Grayscale REE (tag `0x01`): every run length is `>= 1` and no two adjacent runs carry the same value (`ree.grayscale_runs`).
 - [ ] (Strict mode) A slice whose pixels are all `0x00`/`0xFF` is not stored as grayscale REE; it uses tag `0x00` (`ree.grayscale_all_binary`).
+- [ ] (Strict mode) The same tag choice for split REE: a slice whose pixels are all `0x00`/`0xFF` has no anti-aliasing to overlay, so it is not stored as tag `0x02` - an empty overlay over a thresholded core is a stream a strict validator rejects (`ree.split_all_binary`).
 - [ ] (Strict mode) Split REE (tag `0x02`): the binary component thresholds at `v >= 128`, and the overlay covers exactly the pixels whose value is neither `0x00` nor `0xFF` (`ree.split_threshold`).
 - [ ] (Strict mode) The sector masks of one layer are pairwise disjoint: no pixel is exposed by two sectors of the same layer, and their union is the layer's exposed image (`sector.partition`). Two sectors of a layer live in different `LAYR` chunks, so this compares the slices the layer's entries name ([§7.3](10-sectors.md#73-sector-mask-invariant)).
 

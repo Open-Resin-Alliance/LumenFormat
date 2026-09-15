@@ -158,6 +158,16 @@
       "strict_only": true
     },
     {
+      "base_vector": null,
+      "description": "Layer 0 is one run of 0xFF stored as tag 0x02 with an empty overlay, where section 5.6 requires tag 0x00 for a slice whose pixels are all 0x00/0xFF: the split form has no anti-aliasing to carry and is strictly larger.",
+      "expected_failure": "ree.split_all_binary",
+      "file": "invalid/split-all-binary.lumen",
+      "file_sha256": "161fe56605673a3963aa8268b870e7cfa40ea0fd4e8a36b57e24e5184374fcb6",
+      "file_size": 848,
+      "name": "split-all-binary",
+      "strict_only": true
+    },
+    {
       "base_vector": "binary-basic",
       "description": "A LAYR container declares version 2, which no reader implements; the frame behind it is well formed, so only the version refuses the file.",
       "expected_failure": "layr.version",
@@ -973,14 +983,14 @@
       "trailer_crc32c": "0x4B1F63AF"
     },
     {
-      "chunk_count": 7,
-      "description": "Five layers over one sector, three LAYR chunks and no dictionary, pinning every run-length array that holds no varints: layer 0 is one run of 0xFF (tag 0x00, run_count 1), layer 1 one run of 0x80 (tag 0x01, run_count 1, one value byte), layers 2 and 3 are splits whose thresholded core is a single run - one of 0xFF over a 0xC0 band at 1000..1200, whose first delta is two bytes, one of 0x00 under a 0x40 band at 0..500, whose first delta is 0 - and layer 4 is a split whose overlay is empty, the all-0xFF mask of layer 0 written under tag 0x02. Each of those arrays carries its four plane lengths as zeros: the header is written unconditionally, and a reader that skipped it would leave those bytes unconsumed. Layer 4 is the one stream the canonical tag choice of section 5.6 cannot reach, since an all-0xFF slice should carry tag 0x00; no check refuses the split form, so it is decodable rather than invalid.",
+      "chunk_count": 6,
+      "description": "Four layers over one sector, two LAYR chunks and no dictionary, pinning every run-length array that holds no varints: layer 0 is one run of 0xFF (tag 0x00, run_count 1), layer 1 one run of 0x80 (tag 0x01, run_count 1, one value byte), and layers 2 and 3 are splits whose thresholded core is a single run - one of 0xFF over a 0xC0 band at 1000..1200, whose first delta is two bytes, one of 0x00 under a 0x40 band at 0..500, whose first delta is 0. Each of those arrays carries its four plane lengths as zeros: the header is written unconditionally, and a reader that skipped it would leave those bytes unconsumed. The one degenerate form that is not canonical - a split whose overlay is empty, which section 5.6 forbids for an all-0x00/0xFF slice - is its own invalid vector, split-all-binary, because a valid vector must not carry a layer a strict reader is required to reject.",
       "dict": {
         "dict_id": 0,
         "dict_size": 0,
         "present": false
       },
-      "dir_offset": 769,
+      "dir_offset": 678,
       "display_height_px": 48,
       "display_width_px": 64,
       "features": [
@@ -992,8 +1002,8 @@
         "no-dictionary"
       ],
       "file": "valid/ree-degenerate-arrays.lumen",
-      "file_sha256": "c90abfeab6f9a67072fa37483fb4daa8ababca292ce21d5548fc53b566c301ad",
-      "file_size": 1001,
+      "file_sha256": "37ffb1235068085f4cd505a92a338596b496537ae8eed67292e1765780d5e55f",
+      "file_size": 878,
       "header_flags": 0,
       "layer_height_um": 50,
       "layers": [
@@ -1040,17 +1050,6 @@
             2
           ],
           "tag": 2
-        },
-        {
-          "decompressed_sha256": "3f46bbb043932749717fe1b93e16ced78af6c4eb7783b2f536e03b70fd70516f",
-          "empty": false,
-          "index": 4,
-          "lhas_leaf": "7df285275fced6c2485656a9d5f6664812de70d1fc423477134e3ceb32766a77",
-          "sector_count": 1,
-          "sector_tags": [
-            2
-          ],
-          "tag": 2
         }
       ],
       "layers_per_chunk": 2,
@@ -1077,18 +1076,6 @@
           "sealed": false,
           "sector_id": 0,
           "stored_len": 62,
-          "version": 1
-        },
-        {
-          "content_size": 12,
-          "dict_id": 0,
-          "first_layer": 4,
-          "frame_size": 21,
-          "index": 6,
-          "layer_count": 1,
-          "sealed": false,
-          "sector_id": 0,
-          "stored_len": 25,
           "version": 1
         }
       ],
@@ -1132,19 +1119,9 @@
           "first_lrov": 0,
           "layer": 3,
           "sector_id": 0
-        },
-        {
-          "additional_sector_count": 0,
-          "data_offset": 0,
-          "data_size": 12,
-          "entry_index": 4,
-          "first_layr": 6,
-          "first_lrov": 0,
-          "layer": 4,
-          "sector_id": 0
         }
       ],
-      "merkle_root": "4943707140dd3a79b63866e7aacbd97d122060c4234d7e423a742739731b35e5",
+      "merkle_root": "7ad986f6bf71e65bde6525daf1ba8f0ec6a4ac04ee3cc270702760bf983635d9",
       "multi_sector": false,
       "name": "ree-degenerate-arrays",
       "resolved_timing": [
@@ -1219,29 +1196,11 @@
           "wait_time_after_cure_ms": 0,
           "wait_time_after_lift_ms": 0,
           "wait_time_before_cure_ms": 0
-        },
-        {
-          "exposure_ms": 2500,
-          "layer": 4,
-          "layer_height_um": 50,
-          "lift_fast_distance_um": 0,
-          "lift_fast_speed_um_min": 0,
-          "lift_slow_distance_um": 5000,
-          "lift_slow_speed_um_min": 65000,
-          "light_pwm": 255,
-          "retract_fast_distance_um": 5000,
-          "retract_fast_speed_um_min": 150000,
-          "retract_slow_distance_um": 0,
-          "retract_slow_speed_um_min": 0,
-          "sector": 0,
-          "wait_time_after_cure_ms": 0,
-          "wait_time_after_lift_ms": 0,
-          "wait_time_before_cure_ms": 0
         }
       ],
-      "total_layers": 5,
-      "total_uncompressed_size": 858,
-      "trailer_crc32c": "0xC1B77882"
+      "total_layers": 4,
+      "total_uncompressed_size": 773,
+      "trailer_crc32c": "0xAA29C828"
     },
     {
       "chunk_count": 9,
