@@ -71,9 +71,12 @@ than one is present, readers use the first.
   neither is malformed.
 - `sector_id` is optional. When present, the entry applies only to that sector on the
   matched layer(s); when absent, it applies to every sector.
-- When several entries match a given `(layer, sector)` pair, the **last** matching
-  entry wins. Because an entry without `sector_id` matches every sector, a later
-  sector-specific entry overrides it for that sector only.
+- When several entries match a given `(layer, sector)` pair, the **last** matching entry wins
+  **for each field it carries**. An entry is a sparse set of overrides, not a replacement for
+  the entries before it: one that omits a field leaves the value a matching earlier entry gave
+  that field in place, and only the fields an entry carries are overridden by it. Because an
+  entry without `sector_id` matches every sector, a later sector-specific entry overrides it
+  for that sector only.
 - Layers with no matching entry use META (or SECT) defaults; LROV never removes them.
 
 **Reader support: REQUIRED.** Writing the chunk is the encoder's choice - a slicer may write

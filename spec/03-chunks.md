@@ -214,6 +214,7 @@ to `0`. The `bottom_*` fields follow the same model.
 1. Start with META values as defaults for all layers (and SECT values per-sector, if multi-sector).
 2. Apply bottom/transition blending: layers in the bottom range use bottom-prefixed values; layers in the transition range interpolate between bottom and normal values ([§8](11-layer-timing.md#8-per-layer-settings-model) defines the formula and which fields participate).
 3. If `LROV` chunk present, override specific fields for specific layers (last matching entry wins).
+4. **Absent fields.** A field META does not carry, that no `SECT` definition supplies for the sector and that no `LROV` entry overrides, resolves to `0` for a distance, speed or duration - a segment or a pause that is not performed - and to `255` for `light_pwm`. Absent does not mean "whatever the implementation usually does": two readers must resolve the same file to the same numbers, so an encoder that leaves a field out is asking for zero. A field with no meaning to zero is not in this class, and is absent rather than zero when META does not carry it: `chamber_temperature_c` and `vat_temperature_c` are targets the printer uses or does not, and the `cure_curve` is either present or not.
 
 See [§8](11-layer-timing.md#8-per-layer-settings-model) for the complete layer timing pipeline.
 
