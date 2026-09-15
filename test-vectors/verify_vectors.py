@@ -346,16 +346,21 @@ def is_int(v) -> bool:
 
 
 def time_fields_integer(obj) -> bool:
-    """§4.2: every `*_ms` duration is a JSON integer.
+    """§4.2: every duration is a JSON integer.
 
-    Durations are exact whole milliseconds, so a value with a fractional part is
-    a type violation rather than a precision problem - which is why a loose
+    The `*_ms` fields count whole milliseconds; META's estimated print time is
+    the one duration in whole seconds, since an estimate spanning hours has no
+    millisecond precision to report. Either way a value with a fractional part
+    is a type violation rather than a precision problem - which is why a loose
     reader rejects it too (§11.5).  Whether a chunk carries any timing field at
     all is the chunk's own business: a non-object is left to the shape checks.
     """
     if not isinstance(obj, dict):
         return True
-    return all(not k.endswith("_ms") or is_int(v) for k, v in obj.items())
+    return all(
+        (not k.endswith("_ms") and k != "estimated_print_time_sec") or is_int(v)
+        for k, v in obj.items()
+    )
 
 
 def materials_shape_ok(mats) -> bool:

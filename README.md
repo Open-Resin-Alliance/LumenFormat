@@ -44,7 +44,7 @@ against each other on every change.
 | Media type | `application/vnd.openresin.lumen` (vendor tree) |
 | Magic bytes | `LUMN` (`0x4C 0x55 0x4D 0x4E`) |
 | Container version | `header.version = 1` for LUMEN v1.0 |
-| Units | Micrometers (`um`), micrometers per minute (`um/min`) and milliseconds (`ms`); lengths, speeds and durations are integers |
+| Units | Micrometers (`um`), micrometers per minute (`um/min`) and milliseconds (`ms`); whole seconds for the Unix timestamp and the estimated print time. Lengths, speeds and durations are integers |
 
 The format is built on six principles (§1): compression efficiency first, human-inspectable
 metadata, extensible by design, multi-material from the ground up, per-layer settings, and

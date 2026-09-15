@@ -74,8 +74,10 @@ const TIME_MS_FIELDS: [&str; 8] = [
 ];
 
 /// META's own duration, informational and outside the namespace a `SECT`, a
-/// `PROF.settings` block or an `LROV` entry draws on (section 4.2).
-const ESTIMATED_PRINT_TIME_MS: &str = "estimated_print_time_ms";
+/// `PROF.settings` block or an `LROV` entry draws on (section 4.2). It is the
+/// one duration in whole seconds rather than milliseconds: an estimate that
+/// spans hours has no millisecond precision to report.
+const ESTIMATED_PRINT_TIME_SEC: &str = "estimated_print_time_sec";
 
 /// The chunk types that carry content and must therefore be sealed whenever the
 /// file is (section 9.1).
@@ -473,7 +475,7 @@ impl<'a> Ctx<'a> {
             TIME_MS_FIELDS
                 .iter()
                 .copied()
-                .chain(std::iter::once(ESTIMATED_PRINT_TIME_MS)),
+                .chain(std::iter::once(ESTIMATED_PRINT_TIME_SEC)),
             Check::MetaTimeInteger,
         )?;
         let meta: Meta = serde_json::from_value(value).map_err(json_error)?;

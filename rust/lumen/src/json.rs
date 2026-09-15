@@ -407,9 +407,9 @@ pub struct Meta {
     /// Per-axis scale compensation.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub scale_compensation_pct: Option<ScaleCompensation>,
-    /// Estimated print time in milliseconds, informational.
+    /// Estimated print time in whole seconds, informational.
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub estimated_print_time_ms: Option<u32>,
+    pub estimated_print_time_sec: Option<u32>,
     /// Estimated resin volume in millilitres, informational.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub estimated_resin_volume_ml: Option<f64>,

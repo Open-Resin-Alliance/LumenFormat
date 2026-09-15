@@ -39,7 +39,7 @@
 - [ ] `HDR.physical_width_px` is an integer multiple of `display_width_px`, and `physical_height_px` is an integer multiple of `display_height_px`. A ratio of 1 means one display pixel per physical pixel.
 - [ ] `META.meta_version` is present and recognized.
 - [ ] META JSON contains all required fields (`meta_version`, `normal_exposure_ms`, `bottom_exposure_ms`, `bottom_layer_count`, `transition_layer_count`, `layer_height_um`, `lift_slow_distance_um`, `lift_slow_speed_um_min`, `retract_fast_distance_um`, `retract_fast_speed_um_min`).
-- [ ] Every `*_ms` field in META is a JSON integer. A value with a fractional part such as `2500.5` is invalid (`meta.time_integer`); see [§4.2](03-chunks.md#42-meta---metadata-chunk) for the encoders' and readers' obligations.
+- [ ] Every `*_ms` field in META, and `estimated_print_time_sec`, is a JSON integer. A value with a fractional part such as `2500.5` is invalid (`meta.time_integer`); see [§4.2](03-chunks.md#42-meta---metadata-chunk) for the encoders' and readers' obligations.
 - [ ] `META.normal_exposure_ms > 0`, as an integer comparison.
 - [ ] `META.bottom_exposure_ms > 0`, as an integer comparison.
 - [ ] `META.layer_height_um > 0`.
@@ -122,12 +122,14 @@
 Checks marked *strict mode* above MUST NOT fail a loose-mode read: a loose reader
 accepts them, a strict validator rejects them.
 
-The `*_ms` integer checks (`meta.time_integer`, `sect.time_integer`,
+The duration integer checks (`meta.time_integer`, `sect.time_integer`,
 `prof.settings_time_integer`, `lrov.time_integer`) are not strict-only. A duration with a
 fractional part is a type violation, not a canonicalization preference, so a loose reader
-rejects it too. Whether a reader *additionally* rejects integral floating-point syntax
-such as `2500.0` is the reader's choice ([§4.2](03-chunks.md#42-meta---metadata-chunk)); no
-file may rely on either answer, and the corpus pins neither.
+rejects it too. They cover every duration in the timing namespace, and `meta.time_integer`
+also covers META's `estimated_print_time_sec`, which is whole seconds rather than
+milliseconds ([§4.2](03-chunks.md#42-meta---metadata-chunk)). Whether a reader
+*additionally* rejects integral floating-point syntax such as `2500.0` is the reader's
+choice, and no file may rely on either answer.
 
 ### 11.6 Conformance Corpus
 

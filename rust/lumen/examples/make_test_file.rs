@@ -232,7 +232,7 @@ fn meta() -> Meta {
             mode: Some("blur".to_string()),
             ..AntiAliasing::default()
         }),
-        estimated_print_time_ms: Some(14_400_000),
+        estimated_print_time_sec: Some(14_400),
         slicer: Some(lumen::json::Slicer {
             name: Some("lumen-format".to_string()),
             version: Some("0.1.0".to_string()),

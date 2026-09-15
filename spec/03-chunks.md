@@ -161,7 +161,7 @@ Human-readable print parameters as a single JSON object.
   "scale_compensation_pct": { "x": 0.0, "y": 0.0, "z": 0.0 },
 
   // Estimates (informational)
-  "estimated_print_time_ms": 14400000,
+  "estimated_print_time_sec": 14400,
   "estimated_resin_volume_ml": 42.5,
 
   // Slicer attribution
@@ -215,17 +215,22 @@ a one-element array and sector 0 uses element 0. If `materials` is absent, mater
 identity is unknown and consumers fall back to their own default.
 
 Lengths are integer micrometers, speeds integer micrometers per minute, and durations
-integer milliseconds, so a reader compares them exactly instead of within a tolerance. An
+integer milliseconds, so a reader compares them exactly instead of within a tolerance. The
+one duration not in milliseconds is META's `estimated_print_time_sec`, an informational
+estimate reported in whole seconds: a print that runs for hours is not known to the
+millisecond, and reporting one would claim a precision nothing in the format supports. An
 encoder holding a finer value rounds to the nearest unit; nothing below one unit is
-expressible, and no field carries a fractional micrometer or millisecond. The remaining
-numeric fields - energy densities, temperatures, percentages and densities - are ordinary
-JSON numbers, and readers must accept both integer and floating-point syntax for those.
-Readers must ignore unknown JSON keys.
+expressible, and no field carries a fractional micrometer, millisecond or second. The
+remaining numeric fields - energy densities, temperatures, percentages and densities - are
+ordinary JSON numbers, and readers must accept both integer and floating-point syntax for
+those. Readers must ignore unknown JSON keys.
 
-Every `*_ms` field holds an integer number of milliseconds. A value with a fractional part
-(`2500.5`) is invalid, and an encoder MUST write integer syntax. A reader MAY additionally
-reject integral floating-point syntax such as `2500.0`; a file MUST NOT depend on which of
-the two a reader does, so no file may carry `2500.0` where `2500` is meant.
+Durations are whole numbers, and there are no exceptions to that: every `*_ms` field holds
+an integer number of milliseconds and `estimated_print_time_sec` an integer number of
+seconds. A value with a fractional part (`2500.5`, or `14400.5` for an estimate) is
+invalid, and an encoder MUST write integer syntax. A reader MAY additionally reject
+integral floating-point syntax such as `2500.0`; a file MUST NOT depend on which of the two
+a reader does, so no file may carry `2500.0` where `2500` is meant.
 
 ### 4.3 PROF - Print Profile Chunk
 
