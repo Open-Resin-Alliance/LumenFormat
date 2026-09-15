@@ -3,13 +3,13 @@
   "replacesDefaultMaterialSettings": true,
   "tabs": [
     {
-      "id": "standard",
-      "title": "Standard",
+      "id": "general",
+      "title": "General",
       "order": 10
     },
     {
-      "id": "two-stage",
-      "title": "Two-Stage",
+      "id": "motion",
+      "title": "Motion",
       "order": 20
     },
     {
@@ -22,48 +22,48 @@
     {
       "id": "global",
       "title": "General Settings",
-      "tabId": "standard",
+      "tabId": "general",
       "order": 10
     },
     {
       "id": "burn-in",
-      "title": "Burn In Layers",
-      "tabId": "standard",
+      "title": "Burn-in Layers",
+      "tabId": "general",
       "order": 20
     },
     {
       "id": "normal",
       "title": "Normal Layers",
-      "tabId": "standard",
+      "tabId": "general",
       "order": 30
     },
     {
       "id": "timing",
       "title": "Timing",
-      "tabId": "standard",
+      "tabId": "general",
       "order": 40
     },
     {
       "id": "light",
       "title": "Light Settings",
-      "tabId": "standard",
+      "tabId": "general",
       "order": 50
     },
     {
-      "id": "two-stage-burn-in-motion",
-      "title": "Burn-In Two-Stage Motion",
-      "tabId": "two-stage",
+      "id": "burn-in-motion",
+      "title": "Burn-in Motion",
+      "tabId": "motion",
       "order": 10
     },
     {
-      "id": "two-stage-motion",
-      "title": "Two-Stage Motion",
-      "tabId": "two-stage",
+      "id": "motion",
+      "title": "Motion",
+      "tabId": "motion",
       "order": 20
     },
     {
       "id": "burn-in-waits",
-      "title": "Burn-In Waits",
+      "title": "Burn-in Waits",
       "tabId": "advanced",
       "order": 10
     },
@@ -84,55 +84,55 @@
     {
       "id": "global-settings",
       "title": "General Settings",
-      "tabId": "standard",
+      "tabId": "general",
       "sectionId": "global",
       "order": 10
     },
     {
       "id": "burn-in-settings",
-      "title": "Burn In Layers",
-      "tabId": "standard",
+      "title": "Burn-in Layers",
+      "tabId": "general",
       "sectionId": "burn-in",
       "order": 10
     },
     {
       "id": "normal-settings",
       "title": "Normal Layers",
-      "tabId": "standard",
+      "tabId": "general",
       "sectionId": "normal",
       "order": 10
     },
     {
       "id": "timing-settings",
       "title": "Timing",
-      "tabId": "standard",
+      "tabId": "general",
       "sectionId": "timing",
       "order": 10
     },
     {
       "id": "light-settings",
       "title": "Light Settings",
-      "tabId": "standard",
+      "tabId": "general",
       "sectionId": "light",
       "order": 10
     },
     {
-      "id": "two-stage-burn-in-settings",
-      "title": "Burn-In Two-Stage Motion",
-      "tabId": "two-stage",
-      "sectionId": "two-stage-burn-in-motion",
+      "id": "burn-in-motion-settings",
+      "title": "Burn-in Motion",
+      "tabId": "motion",
+      "sectionId": "burn-in-motion",
       "order": 10
     },
     {
-      "id": "two-stage-settings",
-      "title": "Two-Stage Motion",
-      "tabId": "two-stage",
-      "sectionId": "two-stage-motion",
+      "id": "motion-settings",
+      "title": "Motion",
+      "tabId": "motion",
+      "sectionId": "motion",
       "order": 10
     },
     {
-      "id": "bottom-wait-times",
-      "title": "Extended Wait Time",
+      "id": "burn-in-wait-times",
+      "title": "Burn-in Waits",
       "tabId": "advanced",
       "sectionId": "burn-in-waits",
       "order": 10
@@ -162,7 +162,7 @@
       "max": 1,
       "step": 0.001,
       "placement": {
-        "tabId": "standard",
+        "tabId": "general",
         "sectionId": "global",
         "cardId": "global-settings",
         "order": 10
@@ -171,20 +171,35 @@
     },
     {
       "key": "zstdLevel",
-      "label": "Compression Level",
-      "kind": "integer",
-      "defaultValue": 6,
-      "min": 1,
-      "max": 22,
-      "step": 1,
+      "label": "File Compression Level",
+      "kind": "select",
+      "defaultValue": "6",
+      "options": [
+        {
+          "value": "3",
+          "label": "Low"
+        },
+        {
+          "value": "6",
+          "label": "Standard"
+        },
+        {
+          "value": "9",
+          "label": "High"
+        },
+        {
+          "value": "19",
+          "label": "Very High"
+        }
+      ],
       "placement": {
-        "tabId": "standard",
-        "sectionId": "global",
-        "cardId": "global-settings",
+        "tabId": "meta",
+        "sectionId": "file",
+        "cardId": "scene-settings",
         "order": 20
       },
       "metadataPath": "lumen.zstdLevel",
-      "description": "zstd level for layer frames. 3 slices fastest and gives the largest files, 6 is the default, 19 is smallest and costs seconds on a large print."
+      "description": "Compression of the layer frames, traded against slicing time. Very High is about 2.8% smaller than Standard and costs seconds of encoding on a large print; Low gives the largest file and slices fastest."
     },
     {
       "key": "bottomLayerCount",
@@ -195,12 +210,13 @@
       "max": 200,
       "step": 1,
       "placement": {
-        "tabId": "standard",
+        "tabId": "general",
         "sectionId": "burn-in",
         "cardId": "burn-in-settings",
         "order": 10
       },
-      "metadataPath": "material.bottomLayerCount"
+      "metadataPath": "material.bottomLayerCount",
+      "description": "How many layers at the build plate cure with the burn-in exposure before the normal layers begin."
     },
     {
       "key": "transitionLayerCount",
@@ -211,12 +227,13 @@
       "max": 100000,
       "step": 1,
       "placement": {
-        "tabId": "standard",
+        "tabId": "general",
         "sectionId": "burn-in",
         "cardId": "burn-in-settings",
         "order": 20
       },
-      "metadataPath": "lumen.transitionLayerCount"
+      "metadataPath": "lumen.transitionLayerCount",
+      "description": "Layers between the burn-in and normal exposures whose cure time steps from the burn-in value down to the normal one. 0 switches straight from one to the other."
     },
     {
       "key": "bottomExposureSec",
@@ -227,7 +244,7 @@
       "max": 300,
       "step": 0.1,
       "placement": {
-        "tabId": "standard",
+        "tabId": "general",
         "sectionId": "burn-in",
         "cardId": "burn-in-settings",
         "order": 30
@@ -243,7 +260,7 @@
       "max": 120,
       "step": 0.01,
       "placement": {
-        "tabId": "standard",
+        "tabId": "general",
         "sectionId": "normal",
         "cardId": "normal-settings",
         "order": 10
@@ -259,12 +276,13 @@
       "max": 120,
       "step": 0.01,
       "placement": {
-        "tabId": "standard",
+        "tabId": "general",
         "sectionId": "timing",
         "cardId": "timing-settings",
         "order": 10
       },
-      "metadataPath": "lumen.waitTimeBeforeCureSec"
+      "metadataPath": "lumen.waitTimeBeforeCureSec",
+      "description": "Pause between the plate reaching position and the light turning on, which lets the resin come to rest before it cures."
     },
     {
       "key": "waitTimeAfterCureSec",
@@ -275,12 +293,13 @@
       "max": 120,
       "step": 0.01,
       "placement": {
-        "tabId": "standard",
+        "tabId": "general",
         "sectionId": "timing",
         "cardId": "timing-settings",
         "order": 20
       },
-      "metadataPath": "lumen.waitTimeAfterCureSec"
+      "metadataPath": "lumen.waitTimeAfterCureSec",
+      "description": "Pause between the exposure and the lift, which lets the cured layer set before it is peeled off the film."
     },
     {
       "key": "waitTimeAfterLiftSec",
@@ -291,12 +310,13 @@
       "max": 120,
       "step": 0.01,
       "placement": {
-        "tabId": "standard",
+        "tabId": "general",
         "sectionId": "timing",
         "cardId": "timing-settings",
         "order": 30
       },
-      "metadataPath": "lumen.waitTimeAfterLiftSec"
+      "metadataPath": "lumen.waitTimeAfterLiftSec",
+      "description": "Pause at the top of the lift, before the plate starts back down for the next layer."
     },
     {
       "key": "projectorPwmPercent",
@@ -307,12 +327,13 @@
       "max": 100,
       "step": 1,
       "placement": {
-        "tabId": "standard",
+        "tabId": "general",
         "sectionId": "light",
         "cardId": "light-settings",
         "order": 10
       },
-      "metadataPath": "lumen.projectorPwmPercent"
+      "metadataPath": "lumen.projectorPwmPercent",
+      "description": "Ultraviolet power as a percentage of the projector's full output. Lower values dim every exposure and need longer cure times."
     },
     {
       "key": "bottomProjectorPwmPercent",
@@ -323,12 +344,13 @@
       "max": 100,
       "step": 1,
       "placement": {
-        "tabId": "standard",
+        "tabId": "general",
         "sectionId": "light",
         "cardId": "light-settings",
         "order": 20
       },
-      "metadataPath": "lumen.bottomProjectorPwmPercent"
+      "metadataPath": "lumen.bottomProjectorPwmPercent",
+      "description": "The same power setting for the burn-in layers, which usually run at full output so the first layers bond to the plate."
     },
     {
       "key": "bottomLiftDistanceMm",
@@ -339,19 +361,20 @@
       "max": 50,
       "step": 0.01,
       "placement": {
-        "tabId": "two-stage",
-        "sectionId": "two-stage-burn-in-motion",
-        "cardId": "two-stage-burn-in-settings",
+        "tabId": "motion",
+        "sectionId": "burn-in-motion",
+        "cardId": "burn-in-motion-settings",
         "order": 10
       },
       "metadataPath": "lumen.bottomLiftDistanceMm",
+      "description": "How far a burn-in layer is lifted. Those first layers stick to the film harder than normal ones, so they peel further and more slowly.",
       "tag": "Slow",
       "color": "#f59e0b",
       "splitWithKey": "bottomLiftDistance2Mm"
     },
     {
       "key": "bottomLiftDistance2Mm",
-      "label": "Burn-In Lift Distance 2 (mm)",
+      "label": "Burn-in Lift Distance 2 (mm)",
       "kind": "number",
       "defaultValue": 4,
       "tag": "Fast",
@@ -360,9 +383,9 @@
       "max": 50,
       "step": 0.01,
       "placement": {
-        "tabId": "two-stage",
-        "sectionId": "two-stage-burn-in-motion",
-        "cardId": "two-stage-burn-in-settings",
+        "tabId": "motion",
+        "sectionId": "burn-in-motion",
+        "cardId": "burn-in-motion-settings",
         "order": 10
       },
       "metadataPath": "lumen.bottomLiftDistance2Mm"
@@ -376,9 +399,9 @@
       "max": 100000,
       "step": 1,
       "placement": {
-        "tabId": "two-stage",
-        "sectionId": "two-stage-burn-in-motion",
-        "cardId": "two-stage-burn-in-settings",
+        "tabId": "motion",
+        "sectionId": "burn-in-motion",
+        "cardId": "burn-in-motion-settings",
         "order": 20
       },
       "metadataPath": "lumen.bottomLiftSpeedMmMin",
@@ -388,7 +411,7 @@
     },
     {
       "key": "bottomLiftSpeed2MmMin",
-      "label": "Burn-In Lift Speed 2 (mm/min)",
+      "label": "Burn-in Lift Speed 2 (mm/min)",
       "kind": "number",
       "defaultValue": 180,
       "tag": "Fast",
@@ -397,9 +420,9 @@
       "max": 100000,
       "step": 1,
       "placement": {
-        "tabId": "two-stage",
-        "sectionId": "two-stage-burn-in-motion",
-        "cardId": "two-stage-burn-in-settings",
+        "tabId": "motion",
+        "sectionId": "burn-in-motion",
+        "cardId": "burn-in-motion-settings",
         "order": 20
       },
       "metadataPath": "lumen.bottomLiftSpeed2MmMin"
@@ -413,9 +436,9 @@
       "max": 100000,
       "step": 1,
       "placement": {
-        "tabId": "two-stage",
-        "sectionId": "two-stage-burn-in-motion",
-        "cardId": "two-stage-burn-in-settings",
+        "tabId": "motion",
+        "sectionId": "burn-in-motion",
+        "cardId": "burn-in-motion-settings",
         "order": 30
       },
       "metadataPath": "lumen.bottomRetractSpeedMmMin",
@@ -425,7 +448,7 @@
     },
     {
       "key": "bottomRetractSpeed2MmMin",
-      "label": "Burn-In Retract Speed 2 (mm/min)",
+      "label": "Burn-in Retract Speed 2 (mm/min)",
       "kind": "number",
       "defaultValue": 60,
       "tag": "Slow",
@@ -434,9 +457,9 @@
       "max": 100000,
       "step": 1,
       "placement": {
-        "tabId": "two-stage",
-        "sectionId": "two-stage-burn-in-motion",
-        "cardId": "two-stage-burn-in-settings",
+        "tabId": "motion",
+        "sectionId": "burn-in-motion",
+        "cardId": "burn-in-motion-settings",
         "order": 30
       },
       "metadataPath": "lumen.bottomRetractSpeed2MmMin"
@@ -450,9 +473,9 @@
       "max": 50,
       "step": 0.01,
       "placement": {
-        "tabId": "two-stage",
-        "sectionId": "two-stage-motion",
-        "cardId": "two-stage-settings",
+        "tabId": "motion",
+        "sectionId": "motion",
+        "cardId": "motion-settings",
         "order": 10
       },
       "metadataPath": "material.liftDistanceMm",
@@ -471,9 +494,9 @@
       "max": 50,
       "step": 0.01,
       "placement": {
-        "tabId": "two-stage",
-        "sectionId": "two-stage-motion",
-        "cardId": "two-stage-settings",
+        "tabId": "motion",
+        "sectionId": "motion",
+        "cardId": "motion-settings",
         "order": 10
       },
       "metadataPath": "lumen.liftDistance2Mm"
@@ -487,9 +510,9 @@
       "max": 100000,
       "step": 1,
       "placement": {
-        "tabId": "two-stage",
-        "sectionId": "two-stage-motion",
-        "cardId": "two-stage-settings",
+        "tabId": "motion",
+        "sectionId": "motion",
+        "cardId": "motion-settings",
         "order": 20
       },
       "metadataPath": "material.liftSpeedMmMin",
@@ -508,9 +531,9 @@
       "max": 100000,
       "step": 1,
       "placement": {
-        "tabId": "two-stage",
-        "sectionId": "two-stage-motion",
-        "cardId": "two-stage-settings",
+        "tabId": "motion",
+        "sectionId": "motion",
+        "cardId": "motion-settings",
         "order": 20
       },
       "metadataPath": "lumen.liftSpeed2MmMin"
@@ -524,9 +547,9 @@
       "max": 100000,
       "step": 1,
       "placement": {
-        "tabId": "two-stage",
-        "sectionId": "two-stage-motion",
-        "cardId": "two-stage-settings",
+        "tabId": "motion",
+        "sectionId": "motion",
+        "cardId": "motion-settings",
         "order": 30
       },
       "metadataPath": "material.retractSpeedMmMin",
@@ -545,16 +568,16 @@
       "max": 100000,
       "step": 1,
       "placement": {
-        "tabId": "two-stage",
-        "sectionId": "two-stage-motion",
-        "cardId": "two-stage-settings",
+        "tabId": "motion",
+        "sectionId": "motion",
+        "cardId": "motion-settings",
         "order": 30
       },
       "metadataPath": "lumen.retractSpeed2MmMin"
     },
     {
       "key": "bottomWaitTimeBeforeCureSec",
-      "label": "Extended Wait Before Cure (s)",
+      "label": "Burn-in Wait Before Cure (s)",
       "kind": "number",
       "defaultValue": 0,
       "min": 0,
@@ -563,14 +586,15 @@
       "placement": {
         "tabId": "advanced",
         "sectionId": "burn-in-waits",
-        "cardId": "bottom-wait-times",
+        "cardId": "burn-in-wait-times",
         "order": 10
       },
-      "metadataPath": "lumen.bottomWaitTimeBeforeCureSec"
+      "metadataPath": "lumen.bottomWaitTimeBeforeCureSec",
+      "description": "Pause before curing a burn-in layer. 0 means no pause at all rather than the normal layer's wait, so match Wait Before Cure when the whole print should run on one rhythm."
     },
     {
       "key": "bottomWaitTimeAfterCureSec",
-      "label": "Extended Wait After Cure (s)",
+      "label": "Burn-in Wait After Cure (s)",
       "kind": "number",
       "defaultValue": 0,
       "min": 0,
@@ -579,14 +603,15 @@
       "placement": {
         "tabId": "advanced",
         "sectionId": "burn-in-waits",
-        "cardId": "bottom-wait-times",
+        "cardId": "burn-in-wait-times",
         "order": 20
       },
-      "metadataPath": "lumen.bottomWaitTimeAfterCureSec"
+      "metadataPath": "lumen.bottomWaitTimeAfterCureSec",
+      "description": "Pause after curing a burn-in layer. 0 means no pause rather than the normal layer's wait; match Wait After Cure to keep one rhythm across the print."
     },
     {
       "key": "bottomWaitTimeAfterLiftSec",
-      "label": "Extended Wait After Lift (s)",
+      "label": "Burn-in Wait After Lift (s)",
       "kind": "number",
       "defaultValue": 0,
       "min": 0,
@@ -595,10 +620,11 @@
       "placement": {
         "tabId": "advanced",
         "sectionId": "burn-in-waits",
-        "cardId": "bottom-wait-times",
+        "cardId": "burn-in-wait-times",
         "order": 30
       },
-      "metadataPath": "lumen.bottomWaitTimeAfterLiftSec"
+      "metadataPath": "lumen.bottomWaitTimeAfterLiftSec",
+      "description": "Pause at the top of the lift on a burn-in layer. 0 means no pause rather than the normal layer's wait; match Wait After Lift to keep one rhythm across the print."
     },
     {
       "key": "chamberTemperatureC",

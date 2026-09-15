@@ -104,10 +104,17 @@ impl Values {
     }
 
     /// A number carried under `key`, from the first container that has one.
+    ///
+    /// A JSON string that spells a number counts. The app's settings merge stringifies
+    /// every value a `select` field carries, so the compression choice reaches the job
+    /// as `"6"` where a `number` field's value reaches it as `6`; reading only JSON
+    /// numbers would leave such a field doing nothing at all and the encoder on its
+    /// default. Nothing else about the lookup changes: a key that holds something that
+    /// is not a number, in any container, is still skipped.
     fn number(&self, key: &str) -> Option<f64> {
         CONTAINERS
             .iter()
-            .find_map(|container| self.at(container)?.get(key)?.as_f64())
+            .find_map(|container| self.at(container)?.get(key).and_then(as_number))
     }
 
     /// A dotted path read as a number.
@@ -138,6 +145,17 @@ impl Values {
     fn boolean_at(&self, path: &str) -> bool {
         self.at(path).and_then(Value::as_bool).unwrap_or(false)
     }
+}
+
+/// A JSON value as a number: a number, or a string spelling one.
+///
+/// The string form exists for the fields a `select` owns, which the app's settings
+/// merge writes as strings; see [`Values::number`].
+fn as_number(value: &Value) -> Option<f64> {
+    value
+        .as_f64()
+        .or_else(|| value.as_str()?.trim().parse::<f64>().ok())
+        .filter(|number| number.is_finite())
 }
 
 /// Round to the nearest whole unit, never below zero and never overflowing.
@@ -172,6 +190,25 @@ fn pwm_from_percent(percent: f64) -> u32 {
         return 0;
     }
     ((percent * 2.55).round() as i64).clamp(0, 255) as u32
+}
+
+/// A burn-in wait only a non-zero value overrides, in whole milliseconds.
+///
+/// The advanced waits are overrides rather than values, and that is what makes
+/// section 8's rule reachable for them: DragonFruit's settings merge writes every
+/// field of the schema with its default, so no profile can leave one of these keys
+/// out and `0` is the only way the page can say "the burn-in layers keep the normal
+/// pause". ChiTuBox's own reader reads a bottom value the same way when it is `<= 0`,
+/// for instance its retract speeds. The first key carrying a positive number wins,
+/// and a job that carries none leaves the field out of META so the reader falls back
+/// to the normal counterpart.
+fn override_wait_ms(values: &Values, keys: &[&str]) -> Option<u32> {
+    keys.iter().find_map(|key| {
+        values
+            .number(key)
+            .map(ms_from_sec)
+            .filter(|milliseconds| *milliseconds > 0)
+    })
 }
 
 /// `HEAD` and `META` for this job.
@@ -263,16 +300,24 @@ pub fn build(job: &SliceJobV3) -> Result<LumenMetadata, SlicerV3Error> {
     timing.retract_slow_distance_um = Some(um_from_mm(values.number("retractDistance2Mm").unwrap_or(0.0)));
     timing.retract_slow_speed_um_min = Some(um_from_mm(values.number("retractSpeed2MmMin").unwrap_or(0.0)));
 
-    timing.bottom_lift_slow_distance_um = Some(um_from_mm(values.number("bottomLiftDistanceMm").unwrap_or(0.0)));
-    timing.bottom_lift_slow_speed_um_min = Some(um_from_mm(values.number("bottomLiftSpeedMmMin").unwrap_or(0.0)));
-    timing.bottom_lift_fast_distance_um = Some(um_from_mm(values.number("bottomLiftDistance2Mm").unwrap_or(0.0)));
-    timing.bottom_lift_fast_speed_um_min = Some(um_from_mm(values.number("bottomLiftSpeed2MmMin").unwrap_or(0.0)));
-    timing.bottom_retract_fast_distance_um = Some(um_from_mm(values.number("bottomRetractDistanceMm").unwrap_or(0.0)));
-    timing.bottom_retract_fast_speed_um_min = Some(um_from_mm(values.number("bottomRetractSpeedMmMin").unwrap_or(0.0)));
+    // The bottom motion is where section 8's rule bites, and it is the one rule in
+    // this module that a plain `unwrap_or(0.0)` breaks: a `bottom_*` field that is
+    // absent equals its normal counterpart, so a job that says nothing about bottom
+    // lift asks for the normal lift on those layers. Writing the zero a missing key
+    // would convert to instead claims a machine that lifts and retracts nowhere on
+    // the burn-in layers, which is a different print. These stay values rather than
+    // overrides, so a zero a profile does write is written through: on a two-stage
+    // page it is how a single-stage motion is spelled, and section 8 says so.
+    timing.bottom_lift_slow_distance_um = values.number("bottomLiftDistanceMm").map(um_from_mm);
+    timing.bottom_lift_slow_speed_um_min = values.number("bottomLiftSpeedMmMin").map(um_from_mm);
+    timing.bottom_lift_fast_distance_um = values.number("bottomLiftDistance2Mm").map(um_from_mm);
+    timing.bottom_lift_fast_speed_um_min = values.number("bottomLiftSpeed2MmMin").map(um_from_mm);
+    timing.bottom_retract_fast_distance_um = values.number("bottomRetractDistanceMm").map(um_from_mm);
+    timing.bottom_retract_fast_speed_um_min = values.number("bottomRetractSpeedMmMin").map(um_from_mm);
     // Appendix B's closing note: ChiTuBox's second retract height is the same
     // quantity as LUMEN's slow retract distance, bottom or not.
-    timing.bottom_retract_slow_distance_um = Some(um_from_mm(values.number("bottomRetractHeight2Mm").unwrap_or(0.0)));
-    timing.bottom_retract_slow_speed_um_min = Some(um_from_mm(values.number("bottomRetractSpeed2MmMin").unwrap_or(0.0)));
+    timing.bottom_retract_slow_distance_um = values.number("bottomRetractHeight2Mm").map(um_from_mm);
+    timing.bottom_retract_slow_speed_um_min = values.number("bottomRetractSpeed2MmMin").map(um_from_mm);
 
     // Waits. LUMEN has no light-off field: ChiTuBox's light-off delay is the pause
     // after the cure, which is `wait_time_after_cure_ms` (Appendix B).
@@ -284,23 +329,26 @@ pub fn build(job: &SliceJobV3) -> Result<LumenMetadata, SlicerV3Error> {
             .unwrap_or(0.0),
     ));
     timing.wait_time_after_lift_ms = Some(ms_from_sec(values.number("waitTimeAfterLiftSec").unwrap_or(0.0)));
-    timing.bottom_wait_time_before_cure_ms = Some(ms_from_sec(values.number("bottomWaitTimeBeforeCureSec").unwrap_or(0.0)));
-    timing.bottom_wait_time_after_cure_ms = Some(ms_from_sec(
-        values
-            .number("bottomWaitTimeAfterCureSec")
-            .or_else(|| values.number("bottomLightOffDelaySec"))
-            .unwrap_or(0.0),
-    ));
-    timing.bottom_wait_time_after_lift_ms = Some(ms_from_sec(values.number("bottomWaitTimeAfterLiftSec").unwrap_or(0.0)));
+    // The bottom waits are overrides: a profile that leaves them out, and a page whose
+    // default 0 reaches the merge like any other field it writes, both mean the
+    // burn-in layers keep the normal pauses, so neither writes a field.
+    timing.bottom_wait_time_before_cure_ms =
+        override_wait_ms(&values, &["bottomWaitTimeBeforeCureSec"]);
+    timing.bottom_wait_time_after_cure_ms =
+        override_wait_ms(&values, &["bottomWaitTimeAfterCureSec", "bottomLightOffDelaySec"]);
+    timing.bottom_wait_time_after_lift_ms = override_wait_ms(&values, &["bottomWaitTimeAfterLiftSec"]);
 
     let light_pwm = pwm_from_percent(values.number("projectorPwmPercent").unwrap_or(0.0));
     if light_pwm > 0 {
         timing.light_pwm = Some(light_pwm);
     }
-    let bottom_light_pwm = pwm_from_percent(values.number("bottomProjectorPwmPercent").unwrap_or(0.0));
-    if bottom_light_pwm > 0 {
-        timing.bottom_light_pwm = Some(bottom_light_pwm);
-    }
+    // PWM carries the same rule as the waits: a job that does not carry the key, or
+    // carries it as zero, is asking for the normal layer's power (section 8) rather
+    // than for burn-in layers that never light.
+    timing.bottom_light_pwm = values
+        .number("bottomProjectorPwmPercent")
+        .map(pwm_from_percent)
+        .filter(|pwm| *pwm > 0);
 
     // Temperatures. These have no ChiTuBox counterpart to convert or rename, so they
     // are read as plain numbers and written as they come: Celsius, in a fractional

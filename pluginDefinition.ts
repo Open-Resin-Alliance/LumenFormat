@@ -11,13 +11,13 @@ import lumenStandardMaterialSettings from './materialSettings/settings_standard.
 /**
  * LUMEN's settings, filed under four tabs.
  *
- * Standard carries the everyday print settings. Two-Stage carries the motion in
- * CTB's paired form: each first segment sits beside the second segment of the
- * same move, so a row shows both halves, the tags say which end is slow and
+ * General carries the everyday print settings. Motion carries the lift and the
+ * retract in CTB's paired form: each first segment sits beside the second segment
+ * of the same move, so a row shows both halves, the tags say which end is slow and
  * which is fast, and a single-stage machine reads the half it leaves at zero.
- * Advanced holds the extended burn-in waits, and the temperatures and the scene
- * switch sit on the profile's own Meta tab, which the app renders for any format
- * that places fields there.
+ * Advanced holds the burn-in waits, and the temperatures and the scene switch sit
+ * on the profile's own Meta tab, which the app renders for any format that places
+ * fields there.
  *
  * The format needs one mode: META always carries both the lift and the retract
  * segment, and the `lumen.*` namespace the encoder reads is already the
