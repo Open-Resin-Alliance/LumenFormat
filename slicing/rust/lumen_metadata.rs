@@ -9,10 +9,11 @@
 //! `ctb_metadata.rs` does for its container.
 //!
 //! A value is looked up in the containment chain DragonFruit already writes:
-//! `lumen.*` first, so a LUMEN-specific settings profile can override anything, then
-//! the CTB-shaped `ctb.*` / `export.ctb.*` keys every material settings profile
-//! carries today, then the base `material` node of the manifest. A profile that
-//! slices CTB correctly therefore slices LUMEN correctly without new settings.
+//! `lumen.*` first, so the LUMEN settings profile (`materialSettings/`, registered by
+//! `pluginDefinition.ts`) owns every field it defines, then the CTB-shaped `ctb.*` /
+//! `export.ctb.*` keys, which a profile that was written for ChiTuBox carries and which
+//! keep such a profile slicing LUMEN correctly without new settings, then the base
+//! `material` node of the manifest.
 //!
 //! Units: LUMEN stores integer micrometres and whole milliseconds, and nothing below
 //! one micrometre or one millisecond is expressible, so every value is rounded to the
@@ -47,10 +48,10 @@ pub struct LumenMetadata {
 
 /// Containers a settings value may live in, most specific first.
 ///
-/// `lumen` and its `timing` child exist so a LUMEN profile can override any field;
-/// the `ctb` and `export.ctb` entries are where DragonFruit's material settings
-/// profiles put the motion and wait values today; `material` is the manifest's own
-/// node, which holds the base exposures and the first lift segment.
+/// `lumen` and its `timing` child are where the LUMEN settings profile puts the
+/// motion, wait, PWM and temperature values it owns; the `ctb` and `export.ctb`
+/// entries keep a profile written for ChiTuBox working; `material` is the manifest's
+/// own node, which holds the base exposures and the first lift segment.
 const CONTAINERS: [&str; 9] = [
     "lumen",
     "lumen.timing",
@@ -271,6 +272,15 @@ pub fn build(job: &SliceJobV3) -> Result<LumenMetadata, SlicerV3Error> {
     if bottom_light_pwm > 0 {
         timing.bottom_light_pwm = Some(bottom_light_pwm);
     }
+
+    // Temperatures. These have no ChiTuBox counterpart to convert or rename, so they
+    // are read as plain numbers and written as they come: Celsius, in a fractional
+    // unit, not one of the integer micrometre or millisecond scales above. Only a key
+    // the job actually carries produces a field, so a job without one leaves META
+    // without a temperature and the printer keeps its own default (unheated).
+    // `cure_curve` is deliberately never set: it is an object, not a settings field.
+    timing.chamber_temperature_c = values.number("chamberTemperatureC");
+    timing.vat_temperature_c = values.number("vatTemperatureC");
 
     // The printer node, as the manifest writes it. Pixel pitch is not carried, so it
     // is derived from the plate and the panel, which is the same derivation the
