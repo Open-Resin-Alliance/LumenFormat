@@ -1916,6 +1916,391 @@
       "trailer_crc32c": "0xCD267F3B"
     },
     {
+      "block_size_layers": 5,
+      "blocks": [
+        {
+          "frame_offset": 0,
+          "frame_size": 55,
+          "uncompressed_size": 85
+        },
+        {
+          "frame_offset": 55,
+          "frame_size": 56,
+          "uncompressed_size": 85
+        }
+      ],
+      "chunk_count": 6,
+      "description": "Ten layers over two sectors whose SECT definition carries bottom_layer_count 5 and no transition_layer_count, so sector 1 is blended over a bottom range of its own and inherits META's transition count; layer 4 is the layer where the two readings part, fully normal at 2500 ms for sector 0 and still a bottom layer at 30000 ms for sector 1, and their transition steps fall on layers 2 and 5 rather than together.",
+      "dict": {
+        "dict_id": 0,
+        "dict_size": 0,
+        "present": false
+      },
+      "dir_offset": 1251,
+      "display_height_px": 48,
+      "display_width_px": 64,
+      "features": [
+        "multi-sector",
+        "sector-framing",
+        "sector-layer-count",
+        "per-sector-bottom-range",
+        "binary-ree"
+      ],
+      "file": "valid/sector-blend-ranges.lumen",
+      "file_sha256": "62bf695beedec7b0c2a687101d7f3045c07ae3060cba0a1871b451183d5e7ec6",
+      "file_size": 1451,
+      "header_flags": 2,
+      "layer_height_um": 50,
+      "layers": [
+        {
+          "block_index": 0,
+          "data_offset": 0,
+          "data_size": 17,
+          "decompressed_sha256": "3d1bf570c4abb5361a36df210eb638239df6936a7113e6c256f1487091aa7a45",
+          "index": 0,
+          "lhas_leaf": "2055a6738b4ff92e9c3d37a576ad061111fdcd6c4a4c6e4ea5bfcbd378c28d68",
+          "sector_count": 2,
+          "sector_tags": [
+            0,
+            0
+          ],
+          "tag": null
+        },
+        {
+          "block_index": 0,
+          "data_offset": 17,
+          "data_size": 17,
+          "decompressed_sha256": "2703fcb174aa3c43848b99550f2491ba65c8c46e3b46622969053ec732793b26",
+          "index": 1,
+          "lhas_leaf": "ef60f77b0cebd701073779d49a5ae05c8ec41018c5deb3fc15d421c10c7234f9",
+          "sector_count": 2,
+          "sector_tags": [
+            0,
+            0
+          ],
+          "tag": null
+        },
+        {
+          "block_index": 0,
+          "data_offset": 34,
+          "data_size": 17,
+          "decompressed_sha256": "9401fccae6eaf3bc549b9e713306c4df1a01f7d9f719cd4edae7fad07a9fae8e",
+          "index": 2,
+          "lhas_leaf": "fa292b5adac610bbaba7f71c884ae92df12a85f443d8e12ec3e864b95b807ec3",
+          "sector_count": 2,
+          "sector_tags": [
+            0,
+            0
+          ],
+          "tag": null
+        },
+        {
+          "block_index": 0,
+          "data_offset": 51,
+          "data_size": 17,
+          "decompressed_sha256": "bfeca1cf64823322c9c6eaa19474ab6259f2d0532e12331071a6b6051a7954ae",
+          "index": 3,
+          "lhas_leaf": "42d0fbfba15344494e5756c82b4699c532e356a403ae8d21631824be8572ad89",
+          "sector_count": 2,
+          "sector_tags": [
+            0,
+            0
+          ],
+          "tag": null
+        },
+        {
+          "block_index": 0,
+          "data_offset": 68,
+          "data_size": 17,
+          "decompressed_sha256": "f108e84acf9943b67221861adf229290b3253eafd23567593fc18a0b486dd579",
+          "index": 4,
+          "lhas_leaf": "17dbfd6db93f998c5639fa5bcb183567c46e613f7a3b13b9fc5ce3ae98d6eb7d",
+          "sector_count": 2,
+          "sector_tags": [
+            0,
+            0
+          ],
+          "tag": null
+        },
+        {
+          "block_index": 1,
+          "data_offset": 0,
+          "data_size": 17,
+          "decompressed_sha256": "c54f305f200256821a8903a7d820c01236cbe5cc5752955366c172461fe38828",
+          "index": 5,
+          "lhas_leaf": "a2223900dd15f5832c7fb926d52377c7a47988a7b86574e64ecdbe4a15f1f4f4",
+          "sector_count": 2,
+          "sector_tags": [
+            0,
+            0
+          ],
+          "tag": null
+        },
+        {
+          "block_index": 1,
+          "data_offset": 17,
+          "data_size": 17,
+          "decompressed_sha256": "96e808e6577b72bfa7857e3915f13ca28c6fad0095d45756cfb3df01770a2dcc",
+          "index": 6,
+          "lhas_leaf": "321b1ae7173de269e9bd4cc8e7eaf4129fe6289b227581262eb007911b5ee0ab",
+          "sector_count": 2,
+          "sector_tags": [
+            0,
+            0
+          ],
+          "tag": null
+        },
+        {
+          "block_index": 1,
+          "data_offset": 34,
+          "data_size": 17,
+          "decompressed_sha256": "3689cc60fa682d7d5194284f3d38168bb4cf19ad2df1a35ceb1dc17a21586d43",
+          "index": 7,
+          "lhas_leaf": "597a1473bdd969135d3ad47fd075f48896fae7d9cf5f12a26a270357de5706bb",
+          "sector_count": 2,
+          "sector_tags": [
+            0,
+            0
+          ],
+          "tag": null
+        },
+        {
+          "block_index": 1,
+          "data_offset": 51,
+          "data_size": 17,
+          "decompressed_sha256": "b2bf85b0fcbcc93ec94697082a295b38996032d063383511e95ad4e0a4b6f2c5",
+          "index": 8,
+          "lhas_leaf": "e633bc74b586852ebf15521dfa33999445502c063acb90a0054f5c77d9c4583f",
+          "sector_count": 2,
+          "sector_tags": [
+            0,
+            0
+          ],
+          "tag": null
+        },
+        {
+          "block_index": 1,
+          "data_offset": 68,
+          "data_size": 17,
+          "decompressed_sha256": "dcf1e0c46238d9ec2293c7d935a32c0d90aac446cb1bef5c65c8c6b5b334c1b6",
+          "index": 9,
+          "lhas_leaf": "6f07c8211a295b1d9ffcc3301802d2ce5e81a8c24cb3f6fbd5734a5663a36e01",
+          "sector_count": 2,
+          "sector_tags": [
+            0,
+            0
+          ],
+          "tag": null
+        }
+      ],
+      "merkle_root": "f97d97727de533e18fe4fa36232f029ccdc0922acf04be8edd8476c415dd80ab",
+      "multi_sector": true,
+      "name": "sector-blend-ranges",
+      "resolved_timing": [
+        {
+          "exposure_ms": 30000,
+          "layer": 0,
+          "layer_height_um": 50,
+          "lift_fast_distance_um": 0,
+          "lift_fast_speed_um_min": 0,
+          "lift_slow_distance_um": 5000,
+          "lift_slow_speed_um_min": 65000,
+          "light_pwm": 255,
+          "retract_fast_distance_um": 5000,
+          "retract_fast_speed_um_min": 150000,
+          "retract_slow_distance_um": 0,
+          "retract_slow_speed_um_min": 0,
+          "sector": 0,
+          "wait_time_after_cure_ms": 0,
+          "wait_time_after_lift_ms": 0,
+          "wait_time_before_cure_ms": 0
+        },
+        {
+          "exposure_ms": 30000,
+          "layer": 0,
+          "layer_height_um": 50,
+          "lift_fast_distance_um": 0,
+          "lift_fast_speed_um_min": 0,
+          "lift_slow_distance_um": 5000,
+          "lift_slow_speed_um_min": 65000,
+          "light_pwm": 255,
+          "retract_fast_distance_um": 5000,
+          "retract_fast_speed_um_min": 150000,
+          "retract_slow_distance_um": 0,
+          "retract_slow_speed_um_min": 0,
+          "sector": 1,
+          "wait_time_after_cure_ms": 0,
+          "wait_time_after_lift_ms": 0,
+          "wait_time_before_cure_ms": 0
+        },
+        {
+          "exposure_ms": 30000,
+          "layer": 1,
+          "layer_height_um": 50,
+          "lift_fast_distance_um": 0,
+          "lift_fast_speed_um_min": 0,
+          "lift_slow_distance_um": 5000,
+          "lift_slow_speed_um_min": 65000,
+          "light_pwm": 255,
+          "retract_fast_distance_um": 5000,
+          "retract_fast_speed_um_min": 150000,
+          "retract_slow_distance_um": 0,
+          "retract_slow_speed_um_min": 0,
+          "sector": 0,
+          "wait_time_after_cure_ms": 0,
+          "wait_time_after_lift_ms": 0,
+          "wait_time_before_cure_ms": 0
+        },
+        {
+          "exposure_ms": 30000,
+          "layer": 1,
+          "layer_height_um": 50,
+          "lift_fast_distance_um": 0,
+          "lift_fast_speed_um_min": 0,
+          "lift_slow_distance_um": 5000,
+          "lift_slow_speed_um_min": 65000,
+          "light_pwm": 255,
+          "retract_fast_distance_um": 5000,
+          "retract_fast_speed_um_min": 150000,
+          "retract_slow_distance_um": 0,
+          "retract_slow_speed_um_min": 0,
+          "sector": 1,
+          "wait_time_after_cure_ms": 0,
+          "wait_time_after_lift_ms": 0,
+          "wait_time_before_cure_ms": 0
+        },
+        {
+          "exposure_ms": 16250,
+          "layer": 2,
+          "layer_height_um": 50,
+          "lift_fast_distance_um": 0,
+          "lift_fast_speed_um_min": 0,
+          "lift_slow_distance_um": 5000,
+          "lift_slow_speed_um_min": 65000,
+          "light_pwm": 255,
+          "retract_fast_distance_um": 5000,
+          "retract_fast_speed_um_min": 150000,
+          "retract_slow_distance_um": 0,
+          "retract_slow_speed_um_min": 0,
+          "sector": 0,
+          "wait_time_after_cure_ms": 0,
+          "wait_time_after_lift_ms": 0,
+          "wait_time_before_cure_ms": 0
+        },
+        {
+          "exposure_ms": 2500,
+          "layer": 3,
+          "layer_height_um": 50,
+          "lift_fast_distance_um": 0,
+          "lift_fast_speed_um_min": 0,
+          "lift_slow_distance_um": 5000,
+          "lift_slow_speed_um_min": 65000,
+          "light_pwm": 255,
+          "retract_fast_distance_um": 5000,
+          "retract_fast_speed_um_min": 150000,
+          "retract_slow_distance_um": 0,
+          "retract_slow_speed_um_min": 0,
+          "sector": 0,
+          "wait_time_after_cure_ms": 0,
+          "wait_time_after_lift_ms": 0,
+          "wait_time_before_cure_ms": 0
+        },
+        {
+          "exposure_ms": 30000,
+          "layer": 4,
+          "layer_height_um": 50,
+          "lift_fast_distance_um": 0,
+          "lift_fast_speed_um_min": 0,
+          "lift_slow_distance_um": 5000,
+          "lift_slow_speed_um_min": 65000,
+          "light_pwm": 255,
+          "retract_fast_distance_um": 5000,
+          "retract_fast_speed_um_min": 150000,
+          "retract_slow_distance_um": 0,
+          "retract_slow_speed_um_min": 0,
+          "sector": 1,
+          "wait_time_after_cure_ms": 0,
+          "wait_time_after_lift_ms": 0,
+          "wait_time_before_cure_ms": 0
+        },
+        {
+          "exposure_ms": 16500,
+          "layer": 5,
+          "layer_height_um": 50,
+          "lift_fast_distance_um": 0,
+          "lift_fast_speed_um_min": 0,
+          "lift_slow_distance_um": 5000,
+          "lift_slow_speed_um_min": 65000,
+          "light_pwm": 255,
+          "retract_fast_distance_um": 5000,
+          "retract_fast_speed_um_min": 150000,
+          "retract_slow_distance_um": 0,
+          "retract_slow_speed_um_min": 0,
+          "sector": 1,
+          "wait_time_after_cure_ms": 0,
+          "wait_time_after_lift_ms": 0,
+          "wait_time_before_cure_ms": 0
+        },
+        {
+          "exposure_ms": 3000,
+          "layer": 6,
+          "layer_height_um": 50,
+          "lift_fast_distance_um": 0,
+          "lift_fast_speed_um_min": 0,
+          "lift_slow_distance_um": 5000,
+          "lift_slow_speed_um_min": 65000,
+          "light_pwm": 255,
+          "retract_fast_distance_um": 5000,
+          "retract_fast_speed_um_min": 150000,
+          "retract_slow_distance_um": 0,
+          "retract_slow_speed_um_min": 0,
+          "sector": 1,
+          "wait_time_after_cure_ms": 0,
+          "wait_time_after_lift_ms": 0,
+          "wait_time_before_cure_ms": 0
+        },
+        {
+          "exposure_ms": 2500,
+          "layer": 9,
+          "layer_height_um": 50,
+          "lift_fast_distance_um": 0,
+          "lift_fast_speed_um_min": 0,
+          "lift_slow_distance_um": 5000,
+          "lift_slow_speed_um_min": 65000,
+          "light_pwm": 255,
+          "retract_fast_distance_um": 5000,
+          "retract_fast_speed_um_min": 150000,
+          "retract_slow_distance_um": 0,
+          "retract_slow_speed_um_min": 0,
+          "sector": 0,
+          "wait_time_after_cure_ms": 0,
+          "wait_time_after_lift_ms": 0,
+          "wait_time_before_cure_ms": 0
+        },
+        {
+          "exposure_ms": 3000,
+          "layer": 9,
+          "layer_height_um": 50,
+          "lift_fast_distance_um": 0,
+          "lift_fast_speed_um_min": 0,
+          "lift_slow_distance_um": 5000,
+          "lift_slow_speed_um_min": 65000,
+          "light_pwm": 255,
+          "retract_fast_distance_um": 5000,
+          "retract_fast_speed_um_min": 150000,
+          "retract_slow_distance_um": 0,
+          "retract_slow_speed_um_min": 0,
+          "sector": 1,
+          "wait_time_after_cure_ms": 0,
+          "wait_time_after_lift_ms": 0,
+          "wait_time_before_cure_ms": 0
+        }
+      ],
+      "total_layers": 10,
+      "total_uncompressed_size": 1483,
+      "trailer_crc32c": "0x36688837"
+    },
+    {
       "block_size_layers": 16,
       "blocks": [
         {

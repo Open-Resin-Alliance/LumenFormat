@@ -26,6 +26,12 @@ The layer timing pipeline resolves as follows for each layer index `i`:
    layer is `bottom_layer_count + transition_layer_count`, where `k = N` and the formula
    collapses to `normal_value` exactly.
 
+   `bottom_layer_count` and `transition_layer_count` here are the ones the layer's sector
+   resolves with: a `SECT` definition that carries either count replaces META's for that
+   sector, so two sectors in one file can be in different stages on the same layer
+   ([§4.5](05-print-control.md#45-sect---sector-definition-chunk)). A reader MUST NOT resolve
+   the ranges once from META and apply them to every sector.
+
    Interpolatable values are exposure times, lift/retract distances and speeds, and wait
    times. A `bottom_*` value that is absent equals its normal counterpart, which makes
    that field's interpolation a no-op. The values that do **not** interpolate are PWM and

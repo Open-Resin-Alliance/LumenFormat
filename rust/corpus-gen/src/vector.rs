@@ -227,6 +227,9 @@ pub struct VectorSpec<'a> {
     pub split_layers: Vec<usize>,
     pub force_run_count_zero: Vec<usize>,
     pub meta_extra: Vec<(&'a str, Value)>,
+    /// Fields a vector adds to the corpus' one `SECT` definition, on top of the
+    /// support exposure [`sectors`](VectorSpec::sectors) sets.
+    pub sect_extra: Vec<(&'a str, Value)>,
     pub prof: Option<Vec<u8>>,
     pub lrov: Option<Vec<Value>>,
     pub prevs: Vec<(Vec<u8>, u32, bool)>,
@@ -244,10 +247,18 @@ impl VectorSpec<'_> {
     /// The `SECT` definitions the file carries (spec 4.5), in chunk order.
     ///
     /// The corpus has one support sector, and it is present exactly when the
-    /// layer data is multi-sector.
+    /// layer data is multi-sector. `sect_extra` adds the fields a vector gives
+    /// that definition beyond the exposure it starts from, which is how a vector
+    /// pins a sector that carries a layer count of its own: a `SECT` definition
+    /// resolves the bottom and transition ranges for its sector, so a sector
+    /// that carries `bottom_layer_count` is blended over a different range than
+    /// META's (spec 4.5, 8).
     pub fn sectors(&self, multi_sector: bool) -> Vec<Value> {
         if multi_sector {
-            vec![payload::sect_value(1, "Support", 3000)]
+            vec![json::merge(
+                payload::sect_value(1, "Support", 3000),
+                &self.sect_extra,
+            )]
         } else {
             Vec::new()
         }
@@ -274,6 +285,7 @@ impl<'a> Default for VectorSpec<'a> {
             split_layers: Vec::new(),
             force_run_count_zero: Vec::new(),
             meta_extra: Vec::new(),
+            sect_extra: Vec::new(),
             prof: None,
             lrov: None,
             prevs: Vec::new(),
@@ -354,16 +366,20 @@ pub fn content_chunks(spec: &VectorSpec, enc: &Layers) -> Vec<Chunk> {
 /// conforming reader must resolve from the file's META, `SECT` and `LROV`
 /// payloads for a sample of `(layer, sector)` points ([`crate::timing`]), so a
 /// third-party implementation has numbers to agree with and not only bytes to
-/// re-derive. The sample is the product of a set of layers and a set of sectors,
-/// chosen to touch every branch of the pipeline rather than every layer: the two
-/// ends of the bottom range and its first transition step, the first fully-normal
-/// layer and the last layer, each of them beside every layer an `LROV` entry
-/// names and that layer's neighbours - which is what puts an override boundary and
-/// the layers on either side of it in the same table - against sector 0, every
-/// sector a `SECT` chunk defines and every sector an override targets. Pinning
-/// every layer would add no branch the pipeline does not already show here: a
-/// reader that agrees at these points and disagrees between them has a boundary
-/// error, not a sampling gap.
+/// re-derive. The sample is chosen to touch every branch of the pipeline rather
+/// than every layer, and it is a sample of each sector's own pipeline: a sector
+/// resolves `bottom_layer_count` and `transition_layer_count` per field for
+/// itself, a `SECT` definition's counts replacing META's, so the layers one
+/// sector branches at are not necessarily the layers another does. Each sector
+/// is sampled at the two ends of its bottom range and its first transition step,
+/// the first fully-normal layer and the last layer, each of them beside every
+/// layer an `LROV` entry that can match that sector names and that layer's
+/// neighbours - which is what puts an override boundary and the layers on either
+/// side of it in the same table - against sector 0, every sector a `SECT` chunk
+/// defines and every sector an override targets. Pinning every layer would add
+/// no branch the pipeline does not already show here: a reader that agrees at
+/// these points and disagrees between them has a boundary error, not a sampling
+/// gap.
 pub fn vector_meta(
     spec: &VectorSpec,
     enc: &Layers,

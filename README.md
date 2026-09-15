@@ -148,9 +148,9 @@ independently of the specification's own encoder:
 
 | Path | Contents |
 |------|----------|
-| `valid/*.lumen` | 11 files a conforming reader must accept, each pinning the structures it contains |
+| `valid/*.lumen` | 12 files a conforming reader must accept, each pinning the structures it contains |
 | `invalid/*.lumen` | 37 files a conforming reader must reject, each failing the check its manifest entry names - and failing it *first* |
-| `manifest.json` | Golden data for every vector: sizes, offsets, block table, per-layer hashes, Merkle root, CRC-32C, and the credentials for encrypted vectors |
+| `manifest.json` | Golden data for every vector: sizes, offsets, block table, per-layer hashes, Merkle root, CRC-32C, the timing a conforming reader must resolve for a sample of `(layer, sector)` points, and the credentials for encrypted vectors |
 | [`rust/corpus-gen/`](rust/corpus-gen/) | `make_vectors`: reference encoder that regenerates the corpus from the specification |
 | [`rust/corpus/`](rust/corpus/) | `verify_vectors`: independent reader and validator, sharing no code with the generator. `cross_check` runs it against files the reference crate wrote |
 

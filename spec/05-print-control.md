@@ -31,7 +31,13 @@ Required only when `MULTI_SECTOR` flag is set. Defines a material/exposure secto
   array MUST exist, be non-empty, and contain the index.
 - `color_rgba` is a display hint that overrides the referenced material's color for
   this sector; it does not affect exposure.
-- If a timing field is absent, the sector inherits from META defaults.
+- If a timing field is absent, the sector inherits from META defaults. That inheritance is
+  per field, and it covers the layer counts like any other timing field: a sector definition
+  may carry `bottom_layer_count` and `transition_layer_count` of its own, and one that does
+  is blended over **its own** bottom and transition ranges. Its bottom range can be longer
+  than META's, its transition steps land on different layers, and two sectors in one file can
+  disagree about where the bottom range ends - which is the point, since a support material
+  and a model resin rarely want the same one.
 - A single-material printer can ignore all `SECT` chunks and decode only sector 0;
   see [§7.2](10-sectors.md#72-sector-0-convention-and-single-material-degradation) for the completeness caveat.
 

@@ -150,10 +150,6 @@ pub struct Pipeline<'a> {
     sectors: Vec<(u32, &'a Map<String, Value>)>,
     /// The `LROV` entries, in file order (spec 8 step 3).
     overrides: &'a [Value],
-    /// META's `bottom_layer_count`.
-    bottom: u32,
-    /// META's `transition_layer_count`.
-    transition: u32,
     /// The header's `total_layers`, which bounds every point.
     total: u32,
 }
@@ -183,10 +179,6 @@ impl<'a> Pipeline<'a> {
             meta,
             sectors,
             overrides,
-            // A file that carries neither count has no bottom or transition
-            // range, which is what zero of each means.
-            bottom: int(meta, "bottom_layer_count").unwrap_or(0),
-            transition: int(meta, "transition_layer_count").unwrap_or(0),
             total: total_layers,
         }
     }
@@ -221,17 +213,8 @@ impl<'a> Pipeline<'a> {
 
     /// The timing of one `(layer, sector)` pair (spec 8 steps 1-5).
     fn resolve(&self, layer: u32, sector: u32) -> Resolved {
-        // Sector 0 has no definition by construction, so only a non-zero sector
-        // can carry one, and a definition speaks for the sector it names.
-        let sect = if sector == 0 {
-            None
-        } else {
-            self.sectors
-                .iter()
-                .find(|(id, _)| *id == sector)
-                .map(|(_, timing)| *timing)
-        };
-        let stage = self.stage(layer);
+        let sect = self.definition(sector);
+        let stage = self.stage(layer, sect);
         let mut resolved = Resolved {
             layer_height_um: self.merged(sect, "layer_height_um").unwrap_or(0),
             values: FIELDS.map(|field| self.value(field, sect, stage)),
@@ -289,13 +272,37 @@ impl<'a> Pipeline<'a> {
             .or_else(|| int(self.meta, name))
     }
 
-    /// Which range `layer` falls in (spec 8 step 2).
-    fn stage(&self, layer: u32) -> Stage {
-        // `u64` keeps `bottom + transition` from wrapping on counts a malformed
-        // META could carry.
+    /// The `SECT` definition that speaks for `sector`, when the file carries
+    /// one.
+    ///
+    /// Sector 0 is the implicit primary sector and a `SECT` definition names
+    /// `sector_id >= 1` (spec 4.5), so only a non-zero sector can have one, and
+    /// a definition speaks for the sector it names.
+    fn definition(&self, sector: u32) -> Option<&'a Map<String, Value>> {
+        self.sectors
+            .iter()
+            .find(|(id, _)| *id == sector)
+            .map(|(_, timing)| *timing)
+    }
+
+    /// The layer counts `sector` resolves with: the definition's when it carries
+    /// them, META's otherwise, per field (spec 4.5, 8).
+    ///
+    /// A file that carries neither count has no bottom or transition range,
+    /// which is what zero of each means. `u64` keeps the range's end,
+    /// `bottom + transition`, from wrapping on counts a malformed META or `SECT`
+    /// could carry.
+    fn counts(&self, sect: Option<&Map<String, Value>>) -> (u64, u64) {
+        (
+            u64::from(self.merged(sect, "bottom_layer_count").unwrap_or(0)),
+            u64::from(self.merged(sect, "transition_layer_count").unwrap_or(0)),
+        )
+    }
+
+    /// Which range `layer` falls in for `sector` (spec 8 step 2).
+    fn stage(&self, layer: u32, sect: Option<&Map<String, Value>>) -> Stage {
+        let (bottom, transition) = self.counts(sect);
         let index = u64::from(layer);
-        let bottom = u64::from(self.bottom);
-        let transition = u64::from(self.transition);
         if index < bottom {
             Stage::Bottom
         } else if index < bottom + transition {
@@ -310,13 +317,22 @@ impl<'a> Pipeline<'a> {
 
     /// The `(layer, sector)` pairs the manifest pins, sorted and deduplicated.
     ///
-    /// The layers are the two ends of the bottom range, its first transition
-    /// step, the first fully-normal layer and the last layer, each clamped into
-    /// the file's range, plus every layer an `LROV` entry names - both ends of a
-    /// `layer_range` - and, for each of those, its neighbours. The sectors are
-    /// sector 0, every `sector_id` a `SECT` definition carries, and every
-    /// `sector_id` an `LROV` entry names. The pairs are the product of the two
-    /// sets.
+    /// Every sector is sampled on the layers its own pipeline branches at,
+    /// because a sector resolves the two counts per field for itself: a `SECT`
+    /// definition that carries `bottom_layer_count` or
+    /// `transition_layer_count` is blended over its own ranges, so the layers
+    /// META's counts would put it at are not the ones it branches at (spec 4.5,
+    /// 8). A reader MUST NOT resolve the ranges once from META and apply them to
+    /// every sector.
+    ///
+    /// The sectors are sector 0, every `sector_id` a `SECT` definition carries
+    /// and every `sector_id` an `LROV` entry names. A sector's layers are the
+    /// two ends of its bottom range, its first transition step, its first
+    /// fully-normal layer and the last layer, each clamped into the file's
+    /// range, plus every layer an `LROV` entry that can match that sector - one
+    /// whose `sector_id` is absent or is the sector's - names, both ends of a
+    /// `layer_range`, and, for each of those, its neighbours. The pairs are the
+    /// union over the sectors of the sector's layers against the sector itself.
     fn points(&self) -> Vec<(u32, u32)> {
         if self.total == 0 {
             return Vec::new();
@@ -324,21 +340,8 @@ impl<'a> Pipeline<'a> {
         let last = i64::from(self.total - 1);
         let clamp = |layer: i64| layer.clamp(0, last) as u32;
 
-        let mut layers: BTreeSet<u32> = BTreeSet::new();
-        let bottom = i64::from(self.bottom);
-        for layer in [
-            0,
-            1,
-            bottom - 1,
-            bottom,
-            bottom + i64::from(self.transition),
-            last,
-        ] {
-            layers.insert(clamp(layer));
-        }
         let mut sectors: BTreeSet<u32> = BTreeSet::from([0]);
         sectors.extend(self.sectors.iter().map(|(id, _)| *id));
-
         for entry in self.overrides {
             let Some(entry) = entry.as_object() else {
                 continue;
@@ -346,26 +349,53 @@ impl<'a> Pipeline<'a> {
             if let Some(sector) = int(entry, "sector_id") {
                 sectors.insert(sector);
             }
-            for layer in named_layers(entry) {
-                // An entry naming a layer the file does not have names no point
-                // of it.
-                if layer >= self.total {
-                    continue;
-                }
-                layers.insert(layer);
-                if layer > 0 {
-                    layers.insert(layer - 1);
-                }
-                if layer < self.total - 1 {
-                    layers.insert(layer + 1);
-                }
-            }
         }
 
-        layers
-            .iter()
-            .flat_map(|layer| sectors.iter().map(move |sector| (*layer, *sector)))
-            .collect()
+        let mut points: BTreeSet<(u32, u32)> = BTreeSet::new();
+        for sector in sectors {
+            let sect = self.definition(sector);
+            let (bottom, transition) = self.counts(sect);
+            let mut layers: BTreeSet<u32> = BTreeSet::new();
+            for layer in [
+                0,
+                1,
+                bottom as i64 - 1,
+                bottom as i64,
+                (bottom + transition) as i64,
+                last,
+            ] {
+                layers.insert(clamp(layer));
+            }
+
+            for entry in self.overrides {
+                let Some(entry) = entry.as_object() else {
+                    continue;
+                };
+                // An entry that names a sector other than this one cannot match
+                // it, and so names no layer of it (spec 4.6).
+                if int(entry, "sector_id").is_some_and(|target| target != sector) {
+                    continue;
+                }
+                for layer in named_layers(entry) {
+                    // An entry naming a layer the file does not have names no
+                    // point of it.
+                    if layer >= self.total {
+                        continue;
+                    }
+                    layers.insert(layer);
+                    if layer > 0 {
+                        layers.insert(layer - 1);
+                    }
+                    if layer < self.total - 1 {
+                        layers.insert(layer + 1);
+                    }
+                }
+            }
+
+            points.extend(layers.into_iter().map(|layer| (layer, sector)));
+        }
+
+        points.into_iter().collect()
     }
 }
 

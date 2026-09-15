@@ -81,20 +81,28 @@ settings a conforming reader must resolve, field for field, as integers. Tempera
 cure curve are not pinned: they pass through from META or a sector definition unblended, and
 this pins the pipeline that does the blending.
 
-The sample covers every branch rather than every layer. With `B = bottom_layer_count`,
-`T = transition_layer_count` and `N = total_layers`:
+The sample covers every branch rather than every layer, and each sector is sampled on the
+boundaries **it** resolves with: a `SECT` definition may carry its own
+`bottom_layer_count`/`transition_layer_count`, and then that sector blends over a different
+range than META's ([§4.5](../spec/05-print-control.md#45-sect---sector-definition-chunk)). For
+each sector `s`, with `B_s` and `T_s` the counts that sector supplies or inherits and
+`N = total_layers`:
 
-- layers `{0, 1, B-1, B, B+T, N-1}`, each clamped into range, plus every layer an `LROV`
-  entry names or bounds and each of its immediate neighbours;
-- sectors `{0}`, plus every sector a `SECT` chunk defines and every sector an `LROV` entry
-  targets;
-- every pair of those - so the points include the bottom range, the first interpolation step,
-  the first fully-normal layer, the last layer, and each override boundary next to the layer
-  it does not reach.
+- layers `{0, 1, B_s-1, B_s, B_s+T_s, N-1}`, each clamped into range, plus every layer an
+  `LROV` entry that can match `s` names or bounds and each of those layers' immediate
+  neighbours;
+- the points for `s` are those layers at `s`, and the sample is the union over the sectors
+  `{0}`, every sector a `SECT` chunk defines, and every sector an `LROV` entry targets.
 
-`layer-overrides` is the one to read first: layer 2 carries an override, layers 3 to 5 carry
-one scoped to sector 0 with a different pause, layers 6 to 8 carry one for every sector, and
-the neighbouring layers are left at META's values.
+So a vector's points include each sector's bottom range, first interpolation step, first
+fully-normal layer, last layer, and each override boundary next to the layer it does not
+reach.
+
+`layer-overrides` is the one to read first for the overrides: layer 2 carries an override, layers
+3 to 5 carry one scoped to sector 0 with a different pause, layers 6 to 8 carry one for every
+sector, and the neighbouring layers are left at META's values. `sector-blend-ranges` is the one
+for the ranges themselves, where META's bottom range ends at layer 2 and the sector 1 definition's
+ends at layer 5.
 
 ## Valid vectors
 
@@ -111,6 +119,7 @@ the neighbouring layers are left at META's values.
 | `previews` | 4 | 2 | AES-256-GCM, password | two `PREV` chunks in one file - a large preview in the clear and a sealed icon - with the role in the descriptor's flags. Preview sealing is optional even when the file is encrypted |
 | `embedded-scene` | 4 | 2 | AES-256-GCM, password | a sealed `VOXL` chunk: an embedded scene is copied in and must come back out unchanged, while LUMEN itself never parses it |
 | `extensions` | 4 | 2 | - | two non-critical `EXTD` chunks - a reserved ORA type code and a vendor extension - pinning the frame, the `vendor_id` field and the `critical` bit, and the rule that readers skip extensions they do not implement |
+| `sector-blend-ranges` | 10 | 2 | - | per-sector blend ranges: a `SECT` definition carrying its own `bottom_layer_count` and inheriting META's transition count, so the two sectors sit in different stages on the same layer. Layer 4 is fully normal at 2500 ms for sector 0 and still in the bottom range at 30000 ms for sector 1, and their transition steps land on layers 2 and 5 rather than together ([§4.5](../spec/05-print-control.md#45-sect---sector-definition-chunk)) |
 
 The encrypted vectors also pin the two encryption flags that the spec assigns
 different bit numbers: the file header's bit 3 (`ENCRYPTED`, "an `AUTH` chunk is

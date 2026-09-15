@@ -1,4 +1,4 @@
-//! The corpus: the eleven valid vectors, the deliberate defects, and the manifest.
+//! The corpus: the twelve valid vectors, the deliberate defects, and the manifest.
 
 use std::fs;
 use std::path::Path;
@@ -754,12 +754,13 @@ can express.",
 // valid vectors
 // --------------------------------------------------------------------------
 
-/// The eleven valid vectors, in the order the manifest lists them.
+/// The twelve valid vectors, in the order the manifest lists them.
 pub fn valid_vectors() -> Vec<Built> {
     vec![
         binary_basic(),
         dict_multi_block(),
         multi_sector(),
+        sector_blend_ranges(),
         encrypted_password(),
         encrypted_machine(),
         encrypted_both(),
@@ -850,6 +851,38 @@ fn multi_sector() -> Built {
         layers,
         block_size: 2,
         meta_extra: vec![("materials", standard_grey_material())],
+        ..Default::default()
+    })
+}
+
+/// 10 layers, two sectors, one of them with a bottom range of its own.
+fn sector_blend_ranges() -> Built {
+    // Sector 0 covers the pixels near the origin, sector 1 a band further in, on
+    // every layer, so the two masks partition each layer's exposed image.
+    let layers: Vec<vector::Layer> = (0..10usize)
+        .map(|index| {
+            let offset = 8 * index;
+            vec![
+                vec![(0, 128 + offset, 255u8)],
+                vec![(1600 + offset, 1728 + offset, 255u8)],
+            ]
+        })
+        .collect();
+    vector::build_vector(&VectorSpec {
+        name: "sector-blend-ranges",
+        description: "Ten layers over two sectors whose SECT definition carries bottom_layer_count 5 and no transition_layer_count, so sector 1 is blended over a bottom range of its own and inherits META's transition count; layer 4 is the layer where the two readings part, fully normal at 2500 ms for sector 0 and still a bottom layer at 30000 ms for sector 1, and their transition steps fall on layers 2 and 5 rather than together.",
+        features: &[
+            "multi-sector",
+            "sector-framing",
+            "sector-layer-count",
+            "per-sector-bottom-range",
+            "binary-ree",
+        ],
+        display: (64, 48),
+        layers,
+        block_size: 5,
+        meta_extra: vec![("materials", standard_grey_material())],
+        sect_extra: vec![("bottom_layer_count", Value::from(5))],
         ..Default::default()
     })
 }
