@@ -349,6 +349,12 @@ pub fn check_argon2_budget(section: &PasswordSection) -> Result<()> {
 }
 
 /// The associated data binding a unit to its identity: `chunk_type || 0x00 || unit_index`.
+///
+/// `unit_index` is the slot the unit occupies within its chunk type: `0` for a
+/// chunk that is one unit, and the chunk's directory index for a `LAYR` frame,
+/// which is one unit per chunk and would otherwise be swappable between two
+/// `LAYR` chunks (`crypt.unit_index_binding`, section 9.3). The caller supplies
+/// it; [`crate::chunkio`] is where the choice is made.
 pub fn associated_data(chunk_type: ChunkType, unit_index: u32) -> [u8; 9] {
     let mut aad = [0u8; 9];
     aad[..4].copy_from_slice(&chunk_type.0);

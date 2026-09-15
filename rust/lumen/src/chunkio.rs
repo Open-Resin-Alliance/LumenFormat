@@ -3,12 +3,19 @@
 //! This is the one place that knows which chunk types carry a zstd frame and how
 //! a sealed payload is framed, so the validator and the reader cannot disagree
 //! about either.
+//!
+//! `LAYR` is the exception that shapes the rest: its frame is the sealed unit
+//! (section 9.3), its associated data binds that frame to the chunk's
+//! *directory index*, and the container's other units - one per chunk - bind to
+//! index zero. [`layr_frame`] exists so no caller can accidentally open a layer
+//! frame under the wrong slot.
 
 use crate::check::Check;
 use crate::chunks;
 use crate::container::{ChunkDescriptor, ChunkType};
 use crate::crypto::{self, Cipher, SessionKey};
 use crate::error::{Error, Result};
+use std::borrow::Cow;
 
 /// The stored bytes of a chunk, sealed or not.
 pub(crate) fn stored<'a>(buf: &'a [u8], d: &ChunkDescriptor) -> Result<&'a [u8]> {
@@ -28,24 +35,78 @@ pub(crate) fn stored<'a>(buf: &'a [u8], d: &ChunkDescriptor) -> Result<&'a [u8]>
     })
 }
 
-/// The plaintext bytes of a chunk, or `None` when it is sealed and no key is
-/// available.
+/// The plaintext bytes of a one-unit chunk, or `None` when it is sealed and no
+/// key is available.
 ///
-/// `LAYR` is the exception the specification carves out (section 3.2): its
-/// descriptor carries the sealed bit because its block frames are sealed
-/// individually, but the header and block table stay plaintext, so the
-/// chunk-level bytes are returned as stored.
+/// A `LAYR` payload is never read this way: its clear prefix is a version field
+/// and its frame is sealed on its own, bound to the chunk's directory index
+/// rather than to slot zero. Callers use [`layr_frame`] for those.
 pub(crate) fn plaintext(
     d: &ChunkDescriptor,
     stored: &[u8],
     cipher: Option<Cipher>,
     key: Option<&SessionKey>,
 ) -> Result<Option<Vec<u8>>> {
-    if d.chunk_type == ChunkType::LAYR || !d.is_encrypted() {
+    if !d.is_encrypted() {
         return Ok(Some(stored.to_vec()));
     }
     match (cipher, key) {
         (Some(cipher), Some(key)) => Ok(Some(crypto::open(cipher, key, d.chunk_type, 0, stored)?)),
+        _ => Ok(None),
+    }
+}
+
+/// The plaintext frame of a `LAYR` chunk, or `None` when it is sealed and no key
+/// is available.
+///
+/// `unit_index` is the chunk's directory index. A frame that will not authenticate
+/// there is opened once more under index `0`, because that single retry is what
+/// separates the two defects a failed AEAD open can mean: a file that sealed its
+/// frames under the wrong index authenticates under `0` (`crypt.unit_index_binding`),
+/// while a corrupted ciphertext or tag authenticates under neither (`crypt.tag_verify`).
+/// Reporting both as the binding would tell a reader its file was mis-bound when the
+/// bytes are simply wrong.
+///
+/// An unsealed frame is borrowed from the file rather than copied: a container is
+/// the largest thing in a print, and a reader that only decompresses it has no
+/// reason to hold a second copy.
+pub(crate) fn layr_frame<'a>(
+    d: &ChunkDescriptor,
+    unit_index: u32,
+    stored: &'a [u8],
+    cipher: Option<Cipher>,
+    key: Option<&SessionKey>,
+) -> Result<Option<Cow<'a, [u8]>>> {
+    let frame = chunks::layr::frame(stored)?;
+    if !d.is_encrypted() {
+        return Ok(Some(Cow::Borrowed(frame)));
+    }
+    match (cipher, key) {
+        (Some(cipher), Some(key)) => {
+            let open = |unit: u32| crypto::open(cipher, key, ChunkType::LAYR, unit, frame);
+            match open(unit_index) {
+                Ok(plain) => Ok(Some(Cow::Owned(plain))),
+                Err(reason) => {
+                    if open(0).is_ok() {
+                        Err(Error::new(
+                            Check::CryptUnitIndexBinding,
+                            format!(
+                                "the frame at directory index {unit_index} does not authenticate \
+                                 there, but does under unit index 0"
+                            ),
+                        ))
+                    } else {
+                        Err(Error::new(
+                            Check::CryptTagVerify,
+                            format!(
+                                "the frame at directory index {unit_index} does not authenticate: \
+                                 {reason}"
+                            ),
+                        ))
+                    }
+                }
+            }
+        }
         _ => Ok(None),
     }
 }
@@ -75,30 +136,4 @@ pub(crate) fn payload(
         return Ok(Some(plain));
     }
     Ok(Some(chunks::decompress(&plain, d.size_uncompressed, None)?))
-}
-
-/// The unsealed bytes of `LAYR` block `k`, or `None` when it is sealed and no key
-/// is available.
-pub(crate) fn block_frame(
-    layr: &chunks::layr::Layr,
-    stored: &[u8],
-    desc: &ChunkDescriptor,
-    k: usize,
-    cipher: Option<Cipher>,
-    key: Option<&SessionKey>,
-) -> Result<Option<Vec<u8>>> {
-    let frame = layr.frame(stored, k)?;
-    if !desc.is_encrypted() {
-        return Ok(Some(frame.to_vec()));
-    }
-    match (cipher, key) {
-        (Some(cipher), Some(key)) => Ok(Some(crypto::open(
-            cipher,
-            key,
-            ChunkType::LAYR,
-            k as u32,
-            frame,
-        )?)),
-        _ => Ok(None),
-    }
 }

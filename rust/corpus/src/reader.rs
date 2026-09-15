@@ -22,26 +22,36 @@
 //!   has, without `__checks_complete`, so a caller can tell "these are all the
 //!   checks" from "this file ended the run". Neither escape is reachable from
 //!   the corpus, whose vectors are containers that parse.
+//!
+//! The revised layout is structural rather than in-band: `LTBL` carries one
+//! record per `(layer, sector)`, each naming its `LAYR` chunk and its slice of
+//! that chunk's output, one `LROV` chunk carries one `(layer, sector)`'s timing
+//! deltas, and a `LAYR` chunk is a clear version field followed by a single
+//! zstd frame. Nothing about a sector is encoded inside the layer data any
+//! more, so the tables are the only place a sector can be described - and the
+//! checks that read them are the only place a defect in them can be reported.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io;
+use std::ops::Range;
 use std::path::Path;
 
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::bytes::{at, u32_at, u64_at};
-use crate::container::{Block, Entry, COMPRESSED_TYPES, ENCRYPTED_FLAG, SEALED_FLAG};
+use crate::container::{Chunk, COMPRESSED_TYPES, ENCRYPTED_FLAG, LAYR_HEADER_SIZE, SEALED_FLAG};
 use crate::content::{
-    is_int, is_number, is_uuid, lrov_indices_ok, lrov_range_ordered, materials_shape_ok,
-    number_at_least, png_header_ok, scalar_eq, time_fields_integer,
+    cure_curve_ok, is_int, is_positive_number, is_uuid, materials_shape_ok, png_header_ok,
+    sector_material_index_ok, sectors_shape_ok, sectors_time_integer, temperature_range_ok,
+    time_fields_integer,
 };
 use crate::crypto::{
     argon2_params, chunk_flag_report, open_unit, recover_session_key, CryptoBlock,
     SEALABLE_CHUNK_TYPES,
 };
-use crate::decompress::{frame_dict_id, Decoder};
-use crate::primitives::{merkle_root, read_varint};
+use crate::decompress::{frame_content_size, frame_dict_id, Decoder};
+use crate::primitives::merkle_root;
 use crate::ree::{self, Violation};
 use crate::timing::TimingInputs;
 
@@ -60,29 +70,31 @@ const REQUIRED_META_FIELDS: [&str; 10] = [
 ];
 
 /// The order the REE checks are reported in, which is not the order they are
-/// discovered: a sector stream can break several rules at once, and the report
+/// discovered: a slice's stream can break several rules at once, and the report
 /// names the first one the specification lists.
-const REE_ORDER: [&str; 10] = [
-    "ree.tag_known",
-    "ree.binary_first_value",
-    "ree.binary_lengths",
-    "ree.grayscale_ends",
-    "ree.grayscale_adjacent",
+const REE_ORDER: [&str; 12] = [
+    "ree.varint",
+    "ree.tag",
+    "ree.split_positions",
+    "ree.first_value",
+    "ree.end_positions",
+    "ree.data_size",
     "ree.no_run_count_zero",
-    "ree.split_overlay",
-    "ree.canonical_tag_choice",
+    "ree.run_lengths",
+    "ree.grayscale_runs",
+    "ree.grayscale_all_binary",
+    "ree.split_threshold",
     "ree.no_trailing_bytes",
-    "ree.truncated_sector",
 ];
 
 /// Checks a loose reader does not run, because they judge a file's fidelity to
 /// the canonical encoding rather than its readability.
 const STRICT_ONLY: [&str; 5] = [
     "ree.no_run_count_zero",
-    "ree.binary_lengths",
-    "ree.grayscale_adjacent",
-    "ree.split_overlay",
-    "ree.canonical_tag_choice",
+    "ree.run_lengths",
+    "ree.grayscale_runs",
+    "ree.grayscale_all_binary",
+    "ree.split_threshold",
 ];
 
 /// One check's verdict.
@@ -109,6 +121,7 @@ pub struct Checks {
     items: Vec<Item>,
     payloads: BTreeMap<[u8; 4], Payload>,
     timing: Option<TimingInputs>,
+    layers: Vec<Vec<u8>>,
 }
 
 impl Checks {
@@ -146,11 +159,18 @@ impl Checks {
         &self.payloads
     }
 
-    /// The `META`, `SECT` and `LROV` objects this run parsed, for a caller that
-    /// wants to resolve §8's pipeline independently of the reader. `None` when
-    /// the run stopped before parsing them, which no conforming vector does.
+    /// The `META` and `LROV` objects this run parsed, for a caller that wants to
+    /// resolve §8's pipeline independently of the reader. `None` when the run
+    /// stopped before parsing them, which no conforming vector does.
     pub fn timing_inputs(&self) -> Option<&TimingInputs> {
         self.timing.as_ref()
+    }
+
+    /// One decompressed byte range per layer: the slices of its sectors,
+    /// concatenated in ascending `sector_id` - the bytes `LHAS` hashes. Empty
+    /// for a layer the run never reached.
+    pub fn layers(&self) -> &[Vec<u8>] {
+        &self.layers
     }
 
     pub fn len(&self) -> usize {
@@ -188,12 +208,36 @@ impl Checks {
     }
 }
 
-/// One `LTBL` record (§4.5).
-struct LayerEntry {
-    data_offset: u64,
-    block_index: u32,
+/// One `LTBL` record (§4.8): a `(layer, sector)`'s slice of one `LAYR` chunk.
+///
+/// The layer is not a field of the record - the table groups a layer's records
+/// together, so the layer is where the record sits rather than what it says.
+/// [`Reader::spans`] holds that grouping.
+#[derive(Clone, Copy)]
+struct SectorEntry {
     data_size: u32,
-    sector_count: u32,
+    first_lrov: u32,
+    first_layr: u32,
+    additional_sector_count: u32,
+    data_offset: u64,
+    sector_id: u32,
+}
+
+/// One `LTBL` record, read where the entry sits in the table.
+///
+/// `entry_size` is the header's stride, so a future version that appends fields
+/// after offset 28 is read correctly rather than misaligned.
+fn ltbl_entry(ltbl: &[u8], entry_size: u32, index: u64) -> Option<SectorEntry> {
+    let base = 16u128 + u128::from(index) * u128::from(entry_size);
+    let field = |offset: u128| usize::try_from(base + offset).ok();
+    Some(SectorEntry {
+        data_size: u32_at(ltbl, field(0)?)?,
+        first_lrov: u32_at(ltbl, field(4)?)?,
+        first_layr: u32_at(ltbl, field(8)?)?,
+        additional_sector_count: u32_at(ltbl, field(12)?)?,
+        data_offset: u64_at(ltbl, field(16)?)?,
+        sector_id: u32_at(ltbl, field(24)?)?,
+    })
 }
 
 /// Validate a file, at `strict` or loose level.
@@ -227,7 +271,7 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
 
     // The fixed file header (§4.1): a file too short to hold it has nothing
     // further to say about itself.
-    let (Some(dir_offset), Some(chunk_count), Some(flags), Some(_total_uncompressed)) = (
+    let (Some(dir_offset), Some(chunk_count), Some(flags), Some(total_uncompressed)) = (
         u64_at(raw, 8),
         u32_at(raw, 16),
         u32_at(raw, 20),
@@ -235,11 +279,14 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
     ) else {
         return checks;
     };
+    // §3.1: bits 0, 2 and 4 are reserved, and bit 1 and bit 3 are the two flags
+    // this revision defines.
+    checks.check("header.flags_reserved", flags & 0x15 == 0);
 
     let directory_end = u128::from(dir_offset) + u128::from(chunk_count) * 32;
     let payload_end = raw.len() as u128 - 8;
     if !checks.check(
-        "dir.bounds",
+        "header.dir_offset",
         dir_offset >= 32 && directory_end <= payload_end,
     ) {
         return checks;
@@ -247,12 +294,12 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
 
     let mut entries = Vec::new();
     for index in 0..chunk_count as usize {
-        // dir.bounds put every fixed 32-byte record inside the file.
+        // header.dir_offset put every fixed 32-byte record inside the file.
         let base = dir_offset as usize + index * 32;
         let record: &[u8; 32] = raw[base..base + 32]
             .try_into()
-            .expect("dir.bounds sized the directory");
-        entries.push(Entry {
+            .expect("header.dir_offset sized the directory");
+        entries.push(crate::container::Entry {
             ctype: record[..4].try_into().expect("a type tag is four bytes"),
             offset: u64::from_le_bytes(record[4..12].try_into().expect("u64")),
             usz: u64::from_le_bytes(record[12..20].try_into().expect("u64")),
@@ -260,40 +307,63 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
             flags: u32::from_le_bytes(record[28..32].try_into().expect("u32")),
         });
     }
-    let real: Vec<&Entry> = entries.iter().filter(|entry| entry.offset != 0).collect();
+    // A record with a zero offset is unused, and every index the tables carry
+    // is an index into the whole directory rather than into this list (§4.8),
+    // so the index is kept beside the record rather than thrown away.
+    let real: Vec<Chunk> = entries
+        .iter()
+        .enumerate()
+        .filter(|(_, entry)| entry.offset != 0)
+        .map(|(index, entry)| Chunk { index, entry })
+        .collect();
 
+    // §4.1: `HDR` is present, and the first chunk - at the offset immediately
+    // after the fixed header. The two are separate rules, so they are separate
+    // verdicts.
+    let hdr_first = first(&real, b"HDR\0");
+    checks.check("presence.hdr", hdr_first.is_some());
     checks.check(
-        "chunk.hdr_first",
+        "dir.hdr_first",
         real.first()
-            .is_some_and(|entry| entry.ctype == *b"HDR\0" && entry.offset == 32),
+            .is_some_and(|chunk| chunk.entry.ctype == *b"HDR\0" && chunk.entry.offset == 32),
     );
     let mut extents: Vec<(u128, u128)> = real
         .iter()
-        .map(|entry| {
+        .map(|chunk| {
             (
-                u128::from(entry.offset),
-                u128::from(entry.offset) + u128::from(entry.size()),
+                u128::from(chunk.entry.offset),
+                u128::from(chunk.entry.offset) + u128::from(chunk.entry.size()),
             )
         })
         .collect();
     extents.sort_unstable();
     checks.check(
-        "chunk.overlap",
+        "dir.overlap",
         extents.windows(2).all(|pair| pair[0].1 <= pair[1].0),
     );
     checks.check(
-        "chunk.bounds",
-        real.iter()
-            .all(|entry| u128::from(entry.offset) + u128::from(entry.size()) <= payload_end),
+        "dir.chunk_extent",
+        real.iter().all(|chunk| {
+            u128::from(chunk.entry.offset) + u128::from(chunk.entry.size()) <= payload_end
+        }),
+    );
+    // §3.1: the header's own figure, when it carries one, is the sum of the
+    // chunks' uncompressed sizes. `0` means the writer did not know it.
+    checks.check(
+        "header.total_uncompressed_size",
+        total_uncompressed == 0
+            || total_uncompressed
+                == real
+                    .iter()
+                    .fold(0u64, |sum, chunk| sum.saturating_add(chunk.entry.usz)),
     );
 
     // ---- presence -------------------------------------------------------
+    // A sector is structural now: one `LAYR` chunk per (sector, layer group),
+    // so a file may carry any number of them.
     checks.check("presence.meta", count(&real, b"META") == 1);
     checks.check("presence.ltbl", count(&real, b"LTBL") == 1);
-    checks.check("presence.layr", count(&real, b"LAYR") == 1);
-    if flags & 0x02 != 0 {
-        checks.check("presence.sect", !find(&real, b"SECT").is_empty());
-    }
+    checks.check("presence.layr", count(&real, b"LAYR") >= 1);
     // LHAS is optional (§4.11), and §10.3 forbids requiring an optional
     // mechanism in order to decode a file that does not use it - so its absence
     // is not a failure, and the checks over it below do not apply.
@@ -303,16 +373,16 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
     let crypto_engaged = encrypted_flag || !auth_entries.is_empty() || crypto.is_some();
 
     // ---- HDR ------------------------------------------------------------
-    let Some(hdr_entry) = first(&real, b"HDR\0") else {
+    let Some(hdr_chunk) = first(&real, b"HDR\0") else {
         return checks;
     };
-    let hdr = stored(raw, hdr_entry);
+    let hdr = stored(raw, hdr_chunk.entry);
     let (Some(hdr_version), Some(name_len)) = (u32_at(hdr, 0), u32_at(hdr, 4)) else {
         return checks;
     };
     checks.check("hdr.version", hdr_version == 1);
     checks.check(
-        "hdr.encoder_name_fits",
+        "hdr.frame",
         hdr.len() >= 52 + name_len as usize && name_len <= 256,
     );
     let name_len = name_len as usize;
@@ -325,7 +395,7 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
     ) else {
         return checks;
     };
-    let (Some(_build_w), Some(_build_d), Some(_build_h), Some(_layer_h), Some(total_layers)) = (
+    let (Some(build_w), Some(build_d), Some(build_h), Some(layer_h), Some(total_layers)) = (
         u32_at(hdr, 32 + name_len),
         u32_at(hdr, 36 + name_len),
         u32_at(hdr, 40 + name_len),
@@ -335,8 +405,14 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
         return checks;
     };
     checks.check("hdr.total_layers", total_layers > 0);
+    checks.check("hdr.layer_height", layer_h > 0);
+    checks.check("hdr.build_dims", build_w > 0 && build_d > 0 && build_h > 0);
     checks.check(
-        "hdr.physical_ratio",
+        "hdr.display_pixels",
+        display_w as usize * display_h as usize > 0,
+    );
+    checks.check(
+        "hdr.physical_multiple",
         display_w != 0
             && display_h != 0
             && physical_w % display_w == 0
@@ -345,140 +421,150 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
     let total_pixels = display_w as usize * display_h as usize;
 
     // ---- LTBL -----------------------------------------------------------
-    let Some(ltbl_entry) = first(&real, b"LTBL") else {
+    let Some(ltbl_chunk) = first(&real, b"LTBL") else {
         return checks;
     };
-    let ltbl = stored(raw, ltbl_entry);
-    let (Some(table_version), Some(layer_count), Some(entry_size)) =
-        (u32_at(ltbl, 0), u32_at(ltbl, 4), u32_at(ltbl, 8))
-    else {
+    let ltbl = stored(raw, ltbl_chunk.entry);
+    let (Some(table_version), Some(layer_count), Some(entry_size), Some(entry_count)) = (
+        u32_at(ltbl, 0),
+        u32_at(ltbl, 4),
+        u32_at(ltbl, 8),
+        u32_at(ltbl, 12),
+    ) else {
         return checks;
     };
-    checks.check("ltbl.table_version", table_version == 1);
-    checks.check("ltbl.entry_size", entry_size >= 20);
-    checks.check("hdr.total_layers_matches_ltbl", layer_count == total_layers);
+    checks.check("ltbl.version", table_version == 1);
+    checks.check("ltbl.entry_size", entry_size >= 28);
+    checks.check("ltbl.layer_count", layer_count == total_layers);
 
-    let mut layers = Vec::new();
-    for index in 0..layer_count as usize {
-        let Some(offset) = (index)
-            .checked_mul(entry_size as usize)
-            .and_then(|row| row.checked_add(12))
-        else {
-            return checks;
+    // The table is walked the way a reader decodes it: a layer's first entry
+    // says how many further entries that layer carries, so where the next layer
+    // starts is known before its neighbours are read. `spans` records that
+    // grouping, which is the layer every record belongs to.
+    let mut sectors: Vec<SectorEntry> = Vec::new();
+    let mut spans: Vec<Range<usize>> = Vec::new();
+    // The sum of `1 + additional_sector_count` over each layer's first entry,
+    // and whether the walk ever ran off the chunk. A table that stops early is
+    // a defect of the count rather than a reason to abandon the file: the run
+    // carries on with the entries it did read.
+    let mut declared_total = 0u64;
+    let mut truncated_table = false;
+    let mut trailing_counts_null = true;
+    'layers: for _ in 0..layer_count {
+        let start = sectors.len();
+        let Some(first_entry) = ltbl_entry(ltbl, entry_size, declared_total) else {
+            truncated_table = true;
+            break;
         };
-        let (Some(data_offset), Some(block_index), Some(data_size), Some(sector_count)) = (
-            u64_at(ltbl, offset),
-            u32_at(ltbl, offset + 8),
-            u32_at(ltbl, offset + 12),
-            u32_at(ltbl, offset + 16),
-        ) else {
-            return checks;
-        };
-        layers.push(LayerEntry {
-            data_offset,
-            block_index,
-            data_size,
-            sector_count,
-        });
+        let count = u64::from(first_entry.additional_sector_count) + 1;
+        for offset in 0..count {
+            let Some(entry) = declared_total
+                .checked_add(offset)
+                .and_then(|index| ltbl_entry(ltbl, entry_size, index))
+            else {
+                truncated_table = true;
+                spans.push(start..sectors.len());
+                break 'layers;
+            };
+            // §4.8: only a layer's first entry counts further entries; a
+            // non-zero count anywhere else is unaccounted-for structure.
+            if offset > 0 && entry.additional_sector_count != 0 {
+                trailing_counts_null = false;
+            }
+            sectors.push(entry);
+        }
+        spans.push(start..sectors.len());
+        declared_total += count;
     }
+
+    let layr_chunks = find(&real, b"LAYR");
+    let lrov_chunks = find(&real, b"LROV");
+    let layr_indices: HashSet<usize> = layr_chunks.iter().map(|chunk| chunk.index).collect();
+    let lrov_indices: HashSet<usize> = lrov_chunks.iter().map(|chunk| chunk.index).collect();
+
+    // §4.8: the declared count, the sum over each layer's first entry, and the
+    // end of the table are one number read three ways.
+    let table_ends_here =
+        u128::from(declared_total) * u128::from(entry_size) + 16 == ltbl.len() as u128;
+    checks.check(
+        "ltbl.entry_count",
+        u64::from(entry_count) == declared_total && trailing_counts_null && table_ends_here,
+    );
+    // §11.2: the entries describe every layer the header declares and no other,
+    // so the walk from layer 0 stops inside the table. A grouping that runs off
+    // the end never reaches the last layer, whether or not the counts add up.
+    checks.check("ltbl.layer_index_range", !truncated_table);
+    // §4.8: a layer's sectors ascend by id, and no id repeats within a layer.
+    // Ascending is weak here and uniqueness is the separate rule, so a swap and
+    // a repeat are different defects rather than one reported twice.
+    checks.check(
+        "ltbl.sector_ids_ascending",
+        spans.iter().all(|span| {
+            sectors[span.clone()]
+                .windows(2)
+                .all(|pair| pair[0].sector_id <= pair[1].sector_id)
+        }),
+    );
+    checks.check(
+        "ltbl.sector_id_unique",
+        spans.iter().all(|span| {
+            let ids: Vec<u32> = sectors[span.clone()]
+                .iter()
+                .map(|entry| entry.sector_id)
+                .collect();
+            (0..ids.len()).all(|i| (i + 1..ids.len()).all(|j| ids[i] != ids[j]))
+        }),
+    );
+    checks.check(
+        "ltbl.first_entry_is_sector_zero",
+        spans.iter().all(|span| sectors[span.start].sector_id == 0),
+    );
+    // §4.8: `first_layr` names a `LAYR` chunk, and `first_lrov` is `0` or names
+    // an `LROV` chunk. Both are directory indices - positions in the whole
+    // directory, not in the live chunks - which is why [`Chunk`] carries one.
+    // The rule that `0` means "no overrides" is decided in the content phase,
+    // where the override sets the entries point at have been read: an entry's
+    // `0` can only be contradicted by a set that is applied nowhere.
+    checks.check(
+        "ltbl.first_layr_in_range",
+        sectors
+            .iter()
+            .all(|entry| layr_indices.contains(&(entry.first_layr as usize))),
+    );
+    checks.check(
+        "ltbl.first_lrov_in_range",
+        sectors.iter().all(|entry| {
+            entry.first_lrov == 0 || lrov_indices.contains(&(entry.first_lrov as usize))
+        }),
+    );
+    // §4.1: `MULTI_SECTOR` is set exactly when at least one layer carries more
+    // than one sector - the flag is the file's claim about its own layer table.
+    checks.check(
+        "hdr.multi_sector_flag",
+        (flags & 0x02 != 0) == spans.iter().any(|span| span.len() > 1),
+    );
 
     // ---- LAYR -----------------------------------------------------------
-    let Some(layr_entry) = first(&real, b"LAYR") else {
-        return checks;
-    };
-    let layr = stored(raw, layr_entry);
-    let (Some(layr_version), Some(block_count), Some(table_entry)) =
-        (u32_at(layr, 0), u32_at(layr, 4), u32_at(layr, 8))
-    else {
-        return checks;
-    };
-    checks.check("layr.version", layr_version == 1);
-    checks.check(
-        "layr.block_count",
-        (1..=total_layers).contains(&block_count),
-    );
-
-    let mut blocks = Vec::new();
-    for index in 0..block_count as usize {
-        let Some(offset) = (index)
-            .checked_mul(table_entry as usize)
-            .and_then(|row| row.checked_add(12))
-        else {
-            return checks;
-        };
-        let (Some(frame_offset), Some(frame_size), Some(uncompressed_size)) = (
-            u64_at(layr, offset),
-            u64_at(layr, offset + 8),
-            u64_at(layr, offset + 16),
-        ) else {
-            return checks;
-        };
-        blocks.push(Block {
-            frame_offset,
-            frame_size,
-            uncompressed_size,
-        });
-    }
-    let body_offset = 12 + u128::from(block_count) * u128::from(table_entry);
-
-    // A block table with no blocks is a file the oracle cannot describe either;
-    // there is no first or last entry to ask about.
-    if blocks.is_empty() {
+    // One chunk per (sector, layer group): a clear `layr_version`, then a single
+    // zstd frame over the group's concatenated layer data (§4.10). There is no
+    // block table: the chunk is the unit, and the frame's own header carries the
+    // output size a reader allocates from.
+    if layr_chunks.is_empty() {
         return checks;
     }
     checks.check(
-        "layr.block_table_contiguous",
-        blocks[0].frame_offset == 0
-            && blocks.windows(2).all(|pair| {
-                u128::from(pair[1].frame_offset)
-                    == u128::from(pair[0].frame_offset) + u128::from(pair[0].frame_size)
-            }),
-    );
-    let last = blocks
-        .last()
-        .expect("a block table with no blocks returned above");
-    checks.check(
-        "layr.block_end_within_payload",
-        u128::from(last.frame_offset) + u128::from(last.frame_size) + body_offset
-            <= layr.len() as u128,
-    );
-    checks.check(
-        "ltbl.block_index_in_range",
-        layers.iter().all(|layer| layer.block_index < block_count),
-    );
-    checks.check(
-        "ltbl.block_index_monotonic",
-        layers
-            .windows(2)
-            .all(|pair| pair[0].block_index <= pair[1].block_index),
-    );
-    let referenced: HashSet<u32> = layers.iter().map(|layer| layer.block_index).collect();
-    checks.check(
-        "layr.blocks_referenced",
-        referenced == (0..block_count).collect(),
-    );
-    checks.check(
-        "ltbl.empty_layer_no_bytes",
-        layers
+        "layr.version",
+        layr_chunks
             .iter()
-            .filter(|layer| layer.sector_count == 0)
-            .all(|layer| layer.data_size == 0),
-    );
-    checks.check(
-        "ltbl.offsets_within_block",
-        layers.iter().all(|layer| {
-            layer.block_index < block_count
-                && u128::from(layer.data_offset) + u128::from(layer.data_size)
-                    <= u128::from(blocks[layer.block_index as usize].uncompressed_size)
-        }),
+            .all(|chunk| u32_at(stored(raw, chunk.entry), 0) == Some(1)),
     );
 
     // ---- LHAS -----------------------------------------------------------
     // The leaf table and its root are plaintext even when the layer data is
     // sealed, so the root can be recomputed without a key.
     let mut leaves: Vec<Vec<u8>> = Vec::new();
-    if let Some(lhas_entry) = lhas_entries.first() {
-        let lhas = stored(raw, lhas_entry);
+    if let Some(lhas_chunk) = lhas_entries.first() {
+        let lhas = stored(raw, lhas_chunk.entry);
         let (Some(&algorithm), Some(&hash_size)) = (lhas.first(), lhas.get(1)) else {
             return checks;
         };
@@ -489,6 +575,12 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
         for index in 0..leaf_count as usize {
             leaves.push(at(lhas, 38 + 32 * index as u128, 32).to_vec());
         }
+        // §11.1: the payload has to hold its fixed header and one hash per
+        // leaf it declares, or the hashes below are read past the end.
+        checks.check(
+            "lhas.frame",
+            38 + u128::from(leaf_count) * u128::from(hash_size) <= lhas.len() as u128,
+        );
         checks.check("lhas.hash_algorithm", algorithm == 1 && hash_size == 32);
         checks.check("lhas.layer_count", leaf_count == total_layers);
         checks.check(
@@ -504,20 +596,22 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
     let mut session_key: Option<[u8; 32]> = None;
     let mut cipher_id = [0u8; 4];
     let mut decrypted: HashMap<u64, Vec<u8>> = HashMap::new();
-    let mut block_frames: Option<Vec<Option<Vec<u8>>>> = None;
+    // Each `LAYR` chunk's frame once it is in the clear, by directory index.
+    let mut layr_plain: HashMap<usize, Vec<u8>> = HashMap::new();
+    let mut unit_index_bound = true;
     let mut tag_ok = true;
     let mut halt_crypto = false;
     let mut halt_content = false;
 
-    let auth_entry = if auth_entries.len() == 1 {
+    let auth_chunk = if auth_entries.len() == 1 {
         auth_entries.first().copied()
     } else {
         None
     };
     if crypto_engaged {
         checks.check("presence.auth", !encrypted_flag || auth_entries.len() == 1);
-        if let Some(auth_entry) = auth_entry {
-            let auth = stored(raw, auth_entry);
+        if let Some(auth_chunk) = auth_chunk {
+            let auth = stored(raw, auth_chunk.entry);
             // Only the fixed prefix can be read from a section that short.
             let head = auth.len() >= 20;
             let auth_version = if head {
@@ -549,6 +643,12 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
                 "auth.cipher_known",
                 cipher_id == *b"A256" || cipher_id == *b"C20P",
             );
+            // §4.4: the payload holds the fixed prefix and both sections it
+            // declares - the mode bits are what say which sections there are.
+            let ok_frame = checks.check(
+                "auth.frame",
+                head && u128::from(pw_len) + u128::from(mc_len) + 20 <= auth.len() as u128,
+            );
             let ok_mode = checks.check("crypt.mode_empty", mode != 0);
             let mut ok_password = true;
             if mode & 0x01 != 0 {
@@ -571,7 +671,14 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
                     }),
                 );
             }
-            if ok_version && ok_cipher && ok_mode && ok_password && ok_machine && ok_budget {
+            if ok_version
+                && ok_cipher
+                && ok_frame
+                && ok_mode
+                && ok_password
+                && ok_machine
+                && ok_budget
+            {
                 session_key = recover_session_key(auth, crypto, mode, pw_len, mc_len);
                 if session_key.is_none() {
                     halt_crypto = true;
@@ -589,10 +696,11 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
 
     // ---- chunk flags ----------------------------------------------------
     // Directory metadata: checked before any decryption.
-    let sealed_layr = first(&real, b"LAYR").is_some_and(|entry| entry.flags & SEALED_FLAG != 0);
-    let any_sealed = real.iter().any(|entry| entry.flags & SEALED_FLAG != 0);
+    let any_sealed = real
+        .iter()
+        .any(|chunk| chunk.entry.flags & SEALED_FLAG != 0);
     if (crypto_engaged || any_sealed) && !halt_crypto {
-        let (ok, detail) = chunk_flag_report(&real, &blocks, encrypted_flag, sealed_layr);
+        let (ok, detail) = chunk_flag_report(&real, encrypted_flag);
         checks.check_detail("crypt.chunk_flags", ok, &detail);
         if !ok {
             halt_crypto = true;
@@ -606,39 +714,74 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
     if crypto_engaged && !halt_crypto {
         checks.check("crypt.key_unwrap", session_key.is_some());
         if let Some(key) = session_key {
-            for entry in &real {
-                let sealable = SEALABLE_CHUNK_TYPES.contains(&&entry.ctype);
-                if sealable && entry.ctype != *b"LAYR" && entry.flags & SEALED_FLAG != 0 {
-                    match open_unit(&key, &cipher_id, &entry.ctype, 0, stored(raw, entry)) {
+            for chunk in &real {
+                let sealable = SEALABLE_CHUNK_TYPES.contains(&&chunk.entry.ctype);
+                if sealable && chunk.entry.ctype != *b"LAYR" && chunk.entry.flags & SEALED_FLAG != 0
+                {
+                    match open_unit(
+                        &key,
+                        &cipher_id,
+                        &chunk.entry.ctype,
+                        0,
+                        stored(raw, chunk.entry),
+                    ) {
                         Ok(plain) => {
-                            decrypted.insert(entry.offset, plain);
+                            decrypted.insert(chunk.entry.offset, plain);
                         }
                         Err(_) => tag_ok = false,
                     }
                 }
             }
-            if sealed_layr {
-                let mut frames = Vec::new();
-                for (index, block) in blocks.iter().enumerate() {
-                    let blob = at(
-                        layr,
-                        body_offset + u128::from(block.frame_offset),
-                        u128::from(block.frame_size),
-                    );
-                    match open_unit(&key, &cipher_id, b"LAYR", index as u32, blob) {
-                        Ok(plain) => frames.push(Some(plain)),
-                        Err(_) => {
-                            tag_ok = false;
-                            frames.push(None);
+            for chunk in &layr_chunks {
+                if chunk.entry.flags & SEALED_FLAG == 0 {
+                    continue;
+                }
+                let container = stored(raw, chunk.entry);
+                let frame = container
+                    .get(LAYR_HEADER_SIZE as usize..)
+                    .unwrap_or_default();
+                // §9.3: a `LAYR` frame's AAD binds the chunk's directory index,
+                // not a unit number inside the chunk - there is one unit, so an
+                // all-zero index would let two chunks' ciphertexts be swapped.
+                match open_unit(&key, &cipher_id, b"LAYR", chunk.index as u32, frame) {
+                    Ok(plain) => {
+                        layr_plain.insert(chunk.index, plain);
+                    }
+                    Err(_) => {
+                        // A frame that opens under some *other* directory index
+                        // is not corrupt: it was sealed against the wrong one,
+                        // which is the binding defect rather than a tag
+                        // failure. The plaintext it yields is the real one, so
+                        // the rest of the run still sees this file's content.
+                        match first_index_that_opens(
+                            &key,
+                            &cipher_id,
+                            frame,
+                            chunk.index,
+                            chunk_count as usize,
+                        ) {
+                            Some((index, plain)) => {
+                                unit_index_bound = false;
+                                layr_plain.insert(index, plain);
+                            }
+                            None => tag_ok = false,
                         }
                     }
                 }
-                block_frames = Some(frames);
             }
         } else {
             halt_crypto = true;
             halt_content = true;
         }
+    }
+
+    // ---- unit-index binding ---------------------------------------------
+    // Recorded before the tag verdict: a frame bound to the wrong index does
+    // verify its tag, so the two are different findings and this one is the
+    // specific one.
+    if crypto_engaged && !halt_crypto && !checks.check("crypt.unit_index_binding", unit_index_bound)
+    {
+        halt_content = true;
     }
 
     // ---- tags -----------------------------------------------------------
@@ -661,58 +804,63 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
     };
     let mut payloads: BTreeMap<[u8; 4], Payload> = BTreeMap::new();
 
-    // ---- META / SECT ----------------------------------------------------
-    let Some(meta) = content.json(b"META") else {
+    // ---- META -----------------------------------------------------------
+    // A payload that is not a JSON object is a shape rule of its own, and the
+    // rules below still report for themselves: an object META never had cannot
+    // carry the fields they look for, which is a second finding rather than a
+    // reason to stop.
+    let Some(meta_plain) = content.of(b"META") else {
         return checks;
     };
+    let meta_json = parse_json(&meta_plain);
+    checks.check("meta.json", matches!(meta_json, Some(Value::Object(_))));
+    let meta = match meta_json {
+        Some(Value::Object(fields)) => Value::Object(fields),
+        _ => Value::Object(serde_json::Map::new()),
+    };
     let mats = meta.get("materials");
-    // Durations are whole milliseconds (§4.2), so the type rule comes before
-    // anything that reads a duration's value.
-    checks.check("meta.time_integer", time_fields_integer(&meta));
+    // The durations `SECT` used to carry are META's now (§4.2), so META's own
+    // type rule covers them: one namespace, one check.
+    let sector_defs = meta.get("sectors");
+    checks.check(
+        "meta.time_integer",
+        time_fields_integer(&meta) && sectors_time_integer(sector_defs),
+    );
     checks.check(
         "meta.required_fields",
         REQUIRED_META_FIELDS
             .iter()
             .all(|field| meta.get(field).is_some()),
     );
+    checks.check(
+        "meta.version",
+        meta.get("meta_version")
+            .is_some_and(|version| is_int(version) && version.as_i64() == Some(1)),
+    );
+    checks.check(
+        "meta.exposure",
+        meta.get("normal_exposure_ms").is_some_and(is_positive_int)
+            && meta.get("bottom_exposure_ms").is_some_and(is_positive_int),
+    );
+    checks.check(
+        "meta.layer_height",
+        meta.get("layer_height_um").is_some_and(is_positive_number),
+    );
     checks.check("meta.materials_shape", materials_shape_ok(mats));
-
-    let mut sects = Vec::new();
-    for entry in find(&real, b"SECT") {
-        let Some(sect) = content.json_entry(entry) else {
-            return checks;
-        };
-        sects.push(sect);
-    }
-    checks.check("sect.time_integer", sects.iter().all(time_fields_integer));
+    checks.check("meta.sectors_shape", sectors_shape_ok(sector_defs));
     checks.check(
-        "sect.sector_id_nonzero",
-        sects.iter().all(|sect| {
-            sect.get("sector_id")
-                .is_some_and(|id| number_at_least(id, 1.0))
-        }),
+        "meta.sector_material_index",
+        sector_material_index_ok(sector_defs, mats),
     );
-    checks.check("sect.ids_unique", sector_ids_unique(&sects));
-    checks.check(
-        "sect.material_index_bounds",
-        sects.iter().all(|sect| match sect.get("material_index") {
-            None => true,
-            Some(index) => mats
-                .and_then(container_len)
-                .is_some_and(|materials| index_in_range(index, materials)),
-        }),
-    );
-    let sect_ids: Vec<&Value> = sects
-        .iter()
-        .filter_map(|sect| sect.get("sector_id"))
-        .collect();
+    checks.check("meta.cure_curve", cure_curve_ok(meta.get("cure_curve")));
+    checks.check("meta.temperature_range", temperature_range_ok(&meta));
 
     // ---- PROF / LROV / PREV ---------------------------------------------
     // Optional content chunks. PROF and LROV go through the same
-    // sealed/compressed path as META/SECT; PREV is uncompressed but may carry
+    // sealed/compressed path as META; PREV is uncompressed but may carry
     // its own ENCRYPTED bit (§4.7), independent of the file-level flag.
-    if let Some(entry) = first(&real, b"PROF") {
-        let Some(prof_plain) = content.bytes(entry) else {
+    if let Some(chunk) = first(&real, b"PROF") {
+        let Some(prof_plain) = content.bytes(&chunk) else {
             return checks;
         };
         let Some(prof) = parse_json(&prof_plain) else {
@@ -758,16 +906,9 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
                     .is_some_and(is_positive_number)
             }),
         );
-        let curve = settings.and_then(|settings| settings.get("cure_curve"));
         checks.check(
             "prof.cure_curve",
-            curve.is_none_or(|curve| {
-                curve.get("dp_um").is_some_and(is_positive_number)
-                    && curve.get("ec_mj_cm2").is_some_and(is_positive_number)
-                    && curve
-                        .get("e0_mj_cm2")
-                        .is_some_and(|e0| is_number(e0) && number_at_least(e0, 0.0))
-            }),
+            cure_curve_ok(settings.and_then(|settings| settings.get("cure_curve"))),
         );
         checks.check(
             "prof.profile_uuid",
@@ -781,66 +922,102 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
         payloads.insert(*b"PROF", Payload::One(prof_plain));
     }
 
-    // The `LROV` body, kept for the timing inputs below.
-    let mut lrov_body = None;
-    if let Some(entry) = first(&real, b"LROV") {
-        let Some(lrov_plain) = content.bytes(entry) else {
-            return checks;
-        };
-        let Some(lrov) = parse_json(&lrov_plain) else {
-            return checks;
-        };
-        let entries = lrov.get("overrides").and_then(Value::as_array);
-        checks.check(
-            "lrov.time_integer",
-            entries.is_none_or(|entries| entries.iter().all(time_fields_integer)),
-        );
-        checks.check(
-            "lrov.entry_form",
-            entries.is_some_and(|entries| {
-                entries.iter().all(|entry| {
-                    entry.is_object()
-                        && (entry.get("layer").is_some() != entry.get("layer_range").is_some())
-                })
-            }),
-        );
-        checks.check(
-            "lrov.layer_index_range",
-            entries.is_some_and(|entries| {
-                entries
+    // One `LROV` chunk per (layer, sector) that has overrides (§4.6). The
+    // payload is a pure delta: the sparse timing fields that point overrides,
+    // and nothing else - a sector's identity and its base timing live in
+    // `META.sectors`, once, rather than on every layer that touches it.
+    let mut lrov_bodies: BTreeMap<usize, Value> = BTreeMap::new();
+    let mut lrov_json = true;
+    {
+        let mut plaintexts: Vec<Vec<u8>> = Vec::new();
+        for chunk in &lrov_chunks {
+            let Some(lrov_plain) = content.bytes(chunk) else {
+                return checks;
+            };
+            match parse_json(&lrov_plain) {
+                Some(Value::Object(fields)) => {
+                    lrov_bodies.insert(chunk.index, Value::Object(fields));
+                }
+                // A payload this reader cannot apply is a shape defect, not a
+                // capability statement: §4.6's refusal is prose, and the file
+                // is wrong rather than merely unreadable to one reader.
+                _ => lrov_json = false,
+            }
+            plaintexts.push(lrov_plain);
+        }
+        if !lrov_chunks.is_empty() {
+            checks.check("lrov.json", lrov_json);
+            checks.check(
+                "lrov.time_integer",
+                lrov_bodies.values().all(time_fields_integer),
+            );
+            // §4.8: each `LROV` chunk is one `(layer, sector)`'s override set.
+            // Two rules read that, and they are different defects, so they are
+            // different verdicts - each recorded here in the order the corpus
+            // asserts, the "no overrides" claim first.
+            let named: HashSet<usize> = sectors
+                .iter()
+                .filter(|entry| entry.first_lrov != 0)
+                .map(|entry| entry.first_lrov as usize)
+                .collect();
+            // An entry's `0` says that pair has no overrides. What contradicts
+            // it is an override set nothing applies: an `LROV` chunk no entry
+            // names whose payload no named chunk carries. A duplicate of a set
+            // that *is* applied contradicts nothing - those values are the
+            // values a reader prints for the pair that names its twin.
+            let applied: Vec<&[u8]> = lrov_chunks
+                .iter()
+                .zip(&plaintexts)
+                .filter(|(chunk, _)| named.contains(&chunk.index))
+                .map(|(_, plain)| plain.as_slice())
+                .collect();
+            checks.check(
+                "ltbl.first_lrov_null",
+                lrov_chunks
                     .iter()
-                    .all(|entry| lrov_indices_ok(entry, total_layers))
-            }),
-        );
-        checks.check(
-            "lrov.layer_range_order",
-            entries.is_some_and(|entries| entries.iter().all(lrov_range_ordered)),
-        );
-        checks.check(
-            "lrov.sector_id_defined",
-            entries.is_some_and(|entries| {
-                entries.iter().all(|entry| match entry.get("sector_id") {
-                    None => true,
-                    Some(id) => {
-                        scalar_eq(id, &Value::from(0))
-                            || sect_ids.iter().any(|defined| scalar_eq(id, defined))
-                    }
-                })
-            }),
-        );
-        payloads.insert(*b"LROV", Payload::One(lrov_plain));
-        lrov_body = Some(lrov);
+                    .zip(&plaintexts)
+                    .filter(|(chunk, _)| !named.contains(&chunk.index))
+                    .all(|(_, plain)| applied.contains(&plain.as_slice())),
+            );
+            // Every `LROV` chunk is named by exactly one entry. A chunk nobody
+            // names is a set that will never be applied; one that two entries
+            // name would be applied to a pair it never described.
+            let mut references: HashMap<u32, usize> = HashMap::new();
+            for entry in &sectors {
+                if entry.first_lrov != 0 {
+                    *references.entry(entry.first_lrov).or_default() += 1;
+                }
+            }
+            checks.check(
+                "lrov.orphan",
+                lrov_chunks
+                    .iter()
+                    .all(|chunk| references.get(&(chunk.index as u32)) == Some(&1)),
+            );
+            payloads.insert(*b"LROV", Payload::Many(plaintexts));
+        }
     }
 
     // The values §8 resolves a point from, taken from the chunks this run just
     // parsed - so a sealed file is resolved from what its key unwrapped rather
-    // than from the bytes on disk. The layer count is HDR's, which the sample of
-    // points is bounded by.
+    // than from the bytes on disk. A point's overrides are the `LROV` chunk its
+    // table record points at, which is the only thing that binds one to a
+    // `(layer, sector)`.
+    let mut overrides: BTreeMap<(u32, u32), Value> = BTreeMap::new();
+    for (layer, span) in spans.iter().enumerate() {
+        for entry in &sectors[span.clone()] {
+            if entry.first_lrov == 0 {
+                continue;
+            }
+            if let Some(body) = lrov_bodies.get(&(entry.first_lrov as usize)) {
+                overrides.insert((layer as u32, entry.sector_id), body.clone());
+            }
+        }
+    }
     checks.timing = Some(TimingInputs {
         total_layers,
         meta,
-        sects,
-        lrov: lrov_body,
+        overrides,
     });
 
     let prev_entries = find(&real, b"PREV");
@@ -849,11 +1026,11 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
             "prev.flags",
             prev_entries
                 .iter()
-                .all(|entry| (entry.flags & 0x0F) <= 3 && (entry.flags >> 5) == 0),
+                .all(|chunk| (chunk.entry.flags & 0x0F) <= 3 && (chunk.entry.flags >> 5) == 0),
         );
         let mut previews = Vec::new();
-        for entry in &prev_entries {
-            let Some(plain) = content.bytes(entry) else {
+        for chunk in &prev_entries {
+            let Some(plain) = content.bytes(chunk) else {
                 return checks;
             };
             previews.push(plain);
@@ -872,8 +1049,8 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
     // reader to recognize which generation of VOXL it is holding. Whether the
     // scene is *valid* is VOXL's business: a print reader must never reject a
     // file over its embedded scene, so loose mode records nothing here.
-    if let Some(entry) = first(&real, b"VOXL") {
-        let Some(voxl) = content.bytes(entry) else {
+    if let Some(chunk) = first(&real, b"VOXL") {
+        let Some(voxl) = content.bytes(&chunk) else {
             return checks;
         };
         if strict {
@@ -896,8 +1073,8 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
     let extd_entries = find(&real, b"EXTD");
     if !extd_entries.is_empty() {
         let mut extensions: Vec<Option<Vec<u8>>> = Vec::new();
-        for entry in &extd_entries {
-            extensions.push(payload_plain(raw, entry).ok());
+        for chunk in &extd_entries {
+            extensions.push(payload_plain(raw, chunk.entry).ok());
         }
         checks.check(
             "extd.frame",
@@ -920,7 +1097,7 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
             "extd.flags",
             extd_entries
                 .iter()
-                .all(|entry| (entry.flags & 0xFE00_00EF) == 0),
+                .all(|chunk| (chunk.entry.flags & 0xFE00_00EF) == 0),
         );
         // `critical` is reader-relative: a reader that does not implement the
         // extension must refuse the file rather than print an approximation.
@@ -930,7 +1107,7 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
             "extd.critical",
             extd_entries
                 .iter()
-                .all(|entry| (entry.flags & 0x0100_0000) == 0),
+                .all(|chunk| (chunk.entry.flags & 0x0100_0000) == 0),
         );
         payloads.insert(
             *b"EXTD",
@@ -942,8 +1119,14 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
     let zdic_entries = find(&real, b"ZDIC");
     let mut dictionary = Vec::new();
     let mut dict_id = 0u32;
-    if let Some(entry) = zdic_entries.first() {
-        let Some(zdic) = content.bytes(entry) else {
+    // A dictionary the frames may use: a `ZDIC` chunk that declares one. A
+    // null `ZDIC` - one whose `dict_size` is `0` - is a placeholder rather than
+    // a dictionary, and §4.9 speaks of "more than one non-null" chunk, so it
+    // neither supplies bytes nor demands that the frames report its id.
+    let mut zdic_present = false;
+    checks.check("zdic.single", zdic_entries.len() <= 1);
+    if let Some(chunk) = zdic_entries.first() {
+        let Some(zdic) = content.bytes(chunk) else {
             return checks;
         };
         let (Some(version), Some(declared_dict_id), Some(dict_size)) =
@@ -954,62 +1137,104 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
         dict_id = declared_dict_id;
         dictionary = at(&zdic, 12, u128::from(dict_size)).to_vec();
         checks.check("zdic.version", version == 1);
-        checks.check("zdic.present_for_dict", dict_size > 0);
+        // §4.9: `dict_size` is bounded by zstd's own maximum, and the chunk has
+        // to hold that many bytes.
+        checks.check(
+            "zdic.dict_size",
+            dict_size <= 112_640 && u128::from(dict_size) + 12 <= zdic.len() as u128,
+        );
+        zdic_present = dict_size > 0;
     }
     let Ok(mut decoder) = Decoder::new(&dictionary) else {
         return checks;
     };
 
-    let frames: Vec<Option<&[u8]>> = match &block_frames {
-        Some(frames) => frames.iter().map(Option::as_deref).collect(),
-        None => blocks
-            .iter()
-            .map(|block| {
-                Some(at(
-                    layr,
-                    body_offset + u128::from(block.frame_offset),
-                    u128::from(block.frame_size),
-                ))
-            })
-            .collect(),
+    // ---- LAYR frames ----------------------------------------------------
+    // §4.10: one frame per chunk, its dictionary id the chunk's, its declared
+    // content size the reader's allocation. The clear version field is not part
+    // of the sealed unit, so a frame is the container minus its four bytes.
+    let frame_of = |chunk: &Chunk| -> Option<&[u8]> {
+        if chunk.entry.flags & SEALED_FLAG != 0 {
+            layr_plain.get(&chunk.index).map(Vec::as_slice)
+        } else {
+            stored(raw, chunk.entry).get(LAYR_HEADER_SIZE as usize..)
+        }
     };
 
+    // The slices each chunk holds, for the bound a frame's declared size has to
+    // fit inside: a reader sizes its buffer from that figure, so a file has to
+    // justify it before it is allocated for.
+    let mut slices_per_chunk: HashMap<usize, u64> = HashMap::new();
+    for entry in &sectors {
+        *slices_per_chunk
+            .entry(entry.first_layr as usize)
+            .or_default() += 1;
+    }
+
+    let mut content_sizes_present = true;
+    let mut allocation_ok = true;
     let mut dict_ids: Vec<Option<u32>> = Vec::new();
-    let mut outputs: Vec<Vec<u8>> = Vec::new();
-    let mut sizes_exact = true;
-    let mut decompressed = true;
-    for (index, block) in blocks.iter().enumerate() {
-        let Some(frame) = frames.get(index).copied().flatten() else {
-            decompressed = false;
-            dict_ids.push(None);
-            outputs.push(Vec::new());
+    let mut frames_ok = true;
+    let mut outputs: HashMap<usize, Vec<u8>> = HashMap::new();
+    for chunk in &layr_chunks {
+        let Some(frame) = frame_of(chunk) else {
+            frames_ok = false;
             continue;
         };
-        dict_ids.push(frame_dict_id(frame));
-        let capacity = usize::try_from(block.uncompressed_size).unwrap_or(usize::MAX);
-        match decoder.decompress(frame, capacity) {
-            Ok(output) => {
-                sizes_exact &= output.len() == block.uncompressed_size as usize;
-                outputs.push(output);
+        // Bytes that are not a frame header at all are the decompression
+        // failure below rather than a missing content size, so each of the
+        // rules owns a disjoint defect.
+        if let Some(declared) = frame_content_size(frame) {
+            if declared.is_none() {
+                content_sizes_present = false;
             }
-            Err(_) => {
-                decompressed = false;
-                // A frame that parses but does not decompress contributes *two*
-                // entries here, not one: the oracle records the frame header's
-                // dictionary ID and then records the failure as well. The
-                // duplication decides `layr.dict_id_match` - a `None` in the
-                // list fails it - so it is reproduced rather than tidied.
-                dict_ids.push(None);
-                outputs.push(Vec::new());
+            // §11.3: grayscale REE costs at most about five bytes per pixel
+            // plus framing, over the slices this chunk holds - the most the
+            // output could plausibly be.
+            let slices = slices_per_chunk
+                .get(&chunk.index)
+                .copied()
+                .unwrap_or(0)
+                .max(1);
+            let bound =
+                slices.saturating_mul((total_pixels as u64).saturating_mul(5).saturating_add(64));
+            if declared.unwrap_or(0) > bound {
+                allocation_ok = false;
             }
         }
+        dict_ids.push(frame_dict_id(frame));
+        let hint = usize::try_from(chunk.entry.usz).unwrap_or(usize::MAX);
+        match decoder.decompress(frame, hint) {
+            Ok(output) => {
+                outputs.insert(chunk.index, output);
+            }
+            Err(_) => frames_ok = false,
+        }
     }
-    checks.check("layr.block_decompress", decompressed);
-    checks.check("layr.block_sizes_exact", sizes_exact && decompressed);
-    if !zdic_entries.is_empty() {
+    checks.check("layr.content_size_present", content_sizes_present);
+    checks.check("layr.allocation_bound", allocation_ok);
+    if zdic_present {
+        // Every frame that reports a dictionary reports *this* one: §4.9
+        // requires the one chunk to be the dictionary for all of them.
+        //
+        // A frame that reports none is not this rule's business - "no
+        // dictionary was used" is the presence rule's, which decides whether a
+        // file may carry a dictionary the frames do not use.
         checks.check(
             "layr.dict_id_match",
-            dict_ids.iter().all(|id| *id == Some(dict_id)),
+            dict_ids
+                .iter()
+                .all(|id| id.is_none_or(|id| id == 0 || id == dict_id)),
+        );
+        // §11.1 names the same disagreement from the dictionary's side. It is
+        // one defect with two names, so it is recorded under the frames' rule
+        // first - a file that breaks it is reported there - and this verdict is
+        // recorded for a reader that looks for the dictionary's half.
+        checks.check(
+            "zdic.dict_id_match",
+            dict_ids
+                .iter()
+                .all(|id| id.is_none_or(|id| id == 0 || id == dict_id)),
         );
     } else {
         checks.check(
@@ -1017,27 +1242,51 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
             dict_ids.iter().all(|id| *id == Some(0)),
         );
     }
+    // §4.9 / §11.1: a dictionary is present exactly when the frames use one.
+    // Recorded after the two rules that say what each side may be, so a file
+    // that breaks one of those is reported under it rather than here.
+    let frames_use_dictionary = dict_ids.iter().any(|id| id.is_some_and(|id| id != 0));
+    checks.check("presence.zdic", frames_use_dictionary == zdic_present);
+    checks.check("layr.frame_decompressed_size", frames_ok);
+
+    // ---- slices ---------------------------------------------------------
+    // §4.8: a slice lies inside its chunk's decompressed output, and two slices
+    // of one chunk do not overlap - the chunk is shared by the layer group it
+    // holds, so its slices are the only thing that tells them apart.
+    checks.check(
+        "ltbl.offset_within_chunk",
+        sectors.iter().all(|entry| {
+            outputs
+                .get(&(entry.first_layr as usize))
+                .is_some_and(|output| {
+                    u128::from(entry.data_offset) + u128::from(entry.data_size)
+                        <= output.len() as u128
+                })
+        }),
+    );
+    checks.check("ltbl.slices_disjoint", slices_disjoint(&sectors));
 
     // ---- layer data / leaf hashes ---------------------------------------
-    let mut layer_data: Vec<Vec<u8>> = Vec::new();
-    for layer in &layers {
-        if layer.block_index >= block_count {
-            layer_data.push(Vec::new());
-            continue;
+    // A layer's data is its sectors' slices concatenated in ascending
+    // `sector_id` - the order the table lists them in (§4.11).
+    let mut layers: Vec<Vec<u8>> = Vec::with_capacity(spans.len());
+    for span in &spans {
+        let mut data = Vec::new();
+        for entry in &sectors[span.clone()] {
+            let Some(output) = outputs.get(&(entry.first_layr as usize)) else {
+                continue;
+            };
+            data.extend_from_slice(at(
+                output,
+                u128::from(entry.data_offset),
+                u128::from(entry.data_size),
+            ));
         }
-        let block = &outputs[layer.block_index as usize];
-        layer_data.push(
-            at(
-                block,
-                u128::from(layer.data_offset),
-                u128::from(layer.data_size),
-            )
-            .to_vec(),
-        );
+        layers.push(data);
     }
     if strict && !leaves.is_empty() {
         let matched = (0..layer_count as usize).all(|index| {
-            match (layer_data.get(index), leaves.get(index)) {
+            match (layers.get(index), leaves.get(index)) {
                 (Some(data), Some(leaf)) => {
                     let mut hasher = Sha256::new();
                     hasher.update([0x00]);
@@ -1055,56 +1304,91 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
     // ---- REE / sector decode --------------------------------------------
     let mut hits: HashSet<&'static str> = HashSet::new();
     let mut detail: HashMap<&'static str, String> = HashMap::new();
-    let mut sector_match = true;
-    let mut ids_unique = true;
     let mut partition_ok = true;
-    for (index, layer) in layers.iter().enumerate() {
-        if layer.sector_count == 0 {
-            continue;
-        }
-        let mut report = SectorReport {
-            violations: Vec::new(),
-            sector_match: true,
-            ids_unique: true,
-            partition_ok: true,
-        };
-        let outcome = decode_sectors(
-            &layer_data[index],
-            layer,
-            flags & 0x02 != 0,
-            total_pixels,
-            strict,
-            &mut report,
-        );
-        // Every flag the layer set before it failed stands, which is what the
-        // oracle's assignments inside its try block do.
-        sector_match &= report.sector_match;
-        ids_unique &= report.ids_unique;
-        partition_ok &= report.partition_ok;
-        let failure = match outcome {
-            Ok(()) => None,
-            Err(error) => {
-                hits.insert("ree.truncated_sector");
-                Some(error.0)
+    for (layer, span) in spans.iter().enumerate() {
+        let mut masks: Vec<Vec<u8>> = Vec::new();
+        for entry in &sectors[span.clone()] {
+            let Some(output) = outputs.get(&(entry.first_layr as usize)) else {
+                continue;
+            };
+            let slice = at(
+                output,
+                u128::from(entry.data_offset),
+                u128::from(entry.data_size),
+            );
+            // §4.8: a (layer, sector) with no bytes carries no tag and no mask -
+            // that is the canonical encoding of "nothing here", not a defect.
+            if slice.is_empty() {
+                continue;
             }
-        };
-        for violation in report.violations {
-            hits.insert(violation.code);
-            if let Some(message) = violation.message {
-                detail
-                    .entry(violation.code)
-                    .or_insert_with(|| format!("layer {index}: {message}"));
+            let tag = slice[0];
+            let body = &slice[1..];
+            let where_at = || format!("layer {layer}, sector {}", entry.sector_id);
+            let (mask, end, violations) = match tag {
+                0x00 => match ree::binary(body, total_pixels) {
+                    Ok(decoded) => decoded,
+                    Err(error) => {
+                        truncated(&mut hits, &mut detail, &where_at(), error);
+                        continue;
+                    }
+                },
+                0x01 => match ree::grayscale(body, total_pixels) {
+                    Ok((mask, end, mut violations)) => {
+                        if strict && mask.iter().all(|pixel| *pixel == 0 || *pixel == 255) {
+                            violations.push(Violation {
+                                code: "ree.grayscale_all_binary",
+                                message: Some("binary content encoded as grayscale REE"),
+                            });
+                        }
+                        (mask, end, violations)
+                    }
+                    Err(error) => {
+                        truncated(&mut hits, &mut detail, &where_at(), error);
+                        continue;
+                    }
+                },
+                0x02 => match ree::split(body, total_pixels) {
+                    Ok(decoded) => decoded,
+                    Err(error) => {
+                        truncated(&mut hits, &mut detail, &where_at(), error);
+                        continue;
+                    }
+                },
+                _ => {
+                    hits.insert("ree.tag");
+                    detail.entry("ree.tag").or_insert_with(|| {
+                        format!("{}: unknown encoding tag {tag:#04X}", where_at())
+                    });
+                    continue;
+                }
+            };
+            for violation in violations {
+                hits.insert(violation.code);
+                if let Some(message) = violation.message {
+                    detail
+                        .entry(violation.code)
+                        .or_insert_with(|| format!("{}: {message}", where_at()));
+                }
             }
+            if end != body.len() {
+                hits.insert("ree.no_trailing_bytes");
+                detail.entry("ree.no_trailing_bytes").or_insert_with(|| {
+                    format!("{}: trailing bytes after the REE stream", where_at())
+                });
+            }
+            masks.push(mask);
         }
-        if let Some(message) = failure {
-            detail
-                .entry("ree.truncated_sector")
-                .or_insert_with(|| format!("layer {index}: {message}"));
+        // §7.3 survives the layout change: two sectors of one layer may not
+        // paint the same pixel, whether their masks came from one chunk or two.
+        for (i, left) in masks.iter().enumerate() {
+            for right in &masks[i + 1..] {
+                if left.iter().zip(right).any(|(a, b)| *a != 0 && *b != 0) {
+                    partition_ok = false;
+                }
+            }
         }
     }
 
-    checks.check("sector.count_match", sector_match);
-    checks.check("sector.ids_unique", ids_unique);
     for name in REE_ORDER {
         if STRICT_ONLY.contains(&name) && !strict {
             continue;
@@ -1116,46 +1400,94 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
         checks.check("sector.partition", partition_ok);
     }
 
+    checks.layers = layers;
     checks.payloads = payloads;
     checks.check("__checks_complete", true);
     checks
 }
 
+/// The directory index a sealed frame opens under when its own index does not
+/// open it, with the plaintext it yields. `None` when the frame opens under no
+/// index at all, which makes it a tag failure rather than a binding one.
+fn first_index_that_opens(
+    key: &[u8; 32],
+    cipher_id: &[u8; 4],
+    frame: &[u8],
+    own_index: usize,
+    chunk_count: usize,
+) -> Option<(usize, Vec<u8>)> {
+    (0..chunk_count)
+        .filter(|index| *index != own_index)
+        .find_map(|index| {
+            open_unit(key, cipher_id, b"LAYR", index as u32, frame)
+                .ok()
+                .map(|plain| (index, plain))
+        })
+}
+
+/// Record a stream that could not be read at all: the rule it broke, with the
+/// decoder's own wording for why.
+fn truncated(
+    hits: &mut HashSet<&'static str>,
+    detail: &mut HashMap<&'static str, String>,
+    at: &str,
+    error: ree::DecodeError,
+) {
+    hits.insert(error.name);
+    detail
+        .entry(error.name)
+        .or_insert_with(|| format!("{at}: {}", error.message));
+}
+
+/// Whether, within each `LAYR` chunk, no two slices overlap.
+///
+/// A slice of no bytes is an empty range and overlaps nothing, so the entries
+/// that carry no data are left out rather than counted as a collision at the
+/// offset they happen to name.
+fn slices_disjoint(sectors: &[SectorEntry]) -> bool {
+    let mut spans: HashMap<u32, Vec<(u64, u64)>> = HashMap::new();
+    for entry in sectors {
+        if entry.data_size == 0 {
+            continue;
+        }
+        spans.entry(entry.first_layr).or_default().push((
+            entry.data_offset,
+            entry.data_offset + u64::from(entry.data_size),
+        ));
+    }
+    spans.values().all(|ranges| {
+        let mut sorted = ranges.clone();
+        sorted.sort_unstable();
+        sorted.windows(2).all(|pair| pair[0].1 <= pair[1].0)
+    })
+}
+
 /// The reader's view of a chunk's plaintext.
 struct Content<'a> {
     raw: &'a [u8],
-    real: &'a [&'a Entry],
+    real: &'a [Chunk<'a>],
     decrypted: &'a HashMap<u64, Vec<u8>>,
 }
 
 impl Content<'_> {
     /// A chunk's plaintext: decrypted when it is sealed, decompressed when it
     /// is compressed. `None` where the oracle raises and the run stops.
-    fn bytes(&self, entry: &Entry) -> Option<Vec<u8>> {
-        if entry.flags & SEALED_FLAG != 0 {
-            let blob = self.decrypted.get(&entry.offset)?;
-            if COMPRESSED_TYPES.contains(&&entry.ctype) {
-                let capacity = usize::try_from(entry.usz).unwrap_or(usize::MAX);
+    fn bytes(&self, chunk: &Chunk) -> Option<Vec<u8>> {
+        if chunk.entry.flags & SEALED_FLAG != 0 {
+            let blob = self.decrypted.get(&chunk.entry.offset)?;
+            if COMPRESSED_TYPES.contains(&&chunk.entry.ctype) {
+                let capacity = usize::try_from(chunk.entry.usz).unwrap_or(usize::MAX);
                 return Decoder::new(&[]).ok()?.decompress(blob, capacity).ok();
             }
             return Some(blob.clone());
         }
-        payload_plain(self.raw, entry).ok()
+        payload_plain(self.raw, chunk.entry).ok()
     }
 
     /// The plaintext of the first chunk of a type.
     fn of(&self, ctype: &[u8; 4]) -> Option<Vec<u8>> {
-        let entry = self.real.iter().copied().find(|e| &e.ctype == ctype)?;
-        self.bytes(entry)
-    }
-
-    /// The plaintext of the first chunk of a type, parsed as JSON.
-    fn json(&self, ctype: &[u8; 4]) -> Option<Value> {
-        parse_json(&self.of(ctype)?)
-    }
-
-    fn json_entry(&self, entry: &Entry) -> Option<Value> {
-        parse_json(&self.bytes(entry)?)
+        let chunk = self.real.iter().find(|chunk| &chunk.entry.ctype == ctype)?;
+        self.bytes(chunk)
     }
 }
 
@@ -1164,7 +1496,7 @@ fn parse_json(bytes: &[u8]) -> Option<Value> {
 }
 
 /// The stored payload bytes; for LAYR this is the plaintext container.
-fn stored<'a>(raw: &'a [u8], entry: &Entry) -> &'a [u8] {
+fn stored<'a>(raw: &'a [u8], entry: &crate::container::Entry) -> &'a [u8] {
     at(raw, u128::from(entry.offset), u128::from(entry.size()))
 }
 
@@ -1172,7 +1504,10 @@ fn stored<'a>(raw: &'a [u8], entry: &Entry) -> &'a [u8] {
 ///
 /// A fresh decoder each time, as the oracle uses: a chunk payload is not a
 /// continuation of anything.
-fn payload_plain(raw: &[u8], entry: &Entry) -> Result<Vec<u8>, crate::decompress::ZstdError> {
+fn payload_plain(
+    raw: &[u8],
+    entry: &crate::container::Entry,
+) -> Result<Vec<u8>, crate::decompress::ZstdError> {
     let blob = stored(raw, entry);
     if entry.csz == 0 {
         return Ok(blob.to_vec());
@@ -1181,170 +1516,29 @@ fn payload_plain(raw: &[u8], entry: &Entry) -> Result<Vec<u8>, crate::decompress
     Decoder::new(&[])?.decompress(blob, capacity)
 }
 
-fn find<'a>(real: &[&'a Entry], ctype: &[u8; 4]) -> Vec<&'a Entry> {
-    real.iter().copied().filter(|e| &e.ctype == ctype).collect()
+fn find<'a>(real: &[Chunk<'a>], ctype: &[u8; 4]) -> Vec<Chunk<'a>> {
+    real.iter()
+        .copied()
+        .filter(|chunk| &chunk.entry.ctype == ctype)
+        .collect()
 }
 
-fn count(real: &[&Entry], ctype: &[u8; 4]) -> usize {
-    real.iter().filter(|e| &e.ctype == ctype).count()
+fn count(real: &[Chunk], ctype: &[u8; 4]) -> usize {
+    real.iter()
+        .filter(|chunk| &chunk.entry.ctype == ctype)
+        .count()
 }
 
-fn first<'a>(real: &[&'a Entry], ctype: &[u8; 4]) -> Option<&'a Entry> {
-    real.iter().copied().find(|e| &e.ctype == ctype)
+fn first<'a>(real: &[Chunk<'a>], ctype: &[u8; 4]) -> Option<Chunk<'a>> {
+    real.iter()
+        .copied()
+        .find(|chunk| &chunk.entry.ctype == ctype)
 }
 
 fn is_nonempty_string(value: Option<&Value>) -> bool {
     value.and_then(Value::as_str).is_some_and(|s| !s.is_empty())
 }
 
-/// Python's `len()`, for the containers that have one. A materials field that
-/// is not one of them cannot be indexed into at all.
-fn container_len(value: &Value) -> Option<usize> {
-    match value {
-        Value::Array(items) => Some(items.len()),
-        Value::String(text) => Some(text.chars().count()),
-        Value::Object(fields) => Some(fields.len()),
-        _ => None,
-    }
-}
-
-/// Python's `0 <= index < length`: a bool counts as the number it is, and
-/// anything else that is not a number is not an index.
-fn index_in_range(index: &Value, length: usize) -> bool {
-    let number = match index {
-        Value::Bool(true) => 1.0,
-        Value::Bool(false) => 0.0,
-        _ => match index.as_f64() {
-            Some(number) => number,
-            None => return false,
-        },
-    };
-    number >= 0.0 && number < length as f64
-}
-
-fn is_positive_number(value: &Value) -> bool {
-    is_number(value) && value.as_f64().is_some_and(|n| n > 0.0)
-}
-
 fn is_positive_int(value: &Value) -> bool {
     is_int(value) && value.as_f64().is_some_and(|n| n > 0.0)
-}
-
-/// §11.2: `sector_id` values are distinct, compared by value - so `1` and
-/// `1.0` are one id, the way the oracle's `set` sees them.
-fn sector_ids_unique(sects: &[Value]) -> bool {
-    let ids: Vec<&Value> = sects
-        .iter()
-        .filter_map(|sect| sect.get("sector_id"))
-        .collect();
-    // The oracle builds a set of `s["sector_id"]` for every SECT, so one with
-    // no id at all cannot be checked.
-    if ids.len() != sects.len() {
-        return false;
-    }
-    (0..ids.len()).all(|i| (i + 1..ids.len()).all(|j| !scalar_eq(ids[i], ids[j])))
-}
-
-/// What one layer's sectors said, whether or not the layer finished.
-struct SectorReport {
-    violations: Vec<Violation>,
-    /// The sector count in the stream matched the table.
-    sector_match: bool,
-    /// No two sectors in the layer share an id.
-    ids_unique: bool,
-    /// No two sectors in the layer paint the same pixel.
-    partition_ok: bool,
-}
-
-/// Decode one layer's sectors, in the order the reader decodes them.
-///
-/// The report is filled in as far as the layer gets, so a layer that fails
-/// halfway still contributes the verdicts it reached - exactly where the
-/// oracle's assignments sit inside its `try` block. The verdicts start true
-/// because they are only ever falsified.
-fn decode_sectors(
-    blob: &[u8],
-    layer: &LayerEntry,
-    multi_sector: bool,
-    total_pixels: usize,
-    strict: bool,
-    report: &mut SectorReport,
-) -> Result<(), ree::DecodeError> {
-    let owned;
-    let sectors: &[&[u8]] = if multi_sector {
-        let (declared, mut pos) = read_varint(blob, 0).map_err(|e| ree::DecodeError(e.0))?;
-        if declared != u128::from(layer.sector_count) {
-            report.sector_match = false;
-        }
-        let mut ids: Vec<u128> = Vec::new();
-        let mut slices = Vec::new();
-        for _ in 0..declared {
-            let (id, next) = read_varint(blob, pos).map_err(|e| ree::DecodeError(e.0))?;
-            pos = next;
-            let (size, next) = read_varint(blob, pos).map_err(|e| ree::DecodeError(e.0))?;
-            pos = next;
-            slices.push(at(blob, pos as u128, size));
-            pos = pos.saturating_add(usize::try_from(size).unwrap_or(usize::MAX));
-            ids.push(id);
-        }
-        if ids.iter().collect::<HashSet<_>>().len() != ids.len() {
-            report.ids_unique = false;
-        }
-        owned = slices;
-        &owned
-    } else {
-        owned = vec![blob];
-        &owned
-    };
-
-    let mut masks: Vec<Vec<u8>> = Vec::new();
-    for sector in sectors {
-        if sector.is_empty() {
-            report.violations.push(Violation {
-                code: "ree.truncated_sector",
-                message: Some("empty sector data"),
-            });
-            continue;
-        }
-        let tag = sector[0];
-        let body = &sector[1..];
-        let (mask, end, violations) = match tag {
-            0x00 => ree::binary(body, total_pixels)?,
-            0x01 => {
-                let (mask, end, mut violations) = ree::grayscale(body, total_pixels)?;
-                if strict && mask.iter().all(|pixel| *pixel == 0 || *pixel == 255) {
-                    violations.push(Violation {
-                        code: "ree.canonical_tag_choice",
-                        message: Some("binary content encoded as grayscale REE"),
-                    });
-                }
-                (mask, end, violations)
-            }
-            0x02 => ree::split(body, total_pixels)?,
-            _ => {
-                report.violations.push(Violation {
-                    code: "ree.tag_known",
-                    message: None,
-                });
-                continue;
-            }
-        };
-        report.violations.extend(violations);
-        if end != body.len() {
-            report.violations.push(Violation {
-                code: "ree.no_trailing_bytes",
-                message: Some("trailing bytes after the REE stream"),
-            });
-        }
-        masks.push(mask);
-    }
-
-    for (i, left) in masks.iter().enumerate() {
-        for right in &masks[i + 1..] {
-            if left.iter().zip(right).any(|(a, b)| *a != 0 && *b != 0) {
-                report.partition_ok = false;
-            }
-        }
-    }
-    Ok(())
 }

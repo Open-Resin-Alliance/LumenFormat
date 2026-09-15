@@ -7,13 +7,19 @@
 //! generator - so agreement between the two is evidence about the specification
 //! rather than one implementation restated.
 //!
-//! Nothing here reads a file. [`TimingInputs`] carries the `META`, `SECT` and
-//! `LROV` objects the reader decrypted and parsed, and [`resolve`] turns them
-//! plus a point into the values §8 defines for it. [`sampled_points`] is the
-//! other half of the same reading: which points the manifest is expected to
-//! record, recomputed from the file's own numbers.
+//! Nothing here reads a file. [`TimingInputs`] carries the `META` object and the
+//! `(layer, sector)` override sets the reader decrypted and parsed, and
+//! [`resolve`] turns them plus a point into the values §8 defines for it.
+//! [`sampled_points`] is the other half of the same reading: which points the
+//! manifest is expected to record, recomputed from the file's own numbers.
+//!
+//! The pipeline's inputs moved when the layout did. A sector's base timing is a
+//! `META.sectors` entry rather than a `SECT` chunk, field by field over META's
+//! base (§4.2); an override set belongs to exactly one `(layer, sector)`, which
+//! is what `LTBL.first_lrov` says, rather than to a layer or a layer range that
+//! a reader has to match against (§4.6). One place, one answer.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value;
 
@@ -23,13 +29,13 @@ use serde_json::Value;
 pub struct TimingInputs {
     /// `HDR`'s layer count (§4.1), which bounds every sampled layer.
     pub total_layers: u32,
-    /// `META`, the base for every field (§4.2).
+    /// `META`, the base for every field and the home of the sector definitions
+    /// (§4.2).
     pub meta: Value,
-    /// Every `SECT` definition, in file order (§4.5).
-    pub sects: Vec<Value>,
-    /// The `LROV` body, when the file carries one (§4.6). A file carries at most
-    /// one, and readers use the first.
-    pub lrov: Option<Value>,
+    /// Each `(layer, sector)`'s override set, keyed by the point it belongs to.
+    /// A point with no overrides has no entry; there is no empty delta, because
+    /// `LTBL.first_lrov` is `0` exactly then (§4.8).
+    pub overrides: BTreeMap<(u32, u32), Value>,
 }
 
 /// One field of a resolved point: where META keeps its normal and bottom values,
@@ -185,17 +191,14 @@ impl Resolved {
 /// `layer` and `sector` are the point's coordinates; everything else comes from
 /// `inputs`, so two readers given the same chunks resolve the same numbers.
 pub fn resolve(inputs: &TimingInputs, layer: u32, sector: u32) -> Resolved {
-    // 1. META, with the point's sector definition folded over it: a `SECT` entry
-    // replaces META's value for every field it carries. Sector 0 has no
-    // definition by construction (§4.5 reserves it), so a single-sector file
-    // never folds anything.
-    let definition = inputs
-        .sects
-        .iter()
-        .find(|sect| integer(sect.get("sector_id")) == Some(i64::from(sector)));
+    // 1. META, with the point's sector definition folded over it: a
+    // `META.sectors` entry replaces META's value for every field it carries.
+    // Sector 0 has no entry by construction - it is primary and carried
+    // implicitly (§4.2) - so a single-sector file never folds anything.
+    let definition = sector_definition(&inputs.meta, sector);
     let base = |key: &str| -> Option<i64> {
         definition
-            .and_then(|sect| integer(sect.get(key)))
+            .and_then(|sector| integer(sector.get(key)))
             .or_else(|| integer(inputs.meta.get(key)))
     };
 
@@ -233,14 +236,14 @@ pub fn resolve(inputs: &TimingInputs, layer: u32, sector: u32) -> Resolved {
         }),
     };
 
-    // 5. LROV. Matching entries fold over the resolved values in file order, and
-    // every field a matching entry carries replaces the value the point holds
-    // for it: an entry is a sparse set of overrides, not a replacement for the
-    // entries before it. Nothing an entry carries is blended.
-    for entry in overrides(inputs).filter(|entry| targets(entry, layer, sector)) {
+    // 5. LROV. The point's own override set is the one its table record points
+    // at, so there is nothing to match and nothing to fold: every field the set
+    // carries replaces the value the point holds for it, and nothing it carries
+    // is blended.
+    if let Some(entry) = inputs.overrides.get(&(layer, sector)) {
         for (index, field) in FIELDS.iter().enumerate() {
-            // Within one entry a field's normal-form key wins over its own
-            // bottom-form key; a field the entry does not carry is left alone.
+            // Within one set a field's normal-form key wins over its own
+            // bottom-form key; a field the set does not carry is left alone.
             if let Some(value) =
                 integer(entry.get(field.normal)).or_else(|| integer(entry.get(field.bottom)))
             {
@@ -254,18 +257,17 @@ pub fn resolve(inputs: &TimingInputs, layer: u32, sector: u32) -> Resolved {
 
 /// The points the manifest's sample must cover, recomputed from the file.
 ///
-/// Each sector `s` the file names - sector 0, every `sector_id` a `SECT`
-/// definition carries, and every `sector_id` an `LROV` entry names - supplies its
-/// own layers: `{0, 1, bottom_s - 1, bottom_s, bottom_s + transition_s,
-/// total - 1}`, each clamped into the file's range, plus every layer an `LROV`
-/// entry that can match `s` names - its `layer`, or both ends of its inclusive
-/// `layer_range` - and each of those neighbours that is in range. The sample is
-/// the union of `layers_s × {s}` over the sectors, deduplicated.
+/// Each sector `s` the file names - sector 0, every `sector_id` a `META.sectors`
+/// entry carries, and every sector an override set belongs to - supplies its own
+/// layers: `{0, 1, bottom_s - 1, bottom_s, bottom_s + transition_s, total - 1}`,
+/// each clamped into the file's range, plus the layer of every `(layer, s)` that
+/// has an override set, and each of those layers' neighbours that is in range.
+/// The sample is the union of `layers_s × {s}` over the sectors, deduplicated.
 ///
 /// The layers are resolved per sector rather than once for the file, because
 /// §8's counts are the ones the layer's sector resolves with: `bottom_s` and
-/// `transition_s` are the counts its own `SECT` definition carries when it
-/// carries them and META's otherwise, per field (§4.5). Two sectors can be in
+/// `transition_s` are the counts its own `META.sectors` entry carries when it
+/// carries them and META's otherwise, per field (§4.2). Two sectors can be in
 /// different stages on the same layer, so a sample that resolved the ranges once
 /// from META would pin the wrong layers for a sector whose definition moves
 /// them - and would miss them entirely.
@@ -280,21 +282,16 @@ pub fn sampled_points(inputs: &TimingInputs) -> BTreeSet<(u32, u32)> {
 
     // The sectors the sample names, before their layers are worked out.
     let mut sectors: BTreeSet<u32> = BTreeSet::from([0]);
-    for sect in &inputs.sects {
-        sectors.extend(sector_id(sect.get("sector_id")));
+    for sector in sector_definitions(&inputs.meta) {
+        sectors.extend(sector_id(sector.get("sector_id")));
     }
-    for entry in overrides(inputs) {
-        sectors.extend(sector_id(entry.get("sector_id")));
-    }
+    sectors.extend(inputs.overrides.keys().map(|(_, sector)| *sector));
 
     let mut points: BTreeSet<(u32, u32)> = BTreeSet::new();
     for sector in sectors {
         // The definition this sector resolves with - the same one [`resolve`]
         // folds over META for a point in it.
-        let definition = inputs
-            .sects
-            .iter()
-            .find(|sect| integer(sect.get("sector_id")) == Some(i64::from(sector)));
+        let definition = sector_definition(&inputs.meta, sector);
         let (bottom, transition) = layer_counts(definition, &inputs.meta);
         let (bottom, transition) = (i64::from(bottom), i64::from(transition));
 
@@ -303,18 +300,20 @@ pub fn sampled_points(inputs: &TimingInputs) -> BTreeSet<(u32, u32)> {
             .map(clamp)
             .collect();
         layers.insert(highest);
-        for entry in overrides(inputs).filter(|entry| matches_sector(entry, sector)) {
-            for layer in named_layers(entry) {
-                let layer = i64::from(clamp(layer));
-                // The neighbours of an override boundary, when the file has
-                // them: the sample never names a layer index the file does not.
-                layers.extend(
-                    [layer - 1, layer, layer + 1]
-                        .into_iter()
-                        .filter(|l| in_range(*l))
-                        .map(clamp),
-                );
-            }
+        for (layer, _) in inputs
+            .overrides
+            .keys()
+            .filter(|(_, override_sector)| *override_sector == sector)
+        {
+            let layer = i64::from(*layer);
+            // The neighbours of an override boundary, when the file has them:
+            // the sample never names a layer index the file does not.
+            layers.extend(
+                [layer - 1, layer, layer + 1]
+                    .into_iter()
+                    .filter(|l| in_range(*l))
+                    .map(clamp),
+            );
         }
 
         points.extend(layers.into_iter().map(|layer| (layer, sector)));
@@ -322,22 +321,21 @@ pub fn sampled_points(inputs: &TimingInputs) -> BTreeSet<(u32, u32)> {
     points
 }
 
-/// The layers an `LROV` entry names: its `layer`, or both ends of its inclusive
-/// `layer_range`. An entry that carries neither names none.
-fn named_layers(entry: &Value) -> Vec<i64> {
-    if let Some(layer) = integer(entry.get("layer")) {
-        return vec![layer];
-    }
-    let Some(range) = entry.get("layer_range").and_then(Value::as_array) else {
-        return Vec::new();
-    };
-    match (
-        range.first().and_then(|end| integer(Some(end))),
-        range.get(1).and_then(|end| integer(Some(end))),
-    ) {
-        (Some(start), Some(end)) => vec![start, end],
-        _ => Vec::new(),
-    }
+/// `META.sectors`' entries, in the order META carries them. A `sectors` field
+/// that is not an array carries no definitions.
+fn sector_definitions(meta: &Value) -> impl Iterator<Item = &Value> {
+    meta.get("sectors")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+}
+
+/// The definition a sector resolves with: the entry META carries for it, or
+/// `None` for a sector META does not define - which is sector 0 always, and any
+/// other sector that simply takes META's values.
+fn sector_definition(meta: &Value, sector: u32) -> Option<&Value> {
+    sector_definitions(meta)
+        .find(|definition| integer(definition.get("sector_id")) == Some(i64::from(sector)))
 }
 
 /// A `sector_id` as the id it names. A value that is not a whole number, or is
@@ -346,52 +344,14 @@ fn sector_id(value: Option<&Value>) -> Option<u32> {
     u32::try_from(integer(value)?).ok()
 }
 
-/// The `LROV` body's override entries, in the order the file carries them.
-fn overrides(inputs: &TimingInputs) -> impl Iterator<Item = &Value> {
-    inputs
-        .lrov
-        .as_ref()
-        .and_then(|body| body.get("overrides"))
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-}
-
-/// Whether an `LROV` entry targets a point (§4.6): its `layer` or its inclusive
-/// `layer_range`, and - when it carries one - its `sector_id`.
-fn targets(entry: &Value, layer: u32, sector: u32) -> bool {
-    let layer = i64::from(layer);
-    let named = integer(entry.get("layer")) == Some(layer);
-    let within_range = entry
-        .get("layer_range")
-        .and_then(Value::as_array)
-        .is_some_and(|range| match (range.first(), range.get(1)) {
-            (Some(start), Some(end)) => match (integer(Some(start)), integer(Some(end))) {
-                (Some(start), Some(end)) => start <= layer && layer <= end,
-                _ => false,
-            },
-            _ => false,
-        });
-    (named || within_range) && matches_sector(entry, sector)
-}
-
-/// Whether an `LROV` entry can match a point's sector (§4.6): its `sector_id` is
-/// absent, which targets every sector, or is the point's.
-fn matches_sector(entry: &Value, sector: u32) -> bool {
-    match entry.get("sector_id") {
-        None => true,
-        Some(id) => integer(Some(id)) == Some(i64::from(sector)),
-    }
-}
-
 /// The bottom and transition layer counts §8 resolves one sector with: the
 /// sector's own definition when it carries them, META's otherwise, per field
-/// (§4.5). Neither count is blended, so these are used verbatim.
+/// (§4.2). Neither count is blended, so these are used verbatim.
 fn layer_counts(definition: Option<&Value>, meta: &Value) -> (u32, u32) {
     let count_for = |key: &str| {
         count(
             definition
-                .and_then(|sect| integer(sect.get(key)))
+                .and_then(|sector| integer(sector.get(key)))
                 .or_else(|| integer(meta.get(key))),
         )
     };

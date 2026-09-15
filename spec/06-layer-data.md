@@ -4,29 +4,66 @@
 
 ## 4.8 LTBL - Layer Table Chunk
 
-**Type tag:** `LTBL` (`0x4C 0x54 0x42 0x4C`). Required.
+**Type tag:** `LTBL` (`0x4C 0x54 0x42 0x4C`). Required. Exactly one per file.
 
 **Flags:** uncompressed, unencrypted.
 
-Maps layer indices to a block of the LAYR chunk and a byte range within that
-block's decompressed output. Enables random access by decompressing only the block
-that contains the target layer.
+Indexes the chunk directory for every `(layer, sector)` pair: which `LAYR` chunk holds that
+pair's data, where inside that chunk's decompressed output the slice lies, and which `LROV`
+chunk carries its overrides. The table is also the only place a file says which sectors a
+layer carries, and in which order.
+
+**Header:**
 
 | Offset | Size | Type | Field | Description |
 |--------|------|------|-------|-------------|
 | 0 | 4 | `u32` | `table_version` | Layout version. `1` for this spec. |
 | 4 | 4 | `u32` | `layer_count` | Must equal `HDR.total_layers`. |
-| 8 | 4 | `u32` | `entry_size` | Bytes per entry. `20` for v1. Readers must stride by this value. |
-| 12 | N | - | `entries` | `layer_count` × `entry_size` bytes. |
+| 8 | 4 | `u32` | `entry_size` | Bytes per entry. `28` for v1. Readers must stride by this value. |
+| 12 | 4 | `u32` | `entry_count` | Total entries: the sum, over every layer's first entry, of `1 + additional_sector_count`. The table ends exactly there. |
+| 16 | N | - | `entries` | `entry_count` × `entry_size` bytes. |
 
-**Layer Entry (v1, 20 bytes):**
+**Entry (v1, 28 bytes).** One per `(layer, sector)`, grouped by layer, ascending `sector_id`
+within a layer, a layer's first entry being sector 0's:
 
 | Offset | Size | Type | Field | Description |
 |--------|------|------|-------|-------------|
-| 0 | 8 | `u64` | `data_offset` | Byte offset from the start of the decompressed output of block `block_index`. |
-| 8 | 4 | `u32` | `block_index` | Index into the LAYR block table ([§4.10](#410-layr---layer-data-chunk)) of the block containing this layer. |
-| 12 | 4 | `u32` | `data_size` | Byte size of this layer's REE data within its block. |
-| 16 | 4 | `u32` | `sector_count` | Sectors active on this layer. 0 = empty layer (all black); in single-sector mode a non-empty layer has exactly `1`. |
+| 0 | 4 | `u32` | `data_size` | Bytes of this layer's data for this sector; `0` = none. |
+| 4 | 4 | `u32` | `first_lrov` | Directory index of this `(layer, sector)`'s `LROV` chunk; `0` = no overrides (index 0 is `HDR`, so `0` is safely NULL). |
+| 8 | 4 | `u32` | `first_layr` | Directory index of the `LAYR` chunk holding this sector's run. |
+| 12 | 4 | `u32` | `additional_sector_count` | Further entries for this layer, ascending `sector_id`; non-zero only on the layer's first entry. |
+| 16 | 8 | `u64` | `data_offset` | Offset of this layer's slice inside `first_layr`'s decompressed output. |
+| 24 | 4 | `u32` | `sector_id` | This entry's sector; `0` is primary. |
+
+A layer's entries are contiguous: the entry for `(layer L, sector 0)` is the first of the
+`1 + additional_sector_count` entries that follow it, and the reader reaches layer `L + 1` by
+stepping over exactly that many. Since the count lives on the first entry, the file states
+each layer's sector count once, and the rest of the entries are ordered by the `sector_id`
+they carry.
+
+**Invariants:**
+
+- `entry_count` equals the sum of `1 + additional_sector_count` over each layer's first entry,
+  the table holds exactly that many entries - no trailing slack, no entry past the end - and
+  a layer's non-first entries carry `additional_sector_count == 0`.
+- The chunk payload is exactly `16 + entry_count × entry_size` bytes: the table ends at the
+  end of the chunk, with no slack after it.
+- Within a layer, `sector_id` ascends and is unique; a layer's first entry is sector 0's.
+- `first_layr` is a `LAYR` chunk directory index, and `data_offset + data_size` fits the
+  decompressed output of that chunk.
+- Slices of one `LAYR` chunk do not overlap: no two entries that name the same chunk describe
+  intersecting byte ranges.
+- `first_lrov` is `0` or an `LROV` chunk directory index; it is `0` only when that
+  `(layer, sector)` has no overrides, and every `LROV` chunk in the file is named by exactly
+  one entry - no two entries share one, and none is left unreferenced
+  ([§4.6](05-print-control.md#46-lrov---layer-override-chunk)).
+- A layer whose every entry has `data_size == 0` is the empty layer, all black.
+
+**Sectors and the `MULTI_SECTOR` flag.** `MULTI_SECTOR` is set exactly when at least one layer
+carries more than one sector ([§3.1](02-file-structure.md#31-file-header)). A single-sector
+file has one entry per layer, all with `sector_id == 0` and
+`additional_sector_count == 0`, and is laid out like any other: there is no second layout for
+the single-sector case.
 
 ## 4.9 ZDIC - Zstd Dictionary Chunk
 
@@ -34,26 +71,26 @@ that contains the target layer.
 
 **Flags:** uncompressed. Encrypted if `AUTH` present.
 
-Carries the zstd dictionary shared by the LAYR block frames. The dictionary MUST be
-available before any LAYR block is decompressed. Because a trained dictionary is
+Carries the zstd dictionary shared by the `LAYR` frames. The dictionary MUST be
+available before any `LAYR` frame is decompressed. Because a trained dictionary is
 built from samples of the print's own layer data, it is treated as content: it is
 encrypted alongside the other content chunks when `AUTH` is present.
 
 | Offset | Size | Type | Field | Description |
 |--------|------|------|-------|-------------|
 | 0 | 4 | `u32` | `zdic_version` | Layout version. `1` for this spec. |
-| 4 | 4 | `u32` | `dict_id` | Zstd dictionary ID (`ZSTD_getDictID_fromDict()`). Must equal the dictionary ID reported by every LAYR block frame. |
+| 4 | 4 | `u32` | `dict_id` | Zstd dictionary ID (`ZSTD_getDictID_fromDict()`). Must equal the dictionary ID reported by every `LAYR` frame. |
 | 8 | 4 | `u32` | `dict_size` | Byte length of `dict_bytes`. Must not exceed 112 640 bytes (zstd's `ZDICT_DICTSIZE_MAX`). |
 | 12 | N | `[u8; N]` | `dict_bytes` | Raw dictionary bytes exactly as produced by `ZDICT_trainFromBuffer()`. |
 
 **Presence rules:**
 
-- If any LAYR block frame was compressed with a dictionary, exactly one `ZDIC` chunk
-  MUST be present, and every block frame's dictionary ID MUST equal `ZDIC.dict_id`.
-- If no dictionary was used, `ZDIC` MUST be absent and every block frame's
+- If any `LAYR` frame was compressed with a dictionary, exactly one `ZDIC` chunk
+  MUST be present, and every `LAYR` frame's dictionary ID MUST equal `ZDIC.dict_id`.
+- If no dictionary was used, `ZDIC` MUST be absent and every `LAYR` frame's
   dictionary ID MUST be `0`.
 - A file MUST NOT contain more than one non-null `ZDIC` chunk.
-- Writers MUST NOT suppress the zstd dictionary ID (`ZSTD_c_dictIDFlag`). Every block
+- Writers MUST NOT suppress the zstd dictionary ID (`ZSTD_c_dictIDFlag`). Every `LAYR`
   frame compressed with the dictionary reports `dict_id`, so a reader can always tell
   whether a dictionary is required.
 
@@ -67,99 +104,77 @@ encrypted alongside the other content chunks when `AUTH` is present.
 
 ## 4.10 LAYR - Layer Data Chunk
 
-**Type tag:** `LAYR` (`0x4C 0x41 0x59 0x52`). Required.
+**Type tag:** `LAYR` (`0x4C 0x41 0x59 0x52`). Required. One chunk per `(sector, layer
+group)`.
 
-**Flags:** uncompressed at the chunk level; contains zstd-compressed block frames.
-Encrypted if `AUTH` present (see [§9.3](12-encryption.md#93-encryption-format) - each block frame is a separate AEAD unit).
+**Flags:** uncompressed container; the frame inside is zstd-compressed. Encrypted if `AUTH`
+present - the version field stays plaintext and the frame is the sealed unit
+([§9.3](12-encryption.md#93-encryption-format)).
 
-Contains all layer mask data as a sequence of independent zstd frames, called
-**blocks**. Block `k` holds a contiguous run of layers; the layers inside a block
-are concatenated in layer order:
+A chunk holds one sector's mask data for a run of layers, and never two sectors' data: the
+sector a chunk belongs to is stated by the layer table entries that name it, not by the
+chunk. The chunk carries exactly one zstd frame over the concatenation of that group's layer
+data for that sector, layers in ascending order:
 
 ```
 [layer_a_data] [layer_{a+1}_data] ... [layer_b_data]
 ```
 
-A layer's data starts at `LTBL.entries[i].data_offset` within the decompressed
-output of block `LTBL.entries[i].block_index` and has size
-`LTBL.entries[i].data_size`.
+A layer's data for this sector starts at `LTBL` entry `data_offset` within the frame's
+decompressed output and has size `data_size`; the entry's `first_layr` names this chunk. A
+sector that is absent from a layer contributes no bytes to the frame, and its entry carries
+`data_size == 0`.
 
 **Payload layout:**
 
 ```
-layr_header:
-  layr_version            : u32   - Layout version. 1 for this spec.
-  block_count             : u32   - Number of zstd block frames.
-  block_table_entry_size  : u32   - Bytes per block table entry. 24 for v1.
-  block_table             : block_count × block_table_entry_size bytes
-
-block_region:
-  [block_0_frame] [block_1_frame] ... [block_{block_count-1}_frame]
+layr_version : u32   - Layout version. 1 for this spec.
+frame        : [u8]  - One zstd frame over the concatenation described above.
 ```
 
-The chunk descriptor for `LAYR` stores the container uncompressed, but
-`size_compressed` depends on whether the block frames are sealed: `0` when they are
-not, and the stored container length - including the 28 bytes of AEAD framing per
-sealed block frame ([§9.3](12-encryption.md#93-encryption-format)) - when they are. `size_uncompressed` is the
-container's byte length either way.
+**Descriptor.** The version field is a container header, not part of the frame:
+`size_uncompressed` is the container's byte length - 4 plus the frame's stored length - and
+`size_compressed` is `0` when the frame is not sealed, the container's stored length when it
+is. Sealing adds 28 bytes of AEAD framing ([§9.3](12-encryption.md#93-encryption-format)), so
+a sealed container is `4 + 28 + frame_length` bytes and the frame's stored length is
+`size_compressed - 32`. Neither figure is the frame's output length: that is the content size
+the frame itself declares ([§3.2](02-file-structure.md#32-chunk-descriptor)).
 
-**Block table entry (v1, 24 bytes):**
+There is no block table and no per-layer framing. The frame's output carries the layers'
+data back to back, and the layer table is what says where each slice begins and ends.
 
-| Offset | Size | Type | Field | Description |
-|--------|------|------|-------|-------------|
-| 0 | 8 | `u64` | `frame_offset` | Byte offset of the block frame from the start of `block_region`. |
-| 8 | 8 | `u64` | `frame_size` | Stored size of the frame. Includes AEAD framing overhead when block frames are encrypted. |
-| 16 | 8 | `u64` | `uncompressed_size` | Exact size of the block's decompressed output. |
+**Frame invariants:**
 
-Both sizes are 64-bit because a block's output is not bounded by `u32`: worst-case
-REE (a dithered or checkerboard layer) is roughly 5 bytes per pixel, so a 64-layer
-block at 12K can exceed 4 GB even though a single layer cannot.
+- The frame MUST declare its content size, and decompressing it MUST yield exactly that many
+  bytes. The content size is the length of the concatenation above; a reader sizes its
+  decode buffer from it, so it never trusts a second field to agree with a first.
+- A frame with a non-zero zstd dictionary ID requires a `ZDIC` chunk ([§4.9](#49-zdic---zstd-dictionary-chunk))
+  whose `dict_id` matches, and every `LAYR` frame in the file agrees with `ZDIC.dict_id`.
+- For every entry that names this chunk, `data_offset + data_size` is at most the frame's
+  decompressed length, and the byte ranges those entries describe do not overlap.
 
-**Block invariants:**
-
-- `block_count >= 1` and `block_count <= HDR.total_layers`.
-- Blocks are ordered and cover every layer exactly once: block `0` starts at layer 0,
-  block `k+1` begins where block `k` ends, and therefore
-  `LTBL.entries[i].block_index` is non-decreasing in `i`.
-- Every block index in `0..block_count` is referenced by at least one layer.
-- Decompressing block `k` yields exactly `block_table[k].uncompressed_size` bytes.
-- A block frame with a non-zero zstd dictionary ID requires a `ZDIC` chunk ([§4.9](#49-zdic---zstd-dictionary-chunk))
-  whose `dict_id` matches.
-
-**Recommended block size:** 32–64 layers. Small enough that a reader seeking to an
+**Recommended frame span:** 32–64 layers. Small enough that a reader seeking to an
 arbitrary layer decompresses only a few megabytes, large enough that the shared
 dictionary and inter-layer similarity keep compression close to what a single frame
-would achieve. Encoders MAY choose any size that satisfies the invariants above.
+would achieve. Encoders MAY choose any span that satisfies the invariants above; a
+frame per layer also conforms.
 
-**Per-layer data format - single-sector** (`MULTI_SECTOR` flag = 0):
-
-Each layer's data begins with a 1-byte encoding tag, followed by the encoded
-mask data:
+**Per-layer data format.** Every `(layer, sector)` slice begins with a 1-byte encoding tag,
+followed by the encoded mask data:
 
 ```
 tag          : u8         - Encoding tag. See the encoding tag table in [§5](08-layer-encoding.md#5-layer-mask-encoding).
 mask_data    : [u8]       - REE stream in the format specified by the tag.
 ```
 
-Empty layers (`sector_count == 0`) store zero bytes of data - no tag byte and no
-mask. This is the canonical encoding for an all-black layer.
+Sector identity is structural, so the stream carries no sector framing: no `sector_count`
+varint, no per-sector id and no per-sector length. Each sector's data is encoded on its own,
+exactly as a single-sector file's layer is, and a reader that decodes one sector reads the
+same byte form whether or not the file has others.
 
-**Per-layer data format - multi-sector** (`MULTI_SECTOR` flag = 1):
-
-```
-sector_count  : varint
-[sector_0_id  : varint]  [sector_0_size : varint]  [sector_0_tag : u8]  [sector_0_mask_data]
-[sector_1_id  : varint]  [sector_1_size : varint]  [sector_1_tag : u8]  [sector_1_mask_data]
-...
-```
-
-`sector_N_size` gives the byte length of `[sector_N_tag + sector_N_mask_data]`
-(i.e., everything following `sector_N_size` for that sector). To skip an unknown
-sector, advance `sector_N_size` bytes after reading `sector_N_size`.
-
-Empty layers (`sector_count == 0`) store zero bytes in multi-sector mode as well:
-there is no `sector_count` varint. The reader learns the layer is empty from
-`LTBL.entries[i].sector_count`; `LTBL.entries[i].data_size` MUST be `0`.
+A `(layer, sector)` with no exposed pixels has `data_size == 0` and stores no bytes - no tag
+byte and no mask. That is the canonical encoding for an all-black slice, and it is the same
+form whether the layer as a whole is empty or only this sector is.
 
 ## 4.11 LHAS - Layer Hash Chunk
 
@@ -172,8 +187,8 @@ verification. This enables:
 
 - **Resume-after-power-loss:** verify which layers are intact on restart.
 - **Silent corruption detection:** network transfer errors, bit rot on storage.
-- **Bounded verification:** verify any single layer by decompressing only the block
-  that contains it ([§4.10](#410-layr---layer-data-chunk)), not the whole file.
+- **Bounded verification:** verify any single layer by decompressing only the `LAYR`
+  chunks that hold its slices ([§4.10](#410-layr---layer-data-chunk)), not the whole file.
 
 **Payload:**
 
@@ -183,7 +198,7 @@ verification. This enables:
 | 1 | 1 | `u8` | `hash_size` | `32` for SHA-256. |
 | 2 | 4 | `u32` | `layer_count` | Must equal `HDR.total_layers`. |
 | 6 | 32 | `[u8; 32]` | `merkle_root` | Root hash of the Merkle tree over all layer hashes. |
-| 38 | N | - | `layer_hashes` | `layer_count × hash_size` bytes. `layer_hashes[i]` is the leaf hash `SHA-256(0x00 \|\| d)`, where `d` is layer `i`'s data exactly as it appears in the decompressed output of its block: the byte range `[LTBL.entries[i].data_offset, + data_size)`. An empty layer stores `SHA-256(0x00)`. |
+| 38 | N | - | `layer_hashes` | `layer_count × hash_size` bytes. `layer_hashes[i]` is the leaf hash `SHA-256(0x00 \|\| d)`, where `d` is layer `i`'s data: the slices its `LTBL` entries describe, concatenated in ascending `sector_id`, each byte range `[data_offset, + data_size)` taken from its `LAYR` chunk's decompressed output. An empty layer stores `SHA-256(0x00)`. |
 
 Because these hashes cover decompressed bytes, they are reproducible only if encoders
 agree on the byte stream; [§5.6](08-layer-encoding.md#56-canonical-encoding) defines that canonical form.
@@ -191,7 +206,7 @@ agree on the byte stream; [§5.6](08-layer-encoding.md#56-canonical-encoding) de
 **Merkle tree construction** (domain-separated, RFC 6962 style):
 
 1. **Leaves:** `H[i] = SHA-256(0x00 || layer_data_i)` for `i` in `0..layer_count`,
-   where `layer_data_i` is the byte range defined for `layer_hashes[i]` above.
+   where `layer_data_i` is the byte string defined for `layer_hashes[i]` above.
    `layer_hashes[i]` stores this leaf hash.
 2. **Internal nodes:** `parent = SHA-256(0x01 || left || right)`.
 3. **Odd levels:** when a level holds an odd number of nodes, the final node is
@@ -209,8 +224,9 @@ them) using the internal-node rule, and check that the result equals `merkle_roo
 Every sibling hash is recoverable from `layer_hashes`.
 
 **Verifying the entire file:**
-1. Decompress each block and, for each layer it contains, compute `SHA-256(0x00 || d)`
-   over the layer's byte range `d` within that block's output.
+1. Decompress each `LAYR` chunk's frame and recover each layer's slices from it; for a
+   layer whose entries name more than one chunk, concatenate its slices in ascending
+   `sector_id` before hashing.
 2. Verify each hash matches `layer_hashes[i]`.
 3. Recompute the Merkle root from `layer_hashes`; verify it matches `merkle_root`.
 
@@ -220,7 +236,7 @@ Every sibling hash is recoverable from `layer_hashes`.
   purposes. The CRC-32C trailer remains for quick file-completeness checks.
 - 32 bytes per layer = 320 KB for a 10 000-layer print - acceptable overhead
   for the integrity guarantee.
-- For memory-constrained devices, the verifier processes one block at a time:
-  decompress the block, hash each layer it contains, fold those hashes into the
-  Merkle tree, then release the block. Peak memory is one block plus the leaf hash
+- For memory-constrained devices, the verifier processes one `LAYR` chunk at a time:
+  decompress the chunk, hash each layer slice it holds, fold those hashes into the
+  Merkle tree, then release the chunk. Peak memory is one chunk plus the leaf hash
   table, never the whole layer stream.

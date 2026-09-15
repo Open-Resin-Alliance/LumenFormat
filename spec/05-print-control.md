@@ -2,97 +2,74 @@
 
 <!-- Part of the LUMEN Format Specification. Section numbers (`§3.1`) are stable anchors across the parts. -->
 
-## 4.5 SECT - Sector Definition Chunk
+## 4.5 (Withdrawn) SECT - Sector Definition Chunk
 
-**Type tag:** `SECT` (`0x53 0x45 0x43 0x54`). Optional, multiple allowed.
+Earlier drafts defined a `SECT` chunk carrying a sector's name, material and colour and
+the timing fields that sector started from. It is gone as of this revision and no
+conforming file carries one. A sector is now structural - an exposure group whose data
+is its own slice of the layer stream - so what `SECT` carried has three homes and none is
+a chunk of its own:
 
-**Flags:** zstd-compressed. Encrypted if `AUTH` present.
+- A sector's **base timing** and **optional identity** are META's, in its `sectors` array
+  ([§4.2](03-chunks.md#42-meta---metadata-chunk)): one entry per sector `>= 1`, carrying
+  `sector_id` and the fields that sector overrides, in META's names and units. Sector 0
+  has no entry and resolves from META alone.
+- A sector's **mask data** for a layer is a slice of the `LAYR` chunk for that
+  `(sector, layer group)` ([§4.10](06-layer-data.md#410-layr---layer-data-chunk)), which
+  the layer table addresses ([§4.8](06-layer-data.md#48-ltbl---layer-table-chunk)).
+- A sector's **per-`(layer, sector)` timing deltas** are an `LROV` chunk
+  ([§4.6](#46-lrov---layer-override-chunk)).
 
-Required only when `MULTI_SECTOR` flag is set. Defines a material/exposure sector.
-
-```jsonc
-{
-  "sector_id": 1,
-  "name": "Support Material",
-  "material_index": 1,
-  "color_rgba": [0, 255, 0, 128],
-
-  // Any timing field from META can be overridden per-sector:
-  "normal_exposure_ms": 3000,
-  "bottom_exposure_ms": 35000
-  // ... (all META timing fields are valid here)
-}
-```
-
-- `sector_id` 0 is reserved for the implicit primary/default sector. SECT chunks must use `sector_id >= 1`.
-- All `sector_id` values must be unique within the file.
-- `material_index` indexes `META.materials` (or `PROF.materials`, when the profile
-  supplies the library) and defaults to `0` when absent. When present, the referenced
-  array MUST exist, be non-empty, and contain the index.
-- `color_rgba` is a display hint that overrides the referenced material's color for
-  this sector; it does not affect exposure.
-- If a timing field is absent, the sector inherits from META defaults. That inheritance is
-  per field, and it covers the layer counts like any other timing field: a sector definition
-  may carry `bottom_layer_count` and `transition_layer_count` of its own, and one that does
-  is blended over **its own** bottom and transition ranges. Its bottom range can be longer
-  than META's, its transition steps land on different layers, and two sectors in one file can
-  disagree about where the bottom range ends - which is the point, since a support material
-  and a model resin rarely want the same one.
-- A single-material printer can ignore all `SECT` chunks and decode only sector 0;
-  see [§7.2](10-sectors.md#72-sector-0-convention-and-single-material-degradation) for the completeness caveat.
-
-**Sector composition invariant:** For a given layer, every exposed pixel belongs to
-exactly one sector, and the union of the sector masks is the full layer image ([§7.3](10-sectors.md#73-sector-mask-invariant)).
+The section number is kept so that references to §4.6 and later keep resolving, and the
+sector model itself is specified in [§7](10-sectors.md#7-multi-material--sector-model).
 
 ## 4.6 LROV - Layer Override Chunk
 
-**Type tag:** `LROV` (`0x4C 0x52 0x4F 0x56`). Optional.
+**Type tag:** `LROV` (`0x4C 0x52 0x4F 0x56`). Optional, multiple allowed - one chunk per
+`(layer, sector)` pair that has overrides.
 
 **Flags:** zstd-compressed. Encrypted if `AUTH` present.
 
-Per-layer timing parameter overrides. A file carries at most one `LROV` chunk; if more
-than one is present, readers use the first.
+Carries the timing parameters one `(layer, sector)` pair overrides, as a JSON object under
+META's field names:
 
 ```jsonc
 {
-  "overrides": [
-    {
-      "layer": 100,
-      "normal_exposure_ms": 2800,
-      "lift_slow_distance_um": 6000
-    },
-    {
-      "layer_range": [200, 250],
-      "sector_id": 1,
-      "normal_exposure_ms": 2200,
-      "wait_time_before_cure_ms": 500
-    }
-  ]
+  "normal_exposure_ms": 2800,
+  "lift_slow_distance_um": 6000,
+  "wait_time_before_cure_ms": 500
 }
 ```
 
-- Layer indices are 0-based (layer 0 = closest to build plate).
-- `layer_range` is inclusive `[start, end]`.
-- An entry MUST carry exactly one of `layer` or `layer_range`; an entry with both or
-  neither is malformed.
-- `sector_id` is optional. When present, the entry applies only to that sector on the
-  matched layer(s); when absent, it applies to every sector.
-- When several entries match a given `(layer, sector)` pair, the **last** matching entry wins
-  **for each field it carries**. An entry is a sparse set of overrides, not a replacement for
-  the entries before it: one that omits a field leaves the value a matching earlier entry gave
-  that field in place, and only the fields an entry carries are overridden by it. Because an
-  entry without `sector_id` matches every sector, a later sector-specific entry overrides it
-  for that sector only.
-- Layers with no matching entry use META (or SECT) defaults; LROV never removes them.
+Which pair the chunk belongs to is not in the payload: the pair's layer table entry carries
+`first_lrov`, either `0` (no overrides) or the directory index of the chunk holding them
+([§4.8](06-layer-data.md#48-ltbl---layer-table-chunk)). Nothing else points at the chunk, and
+every `LROV` chunk is named by exactly one entry, so a chunk's values are applied to the pair
+that names it and to no other.
+
+- The object carries **only** the fields that pair overrides. A field it omits keeps the
+  value the pair resolves without it: the object is a sparse delta, never a replacement
+  set, and there is no array of entries and no fold rule - a pair has one override set or
+  none, so nothing has to decide between two of them.
+- Any field META carries a value for may appear, with META's names and units: integer
+  milliseconds for durations, micrometers for lengths, micrometres per minute for speeds.
+  The layer counts may appear too, and they do not move the ramp: the blend uses the counts
+  the pair's sector resolves before any override, so an override of `bottom_layer_count` sets
+  that field's value for the pairs it is applied to and leaves the ranges where they were
+  ([§8](11-layer-timing.md#8-per-layer-settings-model)).
+- Overrides are applied after the sector's bottom/transition blending
+  ([§8](11-layer-timing.md#8-per-layer-settings-model)), so a field an `LROV` chunk carries
+  is the value the layer is printed with, whatever range it falls in.
 
 **Reader support: REQUIRED.** Writing the chunk is the encoder's choice - a slicer may write
-per-layer settings or leave them out, and a file without an `LROV` chunk is complete either
-way. Honoring it is not a choice. A conforming reader MUST apply every entry that matches a
-layer it prints, and a reader that does not implement overrides MUST refuse a file that
-carries an `LROV` chunk rather than print it with META and SECT values alone.
+per-layer settings or leave them out, and a file that needs no overrides is complete without
+one. Honoring it is not a choice. A conforming reader MUST apply the overrides of every
+`LROV` chunk that a layer it prints points at, and a reader that does not implement overrides
+MUST refuse a file in which any layer table entry carries a non-zero `first_lrov`, rather
+than print that pair at the values its sector resolves to on its own.
 
 The reason is that this is the one degradation a printer cannot notice. A layer printed at
-META's exposure instead of its override is a print that fails quietly: the file is
+its sector's exposure instead of its override is a print that fails quietly: the file is
 structurally valid, every checksum still passes, and nothing in the output says a chunk was
 ignored. So the rule is the same one [§4.13](07-scene-chunks.md#413-extd---extension-chunk)
 applies to an unimplemented `critical` extension, and the same principle as

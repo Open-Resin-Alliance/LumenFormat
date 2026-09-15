@@ -3,9 +3,12 @@
 //! A decoder either produces a mask plus the list of violations it found, or
 //! fails outright - and the two are different verdicts. A violation is reported
 //! under its own check name; a failure means the stream could not be read at
-//! all, which the reader records as `ree.truncated_sector`. Keeping the two
-//! apart is what lets the corpus assert that one specific rule was broken
-//! rather than that the layer merely failed to decode.
+//! all, and names the rule the stream ran out against - `ree.data_size` when
+//! the slice was too short, `ree.varint` when a varint is not well formed,
+//! `ree.end_positions` or `ree.split_positions` when a position it decoded
+//! lands outside the layer. Keeping the two apart is what lets the corpus
+//! assert that one specific rule was broken rather than that the layer merely
+//! failed to decode.
 //!
 //! Each violation carries the specification's own wording as well as its check
 //! name, because the verbose report prints that wording.
@@ -24,16 +27,47 @@ pub struct Violation {
 }
 
 /// A stream that cannot be read: bad framing, a truncated run, or a position
-/// outside the layer. The message says which, and is reported with the
-/// `ree.truncated_sector` verdict.
+/// outside the layer, and the check name the failure belongs under.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DecodeError(pub &'static str);
+pub struct DecodeError {
+    /// The §11.3 rule the stream broke, reported as the failing check.
+    pub name: &'static str,
+    /// The reader's own wording for the failure, printed after the check name.
+    pub message: &'static str,
+}
 
-const EMPTY_BINARY: DecodeError = DecodeError("empty binary REE stream");
-const RUN_END_RANGE: DecodeError = DecodeError("run end out of range");
-const END_PAST_TOTAL: DecodeError = DecodeError("end position past total_pixels");
-const OVERLAY_PAST_TOTAL: DecodeError = DecodeError("overlay position past total_pixels");
-const MISSING_VALUE: DecodeError = DecodeError("index out of range");
+impl DecodeError {
+    /// A varint that is not well formed: unterminated, or longer than the ten
+    /// bytes a 64-bit value can need (§11.3).
+    pub fn varint(error: crate::primitives::VarintError) -> Self {
+        DecodeError {
+            name: "ree.varint",
+            message: error.0,
+        }
+    }
+}
+
+/// The slice holds fewer bytes than the stream it starts describes.
+const SHORT_STREAM: DecodeError = DecodeError {
+    name: "ree.data_size",
+    message: "empty binary REE stream",
+};
+const RUN_END_RANGE: DecodeError = DecodeError {
+    name: "ree.end_positions",
+    message: "run end out of range",
+};
+const END_PAST_TOTAL: DecodeError = DecodeError {
+    name: "ree.end_positions",
+    message: "end position past total_pixels",
+};
+const OVERLAY_PAST_TOTAL: DecodeError = DecodeError {
+    name: "ree.split_positions",
+    message: "overlay position past total_pixels",
+};
+const MISSING_VALUE: DecodeError = DecodeError {
+    name: "ree.data_size",
+    message: "the stream ends inside a run",
+};
 
 fn violation(code: &'static str, message: &'static str) -> Violation {
     Violation {
@@ -48,21 +82,21 @@ fn violation(code: &'static str, message: &'static str) -> Violation {
 pub fn binary(body: &[u8], total: usize) -> Result<(Vec<u8>, usize, Vec<Violation>), DecodeError> {
     let mut violations = Vec::new();
     let Some((&first_value, _)) = body.split_first() else {
-        return Err(EMPTY_BINARY);
+        return Err(SHORT_STREAM);
     };
     let mut pos = 1;
     if first_value != 0x00 && first_value != 0xFF {
         violations.push(violation(
-            "ree.binary_first_value",
+            "ree.first_value",
             "first_value is neither 0x00 nor 0xFF",
         ));
     }
 
-    let (run_count, after_count) = read_varint(body, pos).map_err(|e| DecodeError(e.0))?;
+    let (run_count, after_count) = read_varint(body, pos).map_err(DecodeError::varint)?;
     pos = after_count;
     let mut lengths = Vec::new();
     for _ in 0..run_count.saturating_sub(1) {
-        let (length, next) = read_varint(body, pos).map_err(|e| DecodeError(e.0))?;
+        let (length, next) = read_varint(body, pos).map_err(DecodeError::varint)?;
         pos = next;
         lengths.push(length);
     }
@@ -73,15 +107,12 @@ pub fn binary(body: &[u8], total: usize) -> Result<(Vec<u8>, usize, Vec<Violatio
         ));
     }
     if lengths.iter().any(|&length| length < 1) {
-        violations.push(violation(
-            "ree.binary_lengths",
-            "a stored run length is < 1",
-        ));
+        violations.push(violation("ree.run_lengths", "a stored run length is < 1"));
     }
     let stored: u128 = lengths.iter().fold(0u128, |sum, &l| sum.saturating_add(l));
     if (total as u128) < stored.saturating_add(1) {
         violations.push(violation(
-            "ree.binary_lengths",
+            "ree.run_lengths",
             "the implicit final run length is < 1",
         ));
     }
@@ -118,7 +149,7 @@ pub fn grayscale(
     total: usize,
 ) -> Result<(Vec<u8>, usize, Vec<Violation>), DecodeError> {
     let mut violations = Vec::new();
-    let (run_count, mut pos) = read_varint(body, 0).map_err(|e| DecodeError(e.0))?;
+    let (run_count, mut pos) = read_varint(body, 0).map_err(DecodeError::varint)?;
 
     let mut mask = vec![0u8; total];
     let mut previous: Option<u8> = None;
@@ -126,11 +157,11 @@ pub fn grayscale(
     for _ in 0..run_count {
         let value = *body.get(pos).ok_or(MISSING_VALUE)?;
         pos += 1;
-        let (end, next) = read_varint(body, pos).map_err(|e| DecodeError(e.0))?;
+        let (end, next) = read_varint(body, pos).map_err(DecodeError::varint)?;
         pos = next;
         if end <= start as u128 {
             violations.push(violation(
-                "ree.grayscale_ends",
+                "ree.end_positions",
                 "end positions are not strictly increasing",
             ));
         }
@@ -139,7 +170,7 @@ pub fn grayscale(
         }
         if previous == Some(value) {
             violations.push(violation(
-                "ree.grayscale_adjacent",
+                "ree.grayscale_runs",
                 "adjacent runs share a value",
             ));
         }
@@ -152,7 +183,7 @@ pub fn grayscale(
     }
     if start != total {
         violations.push(violation(
-            "ree.grayscale_ends",
+            "ree.end_positions",
             "the final end position is not total_pixels",
         ));
     }
@@ -170,18 +201,18 @@ pub fn split(body: &[u8], total: usize) -> Result<(Vec<u8>, usize, Vec<Violation
     let (mut mask, mut pos, base) = binary(body, total)?;
     let mut violations = base;
 
-    let (count, after_count) = read_varint(body, pos).map_err(|e| DecodeError(e.0))?;
+    let (count, after_count) = read_varint(body, pos).map_err(DecodeError::varint)?;
     pos = after_count;
     let mut positions = Vec::new();
     let mut position = 0u128;
     for index in 0..count {
-        let (delta, next) = read_varint(body, pos).map_err(|e| DecodeError(e.0))?;
+        let (delta, next) = read_varint(body, pos).map_err(DecodeError::varint)?;
         pos = next;
         // positions[0] is the absolute index of the first AA pixel (a delta from
         // 0), so only later deltas have to be >= 1 for the indices to increase.
         if index != 0 && delta < 1 {
             violations.push(violation(
-                "ree.split_overlay",
+                "ree.split_positions",
                 "overlay positions are not strictly increasing",
             ));
         }
@@ -212,7 +243,7 @@ pub fn split(body: &[u8], total: usize) -> Result<(Vec<u8>, usize, Vec<Violation
     let values_match = expected.iter().map(|(_, v)| *v).eq(values.iter().copied());
     if !indices_match || !values_match {
         violations.push(violation(
-            "ree.split_overlay",
+            "ree.split_threshold",
             "overlay is not exactly the set of non-binary pixels",
         ));
     }

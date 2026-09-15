@@ -13,8 +13,8 @@
 //!
 //! * [`reader`] walks a container and runs every check the specification
 //!   defines, in the specification's order.
-//! * [`container`] is the two tables it walks: the chunk directory and the
-//!   block table.
+//! * [`container`] is the chunk directory it walks, and the directory indices
+//!   the layer table's chunk references count against.
 //! * [`ree`] decodes the three run-length encodings and says which rule a
 //!   stream breaks.
 //! * [`crypto`] opens the AUTH chunk and the sealed units it describes.

@@ -23,16 +23,16 @@
 //!   deserialization would produce.
 //!
 //! A sealed file validated without a key is checked as far as its plaintext
-//! allows. The directory, `HDR`, `AUTH`, `LTBL`, the `LAYR` header and block
-//! table, and `LHAS` are plaintext by construction (section 9.1), so those
-//! checks all run; the ones that need decrypted content are skipped rather than
-//! guessed at. Supply the key with [`Validator::with_key`] to run them.
+//! allows. The directory, `HDR`, `AUTH`, `LTBL`, the `LAYR` version fields and
+//! `LHAS` are plaintext by construction (section 9.1), so those checks all run;
+//! the ones that need decrypted content are skipped rather than guessed at.
+//! Supply the key with [`Validator::with_key`] to run them.
 
 use crate::check::Check;
 use crate::chunkio;
 use crate::chunks::extd::{Extension, CRITICAL_BIT, EXTD_RESERVED_MASK};
 use crate::chunks::hdr::Hdr;
-use crate::chunks::layr::Layr;
+use crate::chunks::layr;
 use crate::chunks::lhas::{self, LayerHashes};
 use crate::chunks::ltbl::{LayerEntry, LayerTable};
 use crate::chunks::preview::{self, PreviewRole};
@@ -45,9 +45,11 @@ use crate::container::{
 };
 use crate::crypto::{self, Cipher, SessionKey};
 use crate::error::{Error, Result};
-use crate::json::{Material, Meta, Profile, Sect, Timing, REQUIRED_META_FIELDS};
-use crate::{ree, sectors};
+use crate::json::{Material, Meta, Profile, Timing, REQUIRED_META_FIELDS};
+use crate::ree;
 use serde_json::{Map, Value};
+use std::borrow::Cow;
+use std::cell::RefCell;
 
 /// Header flag bits 0, 2 and 4: reserved, and required to be zero.
 ///
@@ -56,8 +58,8 @@ use serde_json::{Map, Value};
 const HEADER_MUST_BE_ZERO: u32 = (1 << 0) | (1 << 2) | (1 << 4);
 
 /// The durations the timing namespace defines, in whole milliseconds: META
-/// (section 4.2), a `SECT` (4.5), a `PROF`'s `settings` block (4.3) and an
-/// `LROV` entry (4.6) all draw on these keys.
+/// (section 4.2), a `META.sectors` entry (4.5), a `PROF`'s `settings` block
+/// (4.3) and an `LROV` payload (4.6) all draw on these keys.
 ///
 /// They are listed rather than taken from [`Timing`] because the rule is checked
 /// against the raw JSON, before the typed parse: a `*_ms` key the namespace does
@@ -73,8 +75,9 @@ const TIME_MS_FIELDS: [&str; 8] = [
     "bottom_wait_time_after_lift_ms",
 ];
 
-/// META's own duration, informational and outside the namespace a `SECT`, a
-/// `PROF.settings` block or an `LROV` entry draws on (section 4.2). It is the
+/// META's own duration, informational and outside the namespace a sector
+/// entry, a `PROF.settings` block or an `LROV` payload draws on (section 4.2).
+/// It is the
 /// one duration in whole seconds rather than milliseconds: an estimate that
 /// spans hours has no millisecond precision to report.
 const ESTIMATED_PRINT_TIME_SEC: &str = "estimated_print_time_sec";
@@ -84,7 +87,6 @@ const ESTIMATED_PRINT_TIME_SEC: &str = "estimated_print_time_sec";
 const CONTENT_CHUNKS: &[Tag] = &[
     Tag::META,
     Tag::PROF,
-    Tag::SECT,
     Tag::LROV,
     Tag::VOXL,
     Tag::ZDIC,
@@ -175,32 +177,22 @@ impl Validator {
             check_profile(profile)?;
         }
 
-        let sects = ctx.read_sects()?;
-        check_sects(
-            &sects,
-            meta.as_ref().and_then(|m| m.materials.as_deref()),
-            profile.as_ref().and_then(|p| p.materials.as_deref()),
-        )?;
-
-        if let Some(lrov) = ctx.read_lrov()? {
-            check_lrov(&lrov, hdr.total_layers, &sects)?;
-        }
+        ctx.check_lrov_payloads()?;
 
         ctx.check_previews()?;
         ctx.check_extensions()?;
         ctx.check_voxl()?;
 
-        let layr = ctx.read_layr()?;
         let ltbl = ctx.read_ltbl()?;
         let zdic = ctx.read_zdic()?;
-        ctx.check_layer_data(&hdr, &layr, &ltbl, &zdic)?;
+        ctx.check_layer_data(&hdr, &ltbl, &zdic)?;
         let hashes = ctx.check_hashes(&hdr)?;
         if let Some(hashes) = hashes.as_ref() {
-            ctx.check_leaves(&layr, &ltbl, &zdic, hashes)?;
+            ctx.check_leaves(&ltbl, &zdic, hashes)?;
         }
 
         if let (Some(key), Some(cipher)) = (ctx.key.as_ref(), ctx.cipher) {
-            ctx.check_sealed_units(&layr, key, cipher)?;
+            ctx.check_sealed_units(key, cipher)?;
         }
         Ok(())
     }
@@ -224,6 +216,10 @@ struct Ctx<'a> {
     level: Level,
     key: Option<SessionKey>,
     cipher: Option<Cipher>,
+    /// One decompressed `LAYR` chunk, so a walk that revisits a chunk - a
+    /// multi-sector layer's second sector, or a strict second pass - does not
+    /// decompress it twice.
+    cache: RefCell<Option<(u32, Vec<u8>)>>,
 }
 
 impl<'a> Ctx<'a> {
@@ -238,6 +234,7 @@ impl<'a> Ctx<'a> {
             level,
             key,
             cipher: None,
+            cache: RefCell::new(None),
         })
     }
 
@@ -336,12 +333,6 @@ impl<'a> Ctx<'a> {
                 "the header sets ENCRYPTED but the file carries no AUTH chunk",
             ));
         }
-        if self.header.multi_sector() && !self.dir.contains(Tag::SECT) {
-            return Err(Error::new(
-                Check::PresenceSect,
-                "MULTI_SECTOR is set but no SECT chunk defines a sector",
-            ));
-        }
         Ok(())
     }
 
@@ -408,15 +399,105 @@ impl<'a> Ctx<'a> {
         Ok(Some(auth))
     }
 
-    fn read_layr(&self) -> Result<Option<Layr>> {
-        match self.dir.find(Tag::LAYR) {
-            None => Ok(None),
-            // Parsed straight from the file: the container is the largest chunk
-            // in a print, and a copy of it to read a twelve-byte header would be
-            // file-sized. Its header and block table are plaintext either way
-            // (section 9.1), so nothing needs decrypting to read them.
-            Some(d) => Ok(Some(Layr::parse(self.stored(d)?)?)),
+    /// Every `LAYR` chunk, in directory order: its index and its descriptor.
+    fn layr_chunks(&self) -> Vec<(u32, ChunkDescriptor)> {
+        self.dir
+            .descriptors
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| !d.is_null() && d.chunk_type == Tag::LAYR)
+            .map(|(index, d)| (index as u32, *d))
+            .collect()
+    }
+
+    /// The plaintext frame of a `LAYR` chunk, or `None` when it is sealed and no
+    /// key is available.
+    ///
+    /// `index` is the chunk's directory index, which is what its frame's
+    /// associated data binds it to.
+    fn layr_frame<'b>(&'b self, index: u32, d: &ChunkDescriptor) -> Result<Option<Cow<'b, [u8]>>> {
+        chunkio::layr_frame(
+            d,
+            index,
+            chunkio::stored(self.buf, d)?,
+            self.cipher,
+            self.key.as_ref(),
+        )
+    }
+
+    /// Run `f` over the decompressed output of a `LAYR` chunk, decompressing it
+    /// first if it is not the cached one.
+    fn with_chunk<T>(
+        &self,
+        index: u32,
+        dictionary: Option<&[u8]>,
+        f: impl FnOnce(&[u8]) -> Result<T>,
+    ) -> Result<T> {
+        if self.cache.borrow().as_ref().map(|(k, _)| *k) != Some(index) {
+            let data = {
+                let descriptor = self.layr_descriptor(index)?;
+                let frame = self.layr_frame(index, descriptor)?.ok_or_else(|| {
+                    Error::new(
+                        Check::CryptNoKey,
+                        "the frame is sealed and no session key is available",
+                    )
+                })?;
+                // The frame is released before the output is cached, so the two
+                // are never live at the same time.
+                chunks::decompress_frame(&frame, dictionary)?
+            };
+            *self.cache.borrow_mut() = Some((index, data));
         }
+        let guard = self.cache.borrow();
+        let (_, data) = guard.as_ref().expect("filled immediately above");
+        f(data)
+    }
+
+    /// The descriptor of the `LAYR` chunk at directory index `index`.
+    fn layr_descriptor(&self, index: u32) -> Result<&ChunkDescriptor> {
+        self.dir
+            .descriptors
+            .get(index as usize)
+            .filter(|d| !d.is_null() && d.chunk_type == Tag::LAYR)
+            .ok_or_else(|| {
+                Error::new(
+                    Check::LtblFirstLayrInRange,
+                    format!("directory index {index} is not a LAYR chunk"),
+                )
+            })
+    }
+
+    /// One entry's slice of its `LAYR` chunk's decompressed output.
+    fn slice_of(&self, entry: &LayerEntry, dictionary: Option<&[u8]>) -> Result<Vec<u8>> {
+        if entry.is_empty() {
+            return Ok(Vec::new());
+        }
+        let start = entry.data_offset as usize;
+        let len = entry.data_size as usize;
+        self.with_chunk(entry.first_layr, dictionary, |chunk| {
+            chunk
+                .get(start..start.saturating_add(len))
+                .map(|slice| slice.to_vec())
+                .ok_or_else(|| {
+                    Error::new(
+                        Check::LtblOffsetWithinChunk,
+                        format!(
+                            "a slice of {len} bytes at offset {start} lies outside its chunk's {} bytes",
+                            chunk.len()
+                        ),
+                    )
+                })
+        })
+    }
+
+    /// The stored bytes of a layer: its sectors' slices, concatenated in
+    /// ascending `sector_id`.
+    fn layer_bytes(&self, entries: &[LayerEntry], dictionary: Option<&[u8]>) -> Result<Vec<u8>> {
+        let mut out = Vec::new();
+        for entry in entries {
+            out.extend_from_slice(&self.slice_of(entry, dictionary)?);
+        }
+        Ok(out)
     }
 
     fn read_ltbl(&self) -> Result<Option<LayerTable>> {
@@ -478,6 +559,7 @@ impl<'a> Ctx<'a> {
                 .chain(std::iter::once(ESTIMATED_PRINT_TIME_SEC)),
             Check::MetaTimeInteger,
         )?;
+        check_sectors_shape(object)?;
         let meta: Meta = serde_json::from_value(value).map_err(json_error)?;
         Ok(Some(meta))
     }
@@ -503,49 +585,31 @@ impl<'a> Ctx<'a> {
         Ok(Some(serde_json::from_value(value).map_err(json_error)?))
     }
 
-    fn read_sects(&self) -> Result<Vec<Sect>> {
-        let mut out = Vec::new();
-        for d in self.dir.find_all(Tag::SECT).collect::<Vec<_>>() {
+    /// Every `LROV` chunk's payload rules: the integer rule for the durations a
+    /// delta carries, and nothing else - a delta has no layer, range or sector
+    /// field to check, because the `LTBL` entry that points at it is what places
+    /// it (`lrov.orphan` checks that placement, and needs the table).
+    fn check_lrov_payloads(&self) -> Result<()> {
+        for d in self.dir.find_all(Tag::LROV).collect::<Vec<_>>() {
             let Some(bytes) = self.payload(d)? else {
                 continue;
             };
-            let value: Value = serde_json::from_slice(&bytes).map_err(json_error)?;
-            // A `SECT`'s timing overrides are flattened in beside `sector_id`, so
-            // the durations sit at the top level of its own object.
-            if let Some(object) = value.as_object() {
-                check_integer_durations(
-                    object,
-                    TIME_MS_FIELDS.iter().copied(),
-                    Check::SectTimeInteger,
-                )?;
-            }
-            out.push(serde_json::from_value(value).map_err(json_error)?);
+            let value: Value = serde_json::from_slice(&bytes).map_err(|e| {
+                Error::new(
+                    Check::LrovJson,
+                    format!("the LROV payload is not a valid object: {e}"),
+                )
+            })?;
+            let object = value
+                .as_object()
+                .ok_or_else(|| Error::new(Check::LrovJson, "LROV is not a JSON object"))?;
+            check_integer_durations(
+                object,
+                TIME_MS_FIELDS.iter().copied(),
+                Check::LrovTimeInteger,
+            )?;
         }
-        Ok(out)
-    }
-
-    fn read_lrov(&self) -> Result<Option<crate::json::Lrov>> {
-        let Some(d) = self.dir.find(Tag::LROV) else {
-            return Ok(None);
-        };
-        let Some(bytes) = self.payload(d)? else {
-            return Ok(None);
-        };
-        let value: Value = serde_json::from_slice(&bytes).map_err(json_error)?;
-        // Each entry carries its own overrides, flattened in beside `layer`,
-        // `layer_range` and `sector_id`; neither of those is a duration.
-        if let Some(overrides) = value.get("overrides").and_then(Value::as_array) {
-            for entry in overrides {
-                if let Some(object) = entry.as_object() {
-                    check_integer_durations(
-                        object,
-                        TIME_MS_FIELDS.iter().copied(),
-                        Check::LrovTimeInteger,
-                    )?;
-                }
-            }
-        }
-        Ok(Some(serde_json::from_value(value).map_err(json_error)?))
+        Ok(())
     }
 
     fn check_previews(&self) -> Result<()> {
@@ -595,326 +659,386 @@ impl<'a> Ctx<'a> {
 
     // -- phase 4: layer data -----------------------------------------------
 
-    /// The `LAYR` block table, `LTBL`, and every layer's REE stream.
+    /// The `LAYR` chunks, `LTBL`, and every (layer, sector)'s REE stream.
     ///
-    /// Returns each layer's decompressed bytes so the `LHAS` checks that follow
-    /// do not decompress a second time; `None` means the layer could not be read,
-    /// which happens only when it is sealed and no key was supplied.
+    /// The chunk walk is what keeps peak memory at one chunk: a frame is
+    /// decompressed, its slices are checked, and it is released before the next
+    /// one is read. The `LTBL` rules that need only the table and the frames'
+    /// declared output lengths run first, so a table that lies about where a
+    /// layer sits is reported before anything is decompressed.
     fn check_layer_data(
         &self,
         hdr: &Hdr,
-        layr: &Option<Layr>,
         ltbl: &Option<LayerTable>,
         zdic: &Option<ZstdDictionary>,
     ) -> Result<()> {
-        let total_layers = hdr.total_layers;
-        let (Some(layr), Some(ltbl)) = (layr.as_ref(), ltbl.as_ref()) else {
+        let Some(ltbl) = ltbl.as_ref() else {
             return Ok(());
         };
-        let desc = self.dir.find(Tag::LAYR).expect("presence checked");
-        let stored = self.stored(desc)?;
+        let total_layers = hdr.total_layers;
+        let total_pixels = hdr.total_pixels();
+        let dict_bytes = zdic.as_ref().map(|z| z.dict_bytes.as_slice());
 
-        if layr.block_count() == 0 || layr.block_count() > total_layers {
-            return Err(Error::new(
-                Check::LayrBlockCount,
-                format!(
-                    "block_count {} is not within 1..={total_layers}",
-                    layr.block_count()
-                ),
-            ));
-        }
-
-        // Contiguous, ordered block frames inside the payload.
-        let mut expected = 0u64;
-        for (k, block) in layr.blocks.iter().enumerate() {
-            if block.frame_offset != expected {
-                return Err(Error::new(
-                    Check::LayrBlockTableContiguous,
-                    format!(
-                        "block {k} starts at {}, but block {} ended at {expected}",
-                        block.frame_offset,
-                        k.wrapping_sub(1)
-                    ),
-                ));
-            }
-            expected = block.frame_offset + block.frame_size;
-            if (layr.block_region_offset as u64).saturating_add(expected) > stored.len() as u64 {
-                return Err(Error::new(
-                    Check::LayrBlockRegionBounds,
-                    format!("block {k} reaches past the LAYR chunk payload"),
-                ));
-            }
-        }
-
-        // Section 11.4: a sealed block frame is at least one AEAD unit.
-        if desc.flags & CHUNK_FLAG_ENCRYPTED != 0 {
-            for (k, block) in layr.blocks.iter().enumerate() {
-                if block.frame_size < crypto::UNIT_OVERHEAD as u64 {
-                    return Err(Error::new(
-                        Check::CryptChunkFlags,
-                        format!(
-                            "block {k} is {} bytes, smaller than one sealed unit",
-                            block.frame_size
-                        ),
-                    ));
-                }
-            }
-        }
-
-        let mut referenced = vec![false; layr.blocks.len()];
-        for entry in &ltbl.entries {
-            if let Some(slot) = referenced.get_mut(entry.block_index as usize) {
-                *slot = true;
-            }
-        }
-        if let Some(missing) = referenced.iter().position(|r| !r) {
-            return Err(Error::new(
-                Check::LayrBlockReferenced,
-                format!("block {missing} is referenced by no layer"),
-            ));
-        }
-
-        // `LTBL` semantics. These use the block table's declared sizes, so they
-        // hold whether or not the blocks can be decrypted.
-        if ltbl.layer_count() != total_layers {
+        if ltbl.layer_count != total_layers {
             return Err(Error::new(
                 Check::LtblLayerCount,
                 format!(
                     "LTBL describes {} layers, HDR says {total_layers}",
-                    ltbl.layer_count()
+                    ltbl.layer_count
                 ),
             ));
         }
-        let mut previous = 0u32;
-        for (i, entry) in ltbl.entries.iter().enumerate() {
-            if entry.block_index >= layr.block_count() {
-                return Err(Error::new(
-                    Check::LtblBlockIndexInRange,
-                    format!(
-                        "layer {i} names block {} of {}",
-                        entry.block_index,
-                        layr.block_count()
-                    ),
-                ));
-            }
-            if i > 0 && entry.block_index < previous {
-                return Err(Error::new(
-                    Check::LtblBlockIndexOrdered,
-                    format!(
-                        "layer {i} names block {} after block {previous}",
-                        entry.block_index
-                    ),
-                ));
-            }
-            previous = entry.block_index;
-            let block = &layr.blocks[entry.block_index as usize];
-            if entry.data_offset.saturating_add(u64::from(entry.data_size))
-                > block.uncompressed_size
-            {
-                return Err(Error::new(
-                    Check::LtblOffsetsWithinBlock,
-                    format!(
-                        "layer {i} claims {} bytes at offset {}, past block {}'s {} bytes",
-                        entry.data_size,
-                        entry.data_offset,
-                        entry.block_index,
-                        block.uncompressed_size
-                    ),
-                ));
-            }
-            if entry.is_empty() && entry.data_size != 0 {
-                return Err(Error::new(
-                    Check::LtblEmptyLayerNoBytes,
-                    format!("layer {i} is empty but carries {} bytes", entry.data_size),
-                ));
-            }
-            if !entry.is_empty() && !self.header.multi_sector() && entry.sector_count != 1 {
-                return Err(Error::new(
-                    Check::SectorTags,
-                    format!(
-                        "layer {i} is non-empty but declares {} sectors in single-sector mode",
-                        entry.sector_count
-                    ),
-                ));
+
+        // Section 4.10: MULTI_SECTOR is set exactly when some layer carries more
+        // than one sector with data, so the flag and the table must agree either
+        // way round.
+        if self.header.multi_sector() != ltbl.is_multi_sector() {
+            return Err(Error::new(
+                Check::HdrMultiSectorFlag,
+                if self.header.multi_sector() {
+                    "MULTI_SECTOR is set but no layer carries more than one sector".to_string()
+                } else {
+                    "a layer carries more than one sector but MULTI_SECTOR is clear".to_string()
+                },
+            ));
+        }
+
+        // How many slices each chunk holds, which is what bounds its frame's
+        // declared output.
+        let mut slices_per_chunk: std::collections::HashMap<u32, u64> =
+            std::collections::HashMap::new();
+        for entry in &ltbl.entries {
+            if !entry.is_empty() {
+                *slices_per_chunk.entry(entry.first_layr).or_insert(0) += 1;
             }
         }
 
-        // Unsealed frames: the dictionary agreement rules need to see them.
+        // Each chunk's declared output length, by directory index: what the
+        // offset rule measures against. `None` marks a chunk whose frame could
+        // not be opened, which happens only when it is sealed and no key was
+        // supplied.
+        let chunks = self.layr_chunks();
+        let mut output_size: Vec<Option<u64>> = vec![None; self.dir.descriptors.len()];
         let mut dictionary_used = false;
-        for (k, _) in layr.blocks.iter().enumerate() {
-            let Some(frame) = self.block_frame(layr, stored, desc, k)? else {
+        let mut unreadable = false;
+        for (index, descriptor) in &chunks {
+            let stored = self.stored(descriptor)?;
+            // A sealed frame is at least one AEAD unit (section 11.4).
+            if descriptor.flags & CHUNK_FLAG_ENCRYPTED != 0
+                && stored.len() < layr::LAYR_HEADER_LEN + crypto::UNIT_OVERHEAD
+            {
+                return Err(Error::new(
+                    Check::CryptChunkFlags,
+                    format!(
+                        "the frame at directory index {index} is {} bytes, smaller than one \
+                         sealed unit",
+                        stored.len()
+                    ),
+                ));
+            }
+            let Some(frame) = self.layr_frame(*index, descriptor)? else {
+                // Sealed with no key: the version field is plaintext and already
+                // checked by `layr_frame`, and the frame is not ours to read.
+                unreadable = true;
                 continue;
             };
-            let id = chunks::frame_dict_id(&frame)?;
-            match (id, zdic.as_ref()) {
-                (0, None) => {}
-                (0, Some(z)) => {
-                    return Err(Error::new(
-                        Check::LayrDictIdMatch,
-                        format!(
-                            "block {k} reports no dictionary, but ZDIC declares {}",
-                            z.dict_id
-                        ),
-                    ))
-                }
+            let size = chunks::frame_content_size(&frame)?;
+            output_size[*index as usize] = Some(size);
+            let slices = slices_per_chunk.get(index).copied().unwrap_or(0).max(1);
+            let bound = chunks::allocation_bound(slices, total_pixels);
+            if size > bound {
+                return Err(Error::new(
+                    Check::LayrAllocationBound,
+                    format!(
+                        "the frame at directory index {index} declares {size} bytes; {slices} \
+                         slices of {total_pixels} pixels bound it at {bound}"
+                    ),
+                ));
+            }
+            match (chunks::frame_dict_id(&frame)?, zdic.as_ref()) {
+                // A frame that reports no dictionary is not this rule's business
+                // either way: an encoder may compress one frame without the
+                // dictionary another uses, and "the file's dictionary is used by
+                // nothing" is the presence rule below, not this one.
+                (0, _) => {}
                 (id, Some(z)) if id == z.dict_id => dictionary_used = true,
+                // The frames' half of the agreement: with no `ZDIC` in the file
+                // they must all report none, and none of them may name a
+                // dictionary the file does not carry.
                 (id, None) => {
                     return Err(Error::new(
-                        Check::PresenceZdic,
-                        format!("block {k} reports dictionary {id} but the file has no ZDIC"),
+                        Check::LayrDictIdAbsent,
+                        format!(
+                            "the frame at directory index {index} reports dictionary {id} but \
+                             the file carries no ZDIC"
+                        ),
                     ))
                 }
                 (id, Some(z)) => {
                     return Err(Error::new(
                         Check::LayrDictIdMatch,
                         format!(
-                            "block {k} reports dictionary {id}, ZDIC declares {}",
+                            "the frame at directory index {index} reports dictionary {id}, ZDIC \
+                             declares {}",
                             z.dict_id
                         ),
                     ))
                 }
             }
         }
-        let blocks_readable = !desc.is_encrypted() || self.key.is_some();
-        if blocks_readable && zdic.is_some() && !dictionary_used {
+        if !unreadable && zdic.is_some() && !dictionary_used {
             return Err(Error::new(
                 Check::PresenceZdic,
-                "ZDIC is present but no block frame uses a dictionary",
+                "ZDIC is present but no LAYR frame uses a dictionary",
             ));
         }
 
-        // Decompress and check one block at a time, releasing it before the
-        // next: peak memory is one block plus the leaf table, never the whole
-        // layer stream (section 4.11's design note for memory-constrained
-        // readers). The sector-partition rule is the one check that needs a
-        // per-pixel scratch buffer, so it uses a bitmap rather than a byte per
-        // pixel and is reused across layers.
-        let dict_bytes = zdic.as_ref().map(|z| z.dict_bytes.as_slice());
-        let mut covered: Vec<u64> = Vec::new();
-        for (k, block) in layr.blocks.iter().enumerate() {
-            let layers_here = ltbl
-                .entries
-                .iter()
-                .filter(|e| e.block_index as usize == k)
-                .count()
-                .max(1) as u64;
-            let bound = chunks::allocation_bound(layers_here, hdr.total_pixels());
-            if block.uncompressed_size > bound {
+        // The `LTBL` rules that need the table and the declared output lengths.
+        let mut slices: Vec<(u32, u64, u64)> = Vec::with_capacity(ltbl.entries.len());
+        let mut references: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
+        for (i, entry) in ltbl.entries.iter().enumerate() {
+            // Every entry names a `LAYR` chunk, the ones with no run included:
+            // section 4.10 has no null convention for this field, unlike
+            // `first_lrov`.
+            if self.layr_descriptor(entry.first_layr).is_err() {
                 return Err(Error::new(
-                    Check::LayrAllocationBound,
+                    Check::LtblFirstLayrInRange,
                     format!(
-                        "block {k} declares {} bytes; {layers_here} layers of {} pixels bound it at {bound}",
-                        block.uncompressed_size,
-                        hdr.total_pixels()
+                        "entry {i} names directory index {} for its run, which is not a LAYR chunk",
+                        entry.first_layr
                     ),
                 ));
             }
-            let Some(frame) = self.block_frame(layr, stored, desc, k)? else {
-                continue;
-            };
-            let plain = chunks::decompress(&frame, block.uncompressed_size, dict_bytes)?;
-            for (i, entry) in ltbl.entries.iter().enumerate() {
-                if entry.block_index as usize != k || entry.is_empty() {
-                    continue;
-                }
-                let start = entry.data_offset as usize;
-                let end = start.checked_add(entry.data_size as usize).ok_or_else(|| {
-                    Error::new(Check::LtblOffsetsWithinBlock, "layer range overflows")
-                })?;
-                let data = &plain[start..end.min(plain.len())];
-                if data.len() != entry.data_size as usize {
+            if let Some(size) = output_size
+                .get(entry.first_layr as usize)
+                .copied()
+                .flatten()
+            {
+                let end = entry.data_offset.saturating_add(u64::from(entry.data_size));
+                if end > size {
                     return Err(Error::new(
-                        Check::LtblOffsetsWithinBlock,
-                        format!("layer {i} runs past its block's decompressed output"),
-                    ));
-                }
-                self.check_layer_stream(i, data, entry, hdr, &mut covered)?;
-            }
-        }
-        Ok(())
-    }
-
-    /// The REE rules for one non-empty layer's stored bytes.
-    fn check_layer_stream(
-        &self,
-        i: usize,
-        data: &[u8],
-        entry: &LayerEntry,
-        hdr: &Hdr,
-        covered: &mut Vec<u64>,
-    ) -> Result<()> {
-        let total_pixels = hdr.total_pixels();
-        if self.header.multi_sector() {
-            let decoded = sectors::decode(data, entry.sector_count)?;
-            for sector in &decoded {
-                // `ree` takes the tag and the stream together, and a
-                // `SectorLayer.mask` is exactly that.
-                let used =
-                    ree::validate_stream(&sector.mask, total_pixels, self.level.is_strict())?;
-                if used != sector.mask.len() {
-                    return Err(Error::new(
-                        Check::ReeNoTrailingBytes,
+                        Check::LtblOffsetWithinChunk,
                         format!(
-                            "layer {i}: sector {} stores {} bytes but its stream uses {used}",
-                            sector.sector_id,
-                            sector.mask.len()
+                            "entry {i} claims {} bytes at offset {}, past its chunk's {size} \
+                             bytes",
+                            entry.data_size, entry.data_offset
                         ),
                     ));
                 }
-            }
-            if self.level.is_strict() {
-                // Section 7.3: the sector masks are pairwise non-overlapping.
-                // The other half of that rule - that they cover every pixel - is
-                // what "their union is exactly the layer's exposed image" means,
-                // and the layer's exposed image need not be every pixel, so
-                // coverage is not enforced here.
-                covered.clear();
-                covered.resize((total_pixels as usize).div_ceil(64), 0);
-                for sector in &decoded {
-                    let mask = ree::decode(&sector.mask, total_pixels, true)?;
-                    for (index, pixel) in mask.pixels.iter().enumerate() {
-                        if *pixel == 0 {
-                            continue;
-                        }
-                        let (word, bit) = (index / 64, index % 64);
-                        if covered[word] & (1 << bit) != 0 {
-                            return Err(Error::new(
-                                Check::SectorPartition,
-                                format!(
-                                    "layer {i}: sector {} exposes a pixel another sector already exposes",
-                                    sector.sector_id
-                                ),
-                            ));
-                        }
-                        covered[word] |= 1 << bit;
-                    }
+                if !entry.is_empty() {
+                    slices.push((entry.first_layr, entry.data_offset, end));
                 }
             }
-        } else {
-            let used = ree::validate_stream(data, total_pixels, self.level.is_strict())?;
-            if used != data.len() {
+            if entry.first_lrov != 0 {
+                let is_lrov = self
+                    .dir
+                    .descriptors
+                    .get(entry.first_lrov as usize)
+                    .is_some_and(|d| !d.is_null() && d.chunk_type == Tag::LROV);
+                if !is_lrov {
+                    return Err(Error::new(
+                        Check::LtblFirstLrovInRange,
+                        format!(
+                            "entry {i} names directory index {} for its overrides, which is not \
+                             an LROV chunk",
+                            entry.first_lrov
+                        ),
+                    ));
+                }
+                *references.entry(entry.first_lrov).or_insert(0) += 1;
+            }
+        }
+
+        // Slices of one chunk do not overlap (section 4.10).
+        slices.sort_unstable();
+        for pair in slices.windows(2) {
+            if pair[0].0 == pair[1].0 && pair[1].1 < pair[0].2 {
                 return Err(Error::new(
-                    Check::ReeNoTrailingBytes,
+                    Check::LtblSlicesDisjoint,
                     format!(
-                        "layer {i} stores {} bytes but its stream uses {used}",
-                        data.len()
+                        "two slices of the chunk at directory index {} overlap: {}..{} and \
+                         {}..{}",
+                        pair[0].0, pair[0].1, pair[0].2, pair[1].1, pair[1].2
                     ),
                 ));
+            }
+        }
+
+        // An entry's `0` says that `(layer, sector)` has no overrides. What
+        // contradicts it is an override set nothing applies: an `LROV` chunk no
+        // entry names whose payload no named chunk also carries
+        // (`ltbl.first_lrov_null`). A chunk no entry names whose payload a named
+        // chunk *does* carry contradicts nothing - those values are applied at
+        // the pair that names their twin - so that file is the orphan case below
+        // rather than this one.
+        let mut named_payloads: Vec<Vec<u8>> = Vec::new();
+        let mut unnamed: Vec<usize> = Vec::new();
+        for (index, descriptor) in self.dir.descriptors.iter().enumerate() {
+            if descriptor.is_null() || descriptor.chunk_type != Tag::LROV {
+                continue;
+            }
+            if references.get(&(index as u32)).copied().unwrap_or(0) > 0 {
+                if let Ok(Some(plain)) = self.plaintext(descriptor) {
+                    named_payloads.push(plain);
+                }
+            } else {
+                unnamed.push(index);
+            }
+        }
+        for index in unnamed {
+            let descriptor = &self.dir.descriptors[index];
+            let Ok(Some(plain)) = self.plaintext(descriptor) else {
+                // Sealed and unreadable without a key: this reader cannot tell
+                // whether the payload is applied elsewhere, so it does not claim
+                // the entry's `0` is a lie.
+                continue;
+            };
+            if !named_payloads.contains(&plain) {
+                return Err(Error::new(
+                    Check::LtblFirstLrovNull,
+                    format!(
+                        "the LROV chunk at directory index {index} carries overrides that no entry \
+                         applies, so an entry's first_lrov of 0 does not hold"
+                    ),
+                ));
+            }
+        }
+
+        // Every LROV chunk is referenced by exactly one entry (`lrov.orphan`).
+        for (index, descriptor) in self.dir.descriptors.iter().enumerate() {
+            if descriptor.is_null() || descriptor.chunk_type != Tag::LROV {
+                continue;
+            }
+            match references.get(&(index as u32)).copied().unwrap_or(0) {
+                1 => {}
+                0 => {
+                    return Err(Error::new(
+                        Check::LrovOrphan,
+                        format!(
+                            "the LROV chunk at directory index {index} is referenced by no entry"
+                        ),
+                    ))
+                }
+                n => {
+                    return Err(Error::new(
+                        Check::LrovOrphan,
+                        format!(
+                            "the LROV chunk at directory index {index} is referenced by {n} entries"
+                        ),
+                    ))
+                }
+            }
+        }
+
+        // Every (layer, sector)'s REE stream, one chunk at a time.
+        for (index, _) in &chunks {
+            if output_size
+                .get(*index as usize)
+                .copied()
+                .flatten()
+                .is_none()
+            {
+                continue;
+            }
+            self.with_chunk(*index, dict_bytes, |plain| {
+                for (i, entry) in ltbl.entries.iter().enumerate() {
+                    if entry.first_layr != *index || entry.is_empty() {
+                        continue;
+                    }
+                    let start = entry.data_offset as usize;
+                    let end = start.checked_add(entry.data_size as usize).ok_or_else(|| {
+                        Error::new(Check::LtblOffsetWithinChunk, "the slice range overflows")
+                    })?;
+                    let data = plain.get(start..end).ok_or_else(|| {
+                        Error::new(
+                            Check::LtblOffsetWithinChunk,
+                            format!("entry {i} runs past its chunk's decompressed output"),
+                        )
+                    })?;
+                    self.check_layer_stream(i, data, total_pixels)?;
+                }
+                Ok(())
+            })?;
+        }
+
+        self.check_partition(ltbl, total_pixels, dict_bytes)
+    }
+
+    /// The REE rules for one (layer, sector)'s stored bytes.
+    fn check_layer_stream(&self, i: usize, data: &[u8], total_pixels: u32) -> Result<()> {
+        let used = ree::validate_stream(data, total_pixels, self.level.is_strict())?;
+        if used != data.len() {
+            return Err(Error::new(
+                Check::ReeNoTrailingBytes,
+                format!(
+                    "entry {i} stores {} bytes but its stream uses {used}",
+                    data.len()
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Section 7.3's strict rule that one layer's sectors do not overlap.
+    ///
+    /// A layer's sectors live in different chunks now, so this is a walk over
+    /// layers rather than over one chunk's plaintext: it holds one bitmap, reused
+    /// across layers, plus whatever the chunk cache holds. The rule's other half -
+    /// that the sectors cover every pixel - is what "their union is exactly the
+    /// layer's exposed image" means, and the exposed image need not be every
+    /// pixel, so coverage is not enforced here.
+    fn check_partition(
+        &self,
+        ltbl: &LayerTable,
+        total_pixels: u32,
+        dictionary: Option<&[u8]>,
+    ) -> Result<()> {
+        if !self.level.is_strict() || !self.layer_chunks_readable() {
+            return Ok(());
+        }
+        let mut covered: Vec<u64> = Vec::new();
+        for layer in 0..ltbl.layer_count {
+            let carrying: Vec<&LayerEntry> = ltbl
+                .layer_entries(layer)
+                .iter()
+                .filter(|entry| !entry.is_empty())
+                .collect();
+            if carrying.len() < 2 {
+                continue;
+            }
+            covered.clear();
+            covered.resize((total_pixels as usize).div_ceil(64), 0);
+            for entry in carrying {
+                let data = self.slice_of(entry, dictionary)?;
+                let mask = ree::decode(&data, total_pixels, true)?;
+                for (index, pixel) in mask.pixels.iter().enumerate() {
+                    if *pixel == 0 {
+                        continue;
+                    }
+                    let (word, bit) = (index / 64, index % 64);
+                    if covered[word] & (1 << bit) != 0 {
+                        return Err(Error::new(
+                            Check::SectorPartition,
+                            format!(
+                                "layer {layer}: sector {} exposes a pixel another sector already \
+                                 exposes",
+                                entry.sector_id
+                            ),
+                        ));
+                    }
+                    covered[word] |= 1 << bit;
+                }
             }
         }
         Ok(())
     }
 
-    /// The unsealed bytes of block `k`, or `None` when it is sealed and no key is
-    /// available.
-    fn block_frame(
-        &self,
-        layr: &Layr,
-        stored: &[u8],
-        desc: &ChunkDescriptor,
-        k: usize,
-    ) -> Result<Option<Vec<u8>>> {
-        chunkio::block_frame(layr, stored, desc, k, self.cipher, self.key.as_ref())
+    /// Whether every `LAYR` frame can be read.
+    ///
+    /// A sealed file without a key cannot have its frames opened, and the checks
+    /// that need their content are skipped rather than guessed at.
+    fn layer_chunks_readable(&self) -> bool {
+        self.key.is_some() || self.layr_chunks().iter().all(|(_, d)| !d.is_encrypted())
     }
 
     /// `LHAS`: the Merkle root always, and every leaf in strict mode.
@@ -947,85 +1071,52 @@ impl<'a> Ctx<'a> {
 
     /// Section 11.3's strict rule that each layer hashes to its stored leaf.
     ///
-    /// This is a second pass over the blocks, so that the REE checks keep their
-    /// place in the check order while memory stays at one block: a layer's bytes
-    /// are hashed as its block is decompressed and then released.
+    /// A layer's leaf covers its sectors' slices concatenated in ascending
+    /// `sector_id` (section 4.11), which is what a reader reconstructs. This is a
+    /// second pass over the chunks, so that the REE checks keep their place in the
+    /// check order.
     fn check_leaves(
         &self,
-        layr: &Option<Layr>,
         ltbl: &Option<LayerTable>,
         zdic: &Option<ZstdDictionary>,
         hashes: &LayerHashes,
     ) -> Result<()> {
-        if !self.level.is_strict() {
+        if !self.level.is_strict() || !self.layer_chunks_readable() {
             return Ok(());
         }
-        let (Some(layr), Some(ltbl)) = (layr.as_ref(), ltbl.as_ref()) else {
+        let Some(ltbl) = ltbl.as_ref() else {
             return Ok(());
         };
-        let desc = self.dir.find(Tag::LAYR).expect("presence checked");
-        let stored = self.stored(desc)?;
         let dict_bytes = zdic.as_ref().map(|z| z.dict_bytes.as_slice());
-
-        for (k, block) in layr.blocks.iter().enumerate() {
-            let Some(frame) = self.block_frame(layr, stored, desc, k)? else {
+        for layer in 0..ltbl.layer_count {
+            let Some(stored_leaf) = hashes.layer_hashes.get(layer as usize) else {
                 continue;
             };
-            let plain = chunks::decompress(&frame, block.uncompressed_size, dict_bytes)?;
-            for (i, entry) in ltbl.entries.iter().enumerate() {
-                if entry.block_index as usize != k {
-                    continue;
-                }
-                let Some(stored_leaf) = hashes.layer_hashes.get(i) else {
-                    continue;
-                };
-                // An empty layer stores no bytes, so it hashes the empty slice.
-                // The range is already proven to lie inside the block by
-                // `check_layer_data`; `get` keeps that an explicit dependency
-                // rather than an unchecked slice.
-                let data: &[u8] = if entry.is_empty() {
-                    &[]
-                } else {
-                    let start = entry.data_offset as usize;
-                    plain
-                        .get(start..start + entry.data_size as usize)
-                        .ok_or_else(|| {
-                            Error::new(
-                                Check::LtblOffsetsWithinBlock,
-                                format!("layer {i} runs past its block's decompressed output"),
-                            )
-                        })?
-                };
-                if lhas::leaf_hash(data) != *stored_leaf {
-                    return Err(Error::new(
-                        Check::LhasLeafMatch,
-                        format!("layer {i} does not hash to its stored leaf"),
-                    ));
-                }
+            // An empty layer stores no bytes, so it hashes the empty slice.
+            let data = self.layer_bytes(ltbl.layer_entries(layer), dict_bytes)?;
+            if lhas::leaf_hash(&data) != *stored_leaf {
+                return Err(Error::new(
+                    Check::LhasLeafMatch,
+                    format!("layer {layer} does not hash to its stored leaf"),
+                ));
             }
         }
         Ok(())
     }
 
     /// Section 11.4's final row: every sealed unit's tag must verify.
-    fn check_sealed_units(
-        &self,
-        layr: &Option<Layr>,
-        key: &SessionKey,
-        cipher: Cipher,
-    ) -> Result<()> {
-        for d in self.dir.entries() {
-            if d.chunk_type == Tag::LAYR || d.flags & CHUNK_FLAG_ENCRYPTED == 0 {
+    ///
+    /// A `LAYR` frame is its own unit, bound by its associated data to the
+    /// chunk's directory index, so opening it is what proves that binding.
+    fn check_sealed_units(&self, key: &SessionKey, cipher: Cipher) -> Result<()> {
+        for (index, d) in self.dir.descriptors.iter().enumerate() {
+            if d.is_null() || d.flags & CHUNK_FLAG_ENCRYPTED == 0 {
                 continue;
             }
-            crypto::open(cipher, key, d.chunk_type, 0, self.stored(d)?)?;
-        }
-        if let (Some(layr), Some(d)) = (layr.as_ref(), self.dir.find(Tag::LAYR)) {
-            if d.flags & CHUNK_FLAG_ENCRYPTED != 0 {
-                let stored = self.stored(d)?;
-                for k in 0..layr.blocks.len() {
-                    crypto::open(cipher, key, Tag::LAYR, k as u32, layr.frame(stored, k)?)?;
-                }
+            if d.chunk_type == Tag::LAYR {
+                self.layr_frame(index as u32, d)?;
+            } else {
+                crypto::open(cipher, key, d.chunk_type, 0, self.stored(d)?)?;
             }
         }
         Ok(())
@@ -1135,6 +1226,22 @@ fn check_meta(meta: &Meta) -> Result<()> {
     }
     if let Some(materials) = meta.materials.as_ref() {
         check_materials(materials, Check::MetaMaterialsShape)?;
+        // A sector's material index is bounded against the library the same META
+        // carries; a print with no library has nothing to bound against.
+        for sector in meta.sectors.as_deref().unwrap_or_default() {
+            if let Some(index) = sector.material_index {
+                if index as usize >= materials.len() {
+                    return Err(Error::new(
+                        Check::MetaSectorMaterialIndex,
+                        format!(
+                            "sector {} names material {index}, which the material library does \
+                             not contain",
+                            sector.sector_id
+                        ),
+                    ));
+                }
+            }
+        }
     }
     if let Some(curve) = timing.cure_curve.as_ref() {
         check_cure_curve(curve, Check::MetaCureCurve)?;
@@ -1213,6 +1320,67 @@ fn check_materials(materials: &[Material], check: Check) -> Result<()> {
     Ok(())
 }
 
+/// `META.sectors`: an array of objects, each with a unique `sector_id` >= 1.
+///
+/// Read from the raw JSON so the named check is the *first* failure: an id that
+/// is absent or not an integer cannot deserialize into the entry's field, and the
+/// typed parse would report a generic JSON error instead. The durations inside an
+/// entry are checked here too, under META's own integer rule, because they are
+/// META's fields in the same namespace.
+fn check_sectors_shape(object: &Map<String, Value>) -> Result<()> {
+    let Some(sectors) = object.get("sectors") else {
+        return Ok(());
+    };
+    let Some(entries) = sectors.as_array() else {
+        return Err(Error::new(
+            Check::MetaSectorsShape,
+            "META.sectors is not an array",
+        ));
+    };
+    let mut seen: Vec<u64> = Vec::with_capacity(entries.len());
+    for (i, entry) in entries.iter().enumerate() {
+        let Some(entry) = entry.as_object() else {
+            return Err(Error::new(
+                Check::MetaSectorsShape,
+                format!("META.sectors[{i}] is not an object"),
+            ));
+        };
+        let Some(id) = entry.get("sector_id").and_then(Value::as_u64) else {
+            return Err(Error::new(
+                Check::MetaSectorsShape,
+                format!("META.sectors[{i}] carries no integer sector_id"),
+            ));
+        };
+        if id == 0 {
+            return Err(Error::new(
+                Check::MetaSectorsShape,
+                format!(
+                    "META.sectors[{i}] uses sector_id 0, which names the implicit primary sector"
+                ),
+            ));
+        }
+        if id > u64::from(u32::MAX) {
+            return Err(Error::new(
+                Check::MetaSectorsShape,
+                format!("META.sectors[{i}] uses sector_id {id}, which does not fit a u32"),
+            ));
+        }
+        if seen.contains(&id) {
+            return Err(Error::new(
+                Check::MetaSectorsShape,
+                format!("sector_id {id} appears twice"),
+            ));
+        }
+        seen.push(id);
+        check_integer_durations(
+            entry,
+            TIME_MS_FIELDS.iter().copied(),
+            Check::MetaTimeInteger,
+        )?;
+    }
+    Ok(())
+}
+
 /// A cure curve must be physically meaningful, and a NaN is not a number the
 /// Beer-Lambert model can use, so each bound rejects it explicitly rather than
 /// relying on how a negated comparison treats an incomparable value.
@@ -1245,89 +1413,6 @@ fn is_uuid(text: &str) -> bool {
         }
     }
     true
-}
-
-/// `SECT` rules from section 11.2.
-fn check_sects(
-    sects: &[Sect],
-    meta_materials: Option<&[Material]>,
-    profile_materials: Option<&[Material]>,
-) -> Result<()> {
-    for (i, sect) in sects.iter().enumerate() {
-        if sect.sector_id == 0 {
-            return Err(Error::new(
-                Check::SectSectorIdReserved,
-                "SECT uses sector_id 0, which is reserved for the implicit sector",
-            ));
-        }
-        if sects[..i].iter().any(|s| s.sector_id == sect.sector_id) {
-            return Err(Error::new(
-                Check::SectSectorIdUnique,
-                format!("sector_id {} appears twice", sect.sector_id),
-            ));
-        }
-    }
-    for sect in sects {
-        if let Some(index) = sect.material_index {
-            let known = [meta_materials, profile_materials]
-                .into_iter()
-                .flatten()
-                .any(|library| index < library.len());
-            if !known {
-                return Err(Error::new(
-                    Check::SectMaterialIndex,
-                    format!(
-                        "sector {} names material {index}, which no library contains",
-                        sect.sector_id
-                    ),
-                ));
-            }
-        }
-    }
-    Ok(())
-}
-
-/// `LROV` rules from section 11.2.
-fn check_lrov(lrov: &crate::json::Lrov, total_layers: u32, sects: &[Sect]) -> Result<()> {
-    for (i, entry) in lrov.overrides.iter().enumerate() {
-        if entry.layer.is_some() == entry.layer_range.is_some() {
-            return Err(Error::new(
-                Check::LrovEntryForm,
-                format!("override {i} must carry exactly one of layer or layer_range"),
-            ));
-        }
-        if let Some(range) = entry.layer_range {
-            if range[1] < range[0] {
-                return Err(Error::new(
-                    Check::LrovLayerRangeOrder,
-                    format!("override {i} has layer_range [{}, {}]", range[0], range[1]),
-                ));
-            }
-            if range[1] >= total_layers {
-                return Err(Error::new(
-                    Check::LrovLayerIndexRange,
-                    format!("override {i} covers layer {} of {total_layers}", range[1]),
-                ));
-            }
-        }
-        if let Some(layer) = entry.layer {
-            if layer >= total_layers {
-                return Err(Error::new(
-                    Check::LrovLayerIndexRange,
-                    format!("override {i} names layer {layer} of {total_layers}"),
-                ));
-            }
-        }
-        if let Some(sector_id) = entry.sector_id {
-            if sector_id != 0 && !sects.iter().any(|s| s.sector_id == sector_id) {
-                return Err(Error::new(
-                    Check::LrovSectorIdDefined,
-                    format!("override {i} names undefined sector {sector_id}"),
-                ));
-            }
-        }
-    }
-    Ok(())
 }
 
 /// `EXTD` rules from sections 11.2 and 4.13.

@@ -50,10 +50,8 @@ pub enum Check {
     PresenceLayr,
     /// The `ENCRYPTED` flag is set but `AUTH` is absent, or vice versa.
     PresenceAuth,
-    /// Exactly one `ZDIC` is required (or forbidden) by the block frames.
+    /// Exactly one `ZDIC` is required (or forbidden) by the `LAYR` frames.
     PresenceZdic,
-    /// `MULTI_SECTOR` is set but no `SECT` chunk is present.
-    PresenceSect,
 
     // -- group: hdr (section 4.1) ------------------------------------------
     /// `hdr_version` is not recognized.
@@ -68,6 +66,9 @@ pub enum Check {
     HdrBuildDims,
     /// `display_width_px * display_height_px == 0`.
     HdrDisplayPixels,
+    /// `MULTI_SECTOR` is set without a layer carrying more than one sector, or
+    /// clear while one does.
+    HdrMultiSectorFlag,
     /// A physical dimension is not an integer multiple of the display dimension.
     HdrPhysicalMultiple,
 
@@ -94,20 +95,14 @@ pub enum Check {
     MetaLayerHeight,
     /// `materials`, when present, is not a non-empty array of named entries.
     MetaMaterialsShape,
+    /// `sectors`, when present, is not an array of objects with unique ids >= 1.
+    MetaSectorsShape,
+    /// A sector's `material_index` addresses no non-empty `materials` array.
+    MetaSectorMaterialIndex,
     /// A cure curve has a non-positive `dp_um`/`ec_mj_cm2` or a negative `e0_mj_cm2`.
     MetaCureCurve,
     /// A temperature is outside `[0.0, 120.0]`.
     MetaTemperatureRange,
-
-    // -- group: sect (section 4.5) -----------------------------------------
-    /// A SECT duration is not an integer number of milliseconds.
-    SectTimeInteger,
-    /// A SECT chunk uses `sector_id < 1`.
-    SectSectorIdReserved,
-    /// Two SECT chunks carry the same `sector_id`.
-    SectSectorIdUnique,
-    /// `material_index` does not address an existing, non-empty materials array.
-    SectMaterialIndex,
 
     // -- group: prof (section 4.3) -----------------------------------------
     /// `profile_type` is not one of `material`, `printer`, `combined`.
@@ -128,16 +123,12 @@ pub enum Check {
     ProfMaterialsShape,
 
     // -- group: lrov (section 4.6) -----------------------------------------
-    /// An entry's duration is not an integer number of milliseconds.
+    /// The payload is not a JSON object.
+    LrovJson,
+    /// An overridden duration is not an integer number of milliseconds.
     LrovTimeInteger,
-    /// An entry carries both `layer` and `layer_range`, or neither.
-    LrovEntryForm,
-    /// A layer index is outside `[0, total_layers)`.
-    LrovLayerIndexRange,
-    /// A `layer_range` ends before it begins.
-    LrovLayerRangeOrder,
-    /// `sector_id` is neither 0 nor a defined sector.
-    LrovSectorIdDefined,
+    /// An `LROV` chunk is referenced by no entry, or by more than one.
+    LrovOrphan,
 
     // -- group: prev (section 4.7) -----------------------------------------
     /// A reserved flag bit is set, or the role is outside 0-3.
@@ -164,47 +155,51 @@ pub enum Check {
     LtblVersion,
     /// `layer_count` disagrees with `HDR.total_layers`.
     LtblLayerCount,
-    /// `entry_size < 20`, or the entries do not fit the chunk.
+    /// `entry_size < 28`, or the entries do not fit the chunk.
     LtblEntrySize,
-    /// `block_index >= LAYR.block_count` (or no LAYR was parsed).
-    LtblBlockIndexInRange,
-    /// A read or an override names a layer the table does not describe.
+    /// The entries do not account for every layer, or `entry_count` disagrees
+    /// with the sum of `1 + additional_sector_count` over each layer's first
+    /// entry, or a non-first entry carries a non-zero count.
+    LtblEntryCount,
+    /// A read or a table entry names a layer the table does not describe.
     LtblLayerIndexRange,
-    /// `block_index` is not non-decreasing across layers.
-    LtblBlockIndexOrdered,
-    /// `data_offset + data_size` exceeds the block's decompressed size.
-    LtblOffsetsWithinBlock,
-    /// An empty layer carries a non-zero `data_size`.
-    LtblEmptyLayerNoBytes,
-    /// The in-band `sector_count` disagrees with the `LTBL` entry.
-    LtblSectorCountMatch,
+    /// Sector ids do not ascend within a layer.
+    LtblSectorIdsAscending,
+    /// The same sector id appears twice on one layer.
+    LtblSectorIdUnique,
+    /// A layer's first entry is not sector 0's.
+    LtblFirstEntryIsSectorZero,
+    /// `first_layr` is not the directory index of a `LAYR` chunk.
+    LtblFirstLayrInRange,
+    /// An `LROV` chunk no entry names carries a payload no named chunk carries.
+    LtblFirstLrovNull,
+    /// `first_lrov` is neither `0` nor the directory index of an `LROV` chunk.
+    LtblFirstLrovInRange,
+    /// `data_offset + data_size` exceeds the `LAYR` chunk's decompressed output.
+    LtblOffsetWithinChunk,
+    /// Two slices of one `LAYR` chunk overlap.
+    LtblSlicesDisjoint,
 
     // -- group: layr (section 4.10) ----------------------------------------
     /// `layr_version` is not recognized.
     LayrVersion,
-    /// `block_count` is 0 or exceeds `HDR.total_layers`.
-    LayrBlockCount,
-    /// `block_table_entry_size < 24`, or the table does not fit.
-    LayrBlockTableEntrySize,
-    /// Block frames are not contiguous and ordered.
-    LayrBlockTableContiguous,
-    /// The last block frame reaches past the chunk payload.
-    LayrBlockRegionBounds,
-    /// A block index in `0..block_count` is referenced by no layer.
-    LayrBlockReferenced,
-    /// A block did not decompress to exactly its `uncompressed_size`.
-    LayrBlockDecompressedSize,
-    /// A block's `uncompressed_size` exceeds the bound derived from its layers.
+    /// A frame carries no content size, so a reader cannot size its output.
+    LayrContentSizePresent,
+    /// A frame did not decompress to the size it declares.
+    LayrFrameDecompressedSize,
+    /// A frame's declared output exceeds the bound derived from its slices.
     LayrAllocationBound,
-    /// A block frame's dictionary ID disagrees with `ZDIC`.
+    /// A frame's dictionary ID disagrees with `ZDIC`.
     LayrDictIdMatch,
+    /// A frame reports no dictionary while the file carries `ZDIC`.
+    LayrDictIdAbsent,
 
     // -- group: zdic (section 4.9) -----------------------------------------
     /// `zdic_version` is not recognized.
     ZdicVersion,
     /// `dict_size` exceeds `ZDIC_DICTSIZE_MAX`, or the bytes are missing.
     ZdicDictSize,
-    /// `dict_id` disagrees with the block frames.
+    /// `dict_id` disagrees with the `LAYR` frames.
     ZdicDictIdMatch,
     /// More than one non-null `ZDIC` chunk is present.
     ZdicSingle,
@@ -248,11 +243,7 @@ pub enum Check {
     ReeDataSize,
 
     // -- group: sector (section 7) -----------------------------------------
-    /// The in-band sector framing disagrees with `LTBL.sector_count`.
-    SectorCountMatch,
-    /// A sector tag is malformed or a sector repeats.
-    SectorTags,
-    /// Sector masks overlap or do not sum to `total_pixels` (strict mode).
+    /// Sector masks of one layer overlap (strict mode).
     SectorPartition,
 
     // -- group: crypt (section 9) ------------------------------------------
@@ -268,6 +259,8 @@ pub enum Check {
     CryptChunkFlags,
     /// An AEAD tag did not verify.
     CryptTagVerify,
+    /// A `LAYR` frame's associated data did not bind it to its directory index.
+    CryptUnitIndexBinding,
     /// A wrapped session key did not unwrap.
     CryptKeyUnwrap,
     /// A machine recipient entry is malformed.
@@ -301,13 +294,13 @@ impl Check {
             PresenceLayr => "presence.layr",
             PresenceAuth => "presence.auth",
             PresenceZdic => "presence.zdic",
-            PresenceSect => "presence.sect",
             HdrVersion => "hdr.version",
             HdrFrame => "hdr.frame",
             HdrTotalLayers => "hdr.total_layers",
             HdrLayerHeight => "hdr.layer_height",
             HdrBuildDims => "hdr.build_dims",
             HdrDisplayPixels => "hdr.display_pixels",
+            HdrMultiSectorFlag => "hdr.multi_sector_flag",
             HdrPhysicalMultiple => "hdr.physical_multiple",
             AuthVersion => "auth.version",
             AuthCipherKnown => "auth.cipher_known",
@@ -319,12 +312,10 @@ impl Check {
             MetaExposure => "meta.exposure",
             MetaLayerHeight => "meta.layer_height",
             MetaMaterialsShape => "meta.materials_shape",
+            MetaSectorsShape => "meta.sectors_shape",
+            MetaSectorMaterialIndex => "meta.sector_material_index",
             MetaCureCurve => "meta.cure_curve",
             MetaTemperatureRange => "meta.temperature_range",
-            SectSectorIdReserved => "sect.sector_id_reserved",
-            SectTimeInteger => "sect.time_integer",
-            SectSectorIdUnique => "sect.sector_id_unique",
-            SectMaterialIndex => "sect.material_index",
             ProfProfileType => "prof.profile_type",
             ProfProfileIdentity => "prof.profile_identity",
             ProfSettingsTimeInteger => "prof.settings_time_integer",
@@ -333,11 +324,9 @@ impl Check {
             ProfCureCurve => "prof.cure_curve",
             ProfProfileUuid => "prof.profile_uuid",
             ProfMaterialsShape => "prof.materials_shape",
-            LrovEntryForm => "lrov.entry_form",
+            LrovJson => "lrov.json",
             LrovTimeInteger => "lrov.time_integer",
-            LrovLayerIndexRange => "lrov.layer_index_range",
-            LrovLayerRangeOrder => "lrov.layer_range_order",
-            LrovSectorIdDefined => "lrov.sector_id_defined",
+            LrovOrphan => "lrov.orphan",
             PrevFlags => "prev.flags",
             PrevPngSignature => "prev.png_signature",
             VoxlSignature => "voxl.signature",
@@ -348,21 +337,22 @@ impl Check {
             LtblVersion => "ltbl.version",
             LtblLayerCount => "ltbl.layer_count",
             LtblEntrySize => "ltbl.entry_size",
-            LtblBlockIndexInRange => "ltbl.block_index_in_range",
+            LtblEntryCount => "ltbl.entry_count",
             LtblLayerIndexRange => "ltbl.layer_index_range",
-            LtblBlockIndexOrdered => "ltbl.block_index_ordered",
-            LtblOffsetsWithinBlock => "ltbl.offsets_within_block",
-            LtblEmptyLayerNoBytes => "ltbl.empty_layer_no_bytes",
-            LtblSectorCountMatch => "ltbl.sector_count_match",
+            LtblSectorIdsAscending => "ltbl.sector_ids_ascending",
+            LtblSectorIdUnique => "ltbl.sector_id_unique",
+            LtblFirstEntryIsSectorZero => "ltbl.first_entry_is_sector_zero",
+            LtblFirstLayrInRange => "ltbl.first_layr_in_range",
+            LtblFirstLrovNull => "ltbl.first_lrov_null",
+            LtblFirstLrovInRange => "ltbl.first_lrov_in_range",
+            LtblOffsetWithinChunk => "ltbl.offset_within_chunk",
+            LtblSlicesDisjoint => "ltbl.slices_disjoint",
             LayrVersion => "layr.version",
-            LayrBlockCount => "layr.block_count",
-            LayrBlockTableEntrySize => "layr.block_table_entry_size",
-            LayrBlockTableContiguous => "layr.block_table_contiguous",
-            LayrBlockRegionBounds => "layr.block_region_bounds",
-            LayrBlockReferenced => "layr.block_referenced",
-            LayrBlockDecompressedSize => "layr.block_decompressed_size",
+            LayrContentSizePresent => "layr.content_size_present",
+            LayrFrameDecompressedSize => "layr.frame_decompressed_size",
             LayrAllocationBound => "layr.allocation_bound",
             LayrDictIdMatch => "layr.dict_id_match",
+            LayrDictIdAbsent => "layr.dict_id_absent",
             ZdicVersion => "zdic.version",
             ZdicDictSize => "zdic.dict_size",
             ZdicDictIdMatch => "zdic.dict_id_match",
@@ -384,8 +374,6 @@ impl Check {
             ReeEndPositions => "ree.end_positions",
             ReeNoTrailingBytes => "ree.no_trailing_bytes",
             ReeDataSize => "ree.data_size",
-            SectorCountMatch => "sector.count_match",
-            SectorTags => "sector.tags",
             SectorPartition => "sector.partition",
             CryptModeEmpty => "crypt.mode_empty",
             CryptPasswordSectionLen => "crypt.password_section_len",
@@ -393,6 +381,7 @@ impl Check {
             CryptArgon2Budget => "crypt.argon2_budget",
             CryptChunkFlags => "crypt.chunk_flags",
             CryptTagVerify => "crypt.tag_verify",
+            CryptUnitIndexBinding => "crypt.unit_index_binding",
             CryptKeyUnwrap => "crypt.key_unwrap",
             CryptRecipientEntry => "crypt.recipient_entry",
             CryptLowOrderPoint => "crypt.low_order_point",

@@ -10,9 +10,8 @@
 //!
 //! - [`container`] - the file header, chunk directory and trailer.
 //! - [`chunks`] - one codec per chunk type.
-//! - [`json`] - the typed `META`, `PROF`, `SECT` and `LROV` models.
+//! - [`json`] - the typed `META`, `PROF` and `LROV` models.
 //! - [`ree`] - run-end encoded layer masks: binary, grayscale and split.
-//! - [`sectors`] - the multi-sector per-layer framing.
 //! - [`timing`] - the per-layer settings pipeline of section 8.
 //! - [`crypto`] - `AUTH`, the AEAD units, Argon2id and X25519 key wrapping.
 //! - [`validate`] - the checks of section 11, named as the corpus names them.
@@ -34,11 +33,12 @@
 //! # Two tiers
 //!
 //! [`reader::LumenFile`] decodes what a caller asks for and nothing else: a
-//! layer is fetched by index, which decompresses only the block that holds it.
-//! A firmware reader can open the file, read `META` and the layer table, and
-//! stream layers through a fixed-size buffer without ever materializing the
-//! whole file. A slicer can instead use [`writer::Encoder`], which trains the
-//! zstd dictionary, frames the blocks and assembles the directory.
+//! layer is fetched by index, which decompresses only the `LAYR` chunk that
+//! holds it. A firmware reader can open the file, read `META` and the layer
+//! table, and stream layers through a fixed-size buffer without ever
+//! materializing the whole file. A slicer can instead use [`writer::Encoder`],
+//! which trains the zstd dictionary, frames the chunks and assembles the
+//! directory.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -53,7 +53,6 @@ pub mod io;
 pub mod json;
 pub mod reader;
 pub mod ree;
-pub mod sectors;
 pub mod timing;
 pub mod validate;
 pub mod varint;
@@ -62,7 +61,7 @@ pub mod writer;
 pub use check::Check;
 pub use container::{ChunkDescriptor, ChunkType, Directory, FileHeader};
 pub use error::{Error, Result};
-pub use json::{Lrov, LrovEntry, Material, Meta, Profile, Sect, Timing};
+pub use json::{Material, Meta, Profile, Sector, Timing};
 pub use reader::LumenFile;
 pub use ree::{DecodedLayer, EncodeMode};
 pub use validate::{Level, Validator};

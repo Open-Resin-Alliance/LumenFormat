@@ -39,7 +39,8 @@ pub struct DecodedLayer {
 }
 
 impl DecodedLayer {
-    /// All-black layer, carrying no stream: `LTBL.sector_count == 0`.
+    /// All-black layer, carrying no stream: every `LTBL` entry of the layer has
+    /// `data_size == 0`.
     pub fn empty(total_pixels: u32) -> DecodedLayer {
         DecodedLayer {
             pixels: vec![0u8; total_pixels as usize],

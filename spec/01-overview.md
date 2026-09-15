@@ -60,12 +60,15 @@ Alliance:
 
 4. **Multi-material from the ground up.** Sectors (exposure groups) are a
    first-class concept, not an afterthought. Each layer can carry multiple
-   independent masks, each with its own resin, exposure, and motion profile -
-   ready for multi-vat hardware.
+   independent masks, each with its own exposure and motion profile and, opting in,
+   its own resin - ready for multi-vat hardware. A sector carries no material
+   by default, so a single-material printer reads one sector and is not asked to
+   understand the rest.
 
 5. **Per-layer settings.** Any timing parameter can be overridden for any layer
-   or range of layers. The bottom, transition and normal ranges still describe the
-   common case ([§8](11-layer-timing.md#8-per-layer-settings-model)); per-layer overrides extend
+   or range of layers - and per sector, since two sectors of one layer are separate
+   exposures. The bottom, transition and normal ranges still describe the
+   common case ([§8](11-layer-timing.md#8-per-layer-settings-model)); the overrides extend
    that model rather than replacing it.
 
 6. **Open and transparent.** No obfuscation and no mandatory encryption. Optional

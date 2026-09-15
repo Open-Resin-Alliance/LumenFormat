@@ -10,10 +10,10 @@
 |-------|-------|-------------|
 | File | `header.version` | Breaking changes to the binary container. |
 | HDR chunk | `hdr_version` | New fields added to HDR; compatible across file versions. |
-| META chunk | `meta_version` | Additive changes to the META JSON schema. `SECT` and `LROV` payloads share this schema version. |
-| LTBL chunk | `table_version` | Changes to layer entry layout. |
+| META chunk | `meta_version` | Additive changes to the META JSON schema. `LROV` and `PROF.settings` carry META's field names and units. |
+| LTBL chunk | `table_version` | Changes to the layer table's header or entry layout. |
 | AUTH chunk | `auth_version` | Changes to encryption metadata layout. |
-| LAYR chunk | `layr_version` | Changes to the block framing layout. |
+| LAYR chunk | `layr_version` | Changes to the chunk's container or frame layout. |
 | ZDIC chunk | `zdic_version` | Changes to the dictionary chunk layout. |
 | EXTD chunk | `ext_version` | Per-extension versioning. |
 
@@ -21,6 +21,12 @@
 v1.0 is carried by `header.version = 1`. A revision that changes the container
 layout bumps `header.version`; one that only adds fields bumps that field's own
 sub-version.
+
+This revision rearranges the container - a sector's data and overrides have their own
+chunks, and the layer table indexes the chunk directory directly - and still carries
+`header.version = 1`, because v1.0 is a draft: a draft's layout is still being settled, and
+the number moves when a revision that fixes the layout is published, not on every edit
+before that ([§10.3](#103-change-control)).
 
 ### 10.2 Forward Compatibility Mechanisms
 
@@ -30,7 +36,8 @@ sub-version.
    the file is refused - `LROV` ([§4.6](05-print-control.md#46-lrov---layer-override-chunk)),
    and an unimplemented `critical` extension (item 6 below).
 2. **Unknown chunk flags:** Ignore within known types.
-3. **Unknown JSON keys:** Ignore in META, SECT, LROV payloads.
+3. **Unknown JSON keys:** Ignore in the JSON payloads this specification defines - META,
+   `PROF` and `LROV`. An added key is how an additive change reaches a reader that predates it.
 4. **New HDR fields:** Parse the layout for the `hdr_version` present. An unrecognized
    `hdr_version` is rejected - forward striding is impossible when the new fields'
    widths are unknown.

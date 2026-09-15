@@ -58,17 +58,15 @@ impl ChunkType {
     pub const PROF: ChunkType = ChunkType(*b"PROF");
     /// `AUTH` - encryption metadata.
     pub const AUTH: ChunkType = ChunkType(*b"AUTH");
-    /// `SECT` - sector (material/exposure group) definition.
-    pub const SECT: ChunkType = ChunkType(*b"SECT");
-    /// `LROV` - per-layer timing overrides.
+    /// `LROV` - one (layer, sector)'s timing overrides.
     pub const LROV: ChunkType = ChunkType(*b"LROV");
     /// `PREV` - PNG preview image.
     pub const PREV: ChunkType = ChunkType(*b"PREV");
-    /// `LTBL` - layer table, mapping layers to blocks.
+    /// `LTBL` - layer table, mapping (layer, sector) pairs to chunks.
     pub const LTBL: ChunkType = ChunkType(*b"LTBL");
-    /// `ZDIC` - zstd dictionary shared by the layer block frames.
+    /// `ZDIC` - zstd dictionary shared by the `LAYR` frames.
     pub const ZDIC: ChunkType = ChunkType(*b"ZDIC");
-    /// `LAYR` - layer mask data as independent zstd block frames.
+    /// `LAYR` - one sector's mask data for one layer group, as a zstd frame.
     pub const LAYR: ChunkType = ChunkType(*b"LAYR");
     /// `LHAS` - per-layer hashes and Merkle root.
     pub const LHAS: ChunkType = ChunkType(*b"LHAS");
@@ -78,12 +76,11 @@ impl ChunkType {
     pub const EXTD: ChunkType = ChunkType(*b"EXTD");
 
     /// Every chunk type this specification defines.
-    pub const ALL: [ChunkType; 13] = [
+    pub const ALL: [ChunkType; 12] = [
         ChunkType::HDR,
         ChunkType::META,
         ChunkType::PROF,
         ChunkType::AUTH,
-        ChunkType::SECT,
         ChunkType::LROV,
         ChunkType::PREV,
         ChunkType::LTBL,
@@ -107,12 +104,15 @@ impl ChunkType {
     /// Whether the payload carries a zstd frame, per the normative table in
     /// [`spec/09-compression.md`] section 6.3.
     ///
-    /// `EXTD` is excluded: its compression is per-extension, and the frame is
-    /// opaque to this crate, so the caller decides.
+    /// `LAYR` is excluded, and not because it is uncompressed: its payload is a
+    /// version field plus a frame the container does not itself decompress, in
+    /// the same way `EXTD`'s compression is per-extension and `PREV`'s is none.
+    /// `EXTD` is excluded too: the frame is opaque to this crate, so the caller
+    /// decides.
     pub fn is_compressed(&self) -> bool {
         matches!(
             *self,
-            ChunkType::META | ChunkType::PROF | ChunkType::SECT | ChunkType::LROV | ChunkType::VOXL
+            ChunkType::META | ChunkType::PROF | ChunkType::LROV | ChunkType::VOXL
         )
     }
 
@@ -269,6 +269,11 @@ impl ChunkDescriptor {
 
     /// The on-disk byte length of this chunk: `size_uncompressed` for a raw
     /// payload, `size_compressed` when the chunk is compressed or sealed.
+    ///
+    /// A `LAYR` chunk reads both ways round without ambiguity: its
+    /// `size_uncompressed` is the container's byte length - the version field
+    /// plus the frame - and `size_compressed` is zero while that frame is in the
+    /// clear and the same total once it is sealed.
     pub fn stored_len(&self) -> u64 {
         if self.size_compressed == 0 {
             self.size_uncompressed

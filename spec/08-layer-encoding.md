@@ -14,7 +14,7 @@ anti-aliased prints, a novel **split encoding** separates the bulk binary geomet
 from the sparse edge pixels, enabling zstd to compress each at its optimal rate.
 
 LUMEN supports three encoding strategies per layer, selected by a 1-byte tag
-prepended to each layer's mask data within its block's decompressed output:
+prepended to each layer's mask data within its `LAYR` chunk's decompressed output:
 
 | Tag | Encoding | Use case |
 |-----|----------|----------|
@@ -94,7 +94,7 @@ better cross-layer patterns.
 
 - `run_count == 0`: decodes to all black. `first_value` is 0x00, `run_count` is
   varint `0`. Decoders MUST accept this form, but it is **not canonical**: an
-  all-black layer MUST be stored as an empty layer (`LTBL.sector_count == 0`,
+  all-black `(layer, sector)` MUST be stored as an empty slice (`LTBL` entry
   `data_size == 0`, no bytes). Encoders MUST NOT emit `run_count == 0`; strict-mode
   validators reject it.
 - `run_count == 1`: one solid run to total_pixels. `first_value` gives the color, `run_count` is varint `1`. Zero stored lengths.
@@ -189,8 +189,8 @@ loop uniform.
 **Canonical form.** Every run length is `>= 1` (so the end positions are strictly
 increasing), the final end position equals `total_pixels`, and no two adjacent runs carry
 the same value - they would be a single run. `run_count == 0` decodes to all black but is
-**not canonical**: an all-black layer uses the empty-layer form (`LTBL.sector_count == 0`,
-`data_size == 0`). A layer whose pixels are all `0x00` or `0xFF` MUST use binary REE
+**not canonical**: an all-black `(layer, sector)` uses the empty-slice form (`LTBL.entry
+data_size == 0`). A layer whose pixels are all `0x00` or `0xFF` MUST use binary REE
 instead ([§5.6](#56-canonical-encoding)).
 
 **Grayscale REE is NOT delta-encoded** before zstd (the u8 values break the
@@ -282,7 +282,7 @@ defines the canonical form for each tag, and the one choice left to the encoder.
 
 **Tag choice.**
 
-- A layer with no exposed pixels uses the empty-layer form (`LTBL.sector_count == 0`,
+- A `(layer, sector)` with no exposed pixels uses the empty-slice form (`LTBL` entry
   `data_size == 0`); no tag is stored.
 - A layer whose pixels are all `0x00` or `0xFF` MUST use tag `0x00` (binary REE).
 - Otherwise the layer MUST use tag `0x01` (grayscale REE) or tag `0x02` (split REE).
@@ -304,7 +304,7 @@ therefore uniquely determined by the pixel content and cannot be padded or reord
 
 **Reproducibility scope.**
 
-- Deterministic: the empty-layer form and tag `0x00` fix the bytes for their content.
+- Deterministic: the empty-slice form and tag `0x00` fix the bytes for their content.
 - Encoder's choice: tag `0x01` versus tag `0x02`. Picking the smaller requires encoding
   both, which is a cost/ratio trade-off rather than a correctness one. An encoder that
   evaluates both SHOULD break ties in favour of tag `0x01`.

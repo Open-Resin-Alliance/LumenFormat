@@ -12,13 +12,13 @@
 | Human-readable params | No | No | Yes (unzip) | Yes | Yes (`strings` + decompress) |
 | Layer encoding | Variable-length RLE, XOR-obfuscated | 0x55-magic RLE, checksum | PW0 RLE (4-bit quant) | PNG (deflate) | REE + zstd with dictionary |
 | Compression | RLE only | RLE only | Deflate per-entry | Deflate per PNG | zstd cross-layer with dictionary |
-| Cross-layer compression | No | No | No | No | Yes (shared-dictionary block frames) |
+| Cross-layer compression | No | No | No | No | Yes (shared-dictionary frames, one per `(sector, layer group)`) |
 | Encryption | AES-256-CBC (optional, v5enc) | No | No | No | Optional AEAD (AES-256-GCM / ChaCha20-Poly1305) |
 | Encryption purpose | Vendor file binding (enforced by the printer) | - | - | - | User security (opt-in) |
-| Per-layer overrides | No (bottom/normal/transition) | No | No | No | Yes (LROV, arbitrary overrides) |
+| Per-layer overrides | No (bottom/normal/transition) | No | No | No | Yes (LROV, arbitrary overrides of one `(layer, sector)`) |
 | Embedded print profile | No | No | No | No | Yes (PROF chunk - importable by Odyssey firmware) |
 | Embedded source scene | No | No | No | No | Yes (VOXL chunk - round-trip re-editable) |
-| Multi-material | No | No | No | No | Yes (SECT + per-layer sector masks) |
+| Multi-material | No | No | No | No | Yes (per-sector layer chunks, and per-sector timing and material in META) |
 | Extensibility | No (must reverse-engineer) | No | No | No | Yes (EXTD chunks, vendor IDs) |
 | Max resolution | ~16K (32-bit offsets) | Fixed header limit | Unlimited (ZIP64) | Unlimited | Unlimited (64-bit offsets) |
 | Preview images | 2× RGB15 RLE (fixed size) | 2× PNG in header (fixed size) | 3× PNG in ZIP | 1× PNG in ZIP | 1+N PNG in PREV chunks (flexible) |

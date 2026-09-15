@@ -1,12 +1,13 @@
 //! The per-layer settings pipeline ([`spec/11-layer-timing.md`] section 8).
 //!
-//! Base values come from `META`, a `SECT` chunk overrides them per sector, the
-//! bottom and transition ranges blend bottom-prefixed values into normal ones,
-//! and the last matching `LROV` entry wins per `(layer, sector)` pair.
+//! Base values come from `META`, a `META.sectors` entry overrides them per
+//! sector, the bottom and transition ranges blend bottom-prefixed values into
+//! normal ones, and the `(layer, sector)`'s own `LROV` payload - at most one, so
+//! there is nothing to fold in order - replaces what it carries.
 
 use crate::check::Check;
 use crate::error::{Error, Result};
-use crate::json::{CureCurve, Lrov, LrovEntry, Meta, Sect, Timing, REQUIRED_META_FIELDS};
+use crate::json::{CureCurve, Meta, Sector, Timing, REQUIRED_META_FIELDS};
 
 /// Light PWM when META carries none (`spec/03-chunks.md` section 4.2).
 const DEFAULT_LIGHT_PWM: u32 = 255;
@@ -63,12 +64,13 @@ macro_rules! pair {
 
 /// Resolve one layer's timing.
 ///
-/// `sector` is the `SECT` definition for `sector_id`, when one exists; sector 0
-/// has no definition by construction.
+/// `sector` is the `META.sectors` entry for `sector_id`, when the print defines
+/// one; sector 0 has none by construction. `overrides` is that `(layer,
+/// sector)`'s `LROV` payload, when it has one.
 pub fn resolve(
     meta: &Meta,
-    sector: Option<&Sect>,
-    lrov: Option<&Lrov>,
+    sector: Option<&Sector>,
+    overrides: Option<&Timing>,
     layer: u32,
     sector_id: u32,
 ) -> Result<Resolved> {
@@ -89,8 +91,8 @@ pub fn resolve(
     }
 
     let timing = &meta.timing;
-    // A `SECT` definition describes a non-zero sector, so it only speaks for
-    // one; sector 0 has none by construction.
+    // A `META.sectors` entry describes a non-zero sector, so it only speaks
+    // for one; sector 0 has none by construction.
     let sect = match sector_id {
         0 => None,
         _ => sector.map(|definition| &definition.timing),
@@ -234,14 +236,11 @@ pub fn resolve(
         is_transition: matches!(stage, Stage::Transition { .. }),
     };
 
-    // Every matching entry folds onto the values in file order, so the last one
-    // wins per field while fields it leaves out keep what earlier entries set.
-    if let Some(lrov) = lrov {
-        for entry in &lrov.overrides {
-            if matches_entry(entry, layer, sector_id) {
-                fold_entry(&mut resolved, &entry.timing);
-            }
-        }
+    // A (layer, sector) has one override set or none, so this is a single
+    // replacement rather than a fold: a field the payload leaves out keeps what
+    // the pipeline resolved for it.
+    if let Some(overrides) = overrides {
+        fold_entry(&mut resolved, overrides);
     }
 
     Ok(resolved)
@@ -360,27 +359,12 @@ fn blend_u32(field: Blend<u32>, stage: Stage) -> u32 {
     }
 }
 
-/// Whether an `LROV` entry targets `(layer, sector_id)`.
+/// Replace the fields one `(layer, sector)`'s `LROV` payload carries.
 ///
-/// An entry matches by single layer or by inclusive range, and one without a
-/// `sector_id` targets every sector.
-fn matches_entry(entry: &LrovEntry, layer: u32, sector_id: u32) -> bool {
-    if entry.sector_id.is_some_and(|target| target != sector_id) {
-        return false;
-    }
-    let by_layer = entry.layer == Some(layer);
-    let by_range = entry
-        .layer_range
-        .is_some_and(|[start, end]| start <= layer && layer <= end);
-    by_layer || by_range
-}
-
-/// Fold one matching `LROV` entry onto the values resolved for its layer.
-///
-/// An entry replaces only the fields it carries, so a later entry that leaves a
-/// field out never clears an earlier entry's value for it. When an entry names
-/// a field in both its normal and its `bottom_` form, the normal one wins: an
-/// `LROV` entry overrides the layer's single resolved value.
+/// The payload replaces only the fields it names, so an absent field keeps the
+/// value the pipeline resolved for it. When it names a field in both its normal
+/// and its `bottom_` form, the normal one wins: an `LROV` payload overrides the
+/// layer's single resolved value, not the two ends of a blend.
 fn fold_entry(resolved: &mut Resolved, over: &Timing) {
     if let Some(value) = over.layer_height_um {
         resolved.layer_height_um = value;
@@ -647,19 +631,19 @@ mod tests {
     }
 
     #[test]
-    fn sect_overrides_its_own_sector_only() {
+    fn a_sector_entry_overrides_its_own_sector_only() {
         let meta = meta();
-        let sector = Sect {
+        let sector = Sector {
             sector_id: 1,
             timing: Timing {
                 normal_exposure_ms: Some(3000),
                 bottom_exposure_ms: Some(35000),
                 ..Timing::default()
             },
-            ..Sect::default()
+            ..Sector::default()
         };
 
-        // Sector 0 keeps META even when a definition is offered.
+        // Sector 0 keeps META even when an entry is offered.
         assert_eq!(
             resolve(&meta, Some(&sector), None, 0, 0)
                 .unwrap()
@@ -673,7 +657,7 @@ mod tests {
             2500
         );
 
-        // Sector 1 blends the sector's own pair.
+        // Sector 1 blends the entry's own pair.
         assert_eq!(
             resolve(&meta, Some(&sector), None, 0, 1)
                 .unwrap()
@@ -687,25 +671,25 @@ mod tests {
             3000
         );
 
-        // A field the definition leaves out still comes from META...
+        // A field the entry leaves out still comes from META...
         assert_eq!(
             resolve(&meta, Some(&sector), None, 12, 1)
                 .unwrap()
                 .lift_slow_distance_um,
             5000
         );
-        // ...for a sector with no definition at all, as well.
+        // ...for a sector with no entry at all, as well.
         assert_eq!(resolve(&meta, None, None, 12, 1).unwrap().exposure_ms, 2500);
 
-        // The definition's own layer counts move the ranges for its sector.
-        let sector = Sect {
+        // The entry's own layer counts move the ranges for its sector.
+        let sector = Sector {
             sector_id: 1,
             timing: Timing {
                 bottom_layer_count: Some(6),
                 transition_layer_count: Some(0),
                 ..Timing::default()
             },
-            ..Sect::default()
+            ..Sector::default()
         };
         assert!(resolve(&meta, Some(&sector), None, 5, 1).unwrap().is_bottom);
         assert!(
@@ -716,7 +700,7 @@ mod tests {
     }
 
     #[test]
-    fn temperatures_and_cure_curve_come_from_meta_or_sect_unblended() {
+    fn temperatures_and_cure_curve_come_from_meta_or_a_sector_entry_unblended() {
         let mut meta = meta();
         meta.timing.chamber_temperature_c = Some(30.0);
         meta.timing.cure_curve = Some(CureCurve {
@@ -737,13 +721,13 @@ mod tests {
             })
         );
 
-        let sector = Sect {
+        let sector = Sector {
             sector_id: 1,
             timing: Timing {
                 chamber_temperature_c: Some(40.0),
                 ..Timing::default()
             },
-            ..Sect::default()
+            ..Sector::default()
         };
         let for_sector_1 = resolve(&meta, Some(&sector), None, 0, 1).unwrap();
         assert_eq!(for_sector_1.chamber_temperature_c, Some(40.0));
@@ -753,129 +737,52 @@ mod tests {
     }
 
     #[test]
-    fn lrov_folds_matching_entries_in_order() {
+    fn an_lrov_payload_replaces_only_the_fields_it_carries() {
         let meta = meta();
-        let lrov = Lrov {
-            overrides: vec![
-                LrovEntry {
-                    layer: Some(12),
-                    timing: Timing {
-                        normal_exposure_ms: Some(9000),
-                        lift_slow_distance_um: Some(7000),
-                        ..Timing::default()
-                    },
-                    ..LrovEntry::default()
-                },
-                LrovEntry {
-                    layer_range: Some([10, 15]),
-                    timing: Timing {
-                        normal_exposure_ms: Some(4000),
-                        ..Timing::default()
-                    },
-                    ..LrovEntry::default()
-                },
-            ],
+        let overrides = Timing {
+            normal_exposure_ms: Some(9000),
+            lift_slow_distance_um: Some(7000),
+            ..Timing::default()
         };
 
-        let resolved = resolve(&meta, None, Some(&lrov), 12, 0).unwrap();
-        // The later entry wins for the field both entries carry...
-        assert_eq!(resolved.exposure_ms, 4000);
-        // ...while the field only the earlier one carries still stands.
+        let resolved = resolve(&meta, None, Some(&overrides), 12, 0).unwrap();
+        assert_eq!(resolved.exposure_ms, 9000);
         assert_eq!(resolved.lift_slow_distance_um, 7000);
+        // A field the payload leaves out keeps the blended value.
+        assert_eq!(resolved.lift_slow_speed_um_min, 65_000);
 
-        // Layers no entry matches keep the blended defaults.
-        assert_eq!(
-            resolve(&meta, None, Some(&lrov), 16, 0)
-                .unwrap()
-                .exposure_ms,
-            2500
-        );
-        assert_eq!(
-            resolve(&meta, None, Some(&lrov), 11, 0)
-                .unwrap()
-                .exposure_ms,
-            4000
-        );
+        // The payload is applied to the (layer, sector) the caller passes it
+        // for; which one that is comes from the table entry that points at it,
+        // not from anything inside the payload, so a point with no payload
+        // resolves from the pipeline alone.
+        assert_eq!(resolve(&meta, None, None, 16, 0).unwrap().exposure_ms, 2500);
+        assert_eq!(resolve(&meta, None, None, 12, 1).unwrap().exposure_ms, 2500);
     }
 
     #[test]
-    fn lrov_sector_scope_limits_an_entry() {
+    fn an_lrov_payload_overrides_pwm_and_optional_motion() {
         let meta = meta();
-        let lrov = Lrov {
-            overrides: vec![LrovEntry {
-                layer: Some(12),
-                sector_id: Some(1),
-                timing: Timing {
-                    normal_exposure_ms: Some(8000),
-                    ..Timing::default()
-                },
-                ..LrovEntry::default()
-            }],
+        let overrides = Timing {
+            normal_exposure_ms: Some(9000),
+            light_pwm: Some(120),
+            bottom_light_pwm: Some(130),
+            lift_fast_distance_um: Some(2500),
+            chamber_temperature_c: Some(35.0),
+            ..Timing::default()
         };
 
-        assert_eq!(
-            resolve(&meta, None, Some(&lrov), 12, 0)
-                .unwrap()
-                .exposure_ms,
-            2500
-        );
-        assert_eq!(
-            resolve(&meta, None, Some(&lrov), 12, 1)
-                .unwrap()
-                .exposure_ms,
-            8000
-        );
-
-        // An entry without a sector applies to every sector.
-        let every_sector = Lrov {
-            overrides: vec![LrovEntry {
-                layer: Some(12),
-                timing: Timing {
-                    normal_exposure_ms: Some(6000),
-                    ..Timing::default()
-                },
-                ..LrovEntry::default()
-            }],
-        };
-        assert_eq!(
-            resolve(&meta, None, Some(&every_sector), 12, 0)
-                .unwrap()
-                .exposure_ms,
-            6000
-        );
-        assert_eq!(
-            resolve(&meta, None, Some(&every_sector), 12, 1)
-                .unwrap()
-                .exposure_ms,
-            6000
-        );
-    }
-
-    #[test]
-    fn lrov_overrides_pwm_and_optional_motion() {
-        let meta = meta();
-        let lrov = Lrov {
-            overrides: vec![LrovEntry {
-                layer_range: Some([0, 2]),
-                timing: Timing {
-                    light_pwm: Some(120),
-                    bottom_light_pwm: Some(130),
-                    lift_fast_distance_um: Some(2500),
-                    chamber_temperature_c: Some(35.0),
-                    ..Timing::default()
-                },
-                ..LrovEntry::default()
-            }],
-        };
-
-        let resolved = resolve(&meta, None, Some(&lrov), 1, 0).unwrap();
+        let resolved = resolve(&meta, None, Some(&overrides), 1, 0).unwrap();
         assert_eq!(resolved.light_pwm, 120);
         assert_eq!(resolved.lift_fast_distance_um, 2500);
         assert_eq!(resolved.chamber_temperature_c, Some(35.0));
+        // The payload names the resolved value, not the blend's two ends.
         assert_eq!(
-            resolve(&meta, None, Some(&lrov), 3, 0).unwrap().light_pwm,
-            255
+            resolve(&meta, None, Some(&overrides), 0, 0)
+                .unwrap()
+                .light_pwm,
+            120
         );
+        assert_eq!(resolve(&meta, None, None, 0, 0).unwrap().light_pwm, 255);
     }
 
     #[test]

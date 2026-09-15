@@ -8,13 +8,15 @@
 
 use lumen::chunks::extd::Extension;
 use lumen::chunks::hdr::Hdr;
+use lumen::chunks::ltbl::LayerTable;
 use lumen::chunks::preview::PreviewRole;
+use lumen::container::{self, ChunkType};
 use lumen::crypto::Cipher;
-use lumen::json::{Meta, Sect, Timing};
+use lumen::json::{Meta, Sector, Timing};
 use lumen::reader::LumenFile;
 use lumen::ree::EncodeMode;
 use lumen::validate::{self, Level};
-use lumen::writer::{Argon2Params, Encoder, EncryptOptions};
+use lumen::writer::{Argon2Params, Encoder, EncryptOptions, Override};
 
 const WIDTH: u32 = 64;
 const HEIGHT: u32 = 48;
@@ -123,10 +125,10 @@ fn masks() -> Vec<Vec<u8>> {
 }
 
 /// Encode the masks and return the file.
-fn encode(encrypt: Option<EncryptOptions>, block_layers: u32) -> Vec<u8> {
+fn encode(encrypt: Option<EncryptOptions>, layers_per_chunk: u32) -> Vec<u8> {
     let layer_masks = masks();
     let mut encoder = Encoder::new(hdr(layer_masks.len() as u32), meta());
-    encoder.set_block_layers(block_layers);
+    encoder.set_layers_per_chunk(layers_per_chunk);
     encoder.set_zstd_level(6);
     encoder.set_dictionary(true);
     encoder.set_layer_hashes(true);
@@ -180,8 +182,8 @@ fn assert_layers(file: &LumenFile<'_>) {
 }
 
 #[test]
-fn plaintext_round_trip_with_a_dictionary_and_multiple_blocks() {
-    // Six layers in blocks of two exercises the multi-block path and the
+fn plaintext_round_trip_with_a_dictionary_and_multiple_chunks() {
+    // Six layers in chunks of two exercises the multi-chunk path and the
     // dictionary; small prints cannot train a dictionary, so the encoder must
     // fall back to plain zstd without failing.
     let bytes = encode(None, 2);
@@ -205,10 +207,14 @@ fn plaintext_round_trip_with_a_dictionary_and_multiple_blocks() {
 }
 
 #[test]
-fn plaintext_round_trip_in_one_block() {
+fn plaintext_round_trip_in_one_chunk() {
     let bytes = encode(None, 64);
     let file = LumenFile::open(&bytes, Level::Strict).expect("an authored file must open");
-    assert_eq!(file.layr().block_count(), 1, "one block for six layers");
+    assert_eq!(
+        file.layr_chunks().len(),
+        1,
+        "one chunk for six single-sector layers"
+    );
     assert_layers(&file);
     file.verify_all()
         .expect("the authored integrity tree must verify");
@@ -296,8 +302,8 @@ fn machine_binding_round_trips() {
 
 #[test]
 fn multi_sector_round_trips_and_reports_its_sectors() {
-    let mut encoder = Encoder::new(hdr(2), meta());
-    encoder.set_sectors(vec![Sect {
+    let mut encoder = Encoder::new(hdr(3), meta());
+    encoder.set_sectors(vec![Sector {
         sector_id: 1,
         name: Some("supports".to_string()),
         material_index: None,
@@ -327,12 +333,46 @@ fn multi_sector_round_trips_and_reports_its_sectors() {
         .expect("a pushable multi-sector layer");
     // Layer 1: empty.
     encoder.push_layer_sectors(&[]).expect("an empty layer");
+    // Layer 2: sector 1 only, so the layer's first entry carries no data.
+    encoder
+        .push_layer_sectors(&[(1, supports.clone())])
+        .expect("a pushable sector-1-only layer");
+    // Layer 2's sector 0 is overridden even though it prints nothing.
+    encoder
+        .set_overrides(vec![
+            Override {
+                layer: 2,
+                sector_id: 0,
+                timing: Timing {
+                    normal_exposure_ms: Some(1234),
+                    ..Timing::default()
+                },
+            },
+            Override {
+                layer: 0,
+                sector_id: 1,
+                timing: Timing {
+                    normal_exposure_ms: Some(4321),
+                    ..Timing::default()
+                },
+            },
+        ])
+        .expect("one override set per (layer, sector)");
 
     let bytes = encoder.finish().expect("a writable file");
     validate::validate(&bytes, Level::Strict).expect("a multi-sector file must validate strictly");
 
     let file = LumenFile::open(&bytes, Level::Strict).expect("a multi-sector file must open");
     assert!(file.multi_sector());
+    // Three layers in one group of the default size: the chunk set is the
+    // sectors the group actually holds data for, which is sectors 0 and 1.
+    assert_eq!(
+        file.layr_chunks().len(),
+        2,
+        "one chunk per (sector, layer group) that holds data"
+    );
+
+    // Layer 0 carries both sectors, in ascending order.
     let sectors = file.layer_sectors(0).expect("layer 0 must decode");
     assert_eq!(sectors.len(), 2);
     assert_eq!(sectors[0].sector_id, 0);
@@ -340,21 +380,31 @@ fn multi_sector_round_trips_and_reports_its_sectors() {
     assert_eq!(sectors[0].layer.pixels, model);
     assert_eq!(sectors[1].layer.pixels, supports);
 
-    // The union is what a single-material reader prints.
-    let union = file.layer(0).expect("the union must decode");
-    for i in 0..PIXELS {
-        assert_eq!(union.pixels[i], model[i].max(supports[i]), "pixel {i}");
-    }
+    // A layer's first entry is sector 0's, and a single-material reader reads
+    // that and nothing else.
+    let primary = file.layer(0).expect("layer 0 must decode");
+    assert_eq!(primary.pixels, model);
+    let sector_one_only = file.layer(2).expect("layer 2 must decode");
+    assert!(sector_one_only.is_empty(), "layer 2 prints no sector 0");
+    assert_eq!(file.layer_sectors(2).expect("layer 2 must decode").len(), 1);
+    assert!(file
+        .layer_sectors(1)
+        .expect("layer 1 must decode")
+        .is_empty());
 
     // Sector 1 is non-empty, so a sector-0-only reader would drop content.
     assert!(
-        !file
-            .is_single_material_compatible()
-            .expect("a checkable file"),
-        "a print with content outside sector 0 is not single-material compatible"
+        !file.is_single_material_complete(),
+        "a print with content outside sector 0 is not complete for a single material"
+    );
+    assert!(
+        LumenFile::open(&encode(None, 2), Level::Strict)
+            .expect("a single-sector file must open")
+            .is_single_material_complete(),
+        "a file with no second sector is complete"
     );
 
-    // Per-sector timing resolves, and sector 1's override wins for sector 1.
+    // Per-sector timing resolves, and the sector's entry wins for its sector.
     // Layer 0 is inside the bottom range, so it uses the bottom exposure.
     let sector_0 = file.timing_for(0, 0).expect("sector 0 timing");
     let sector_1 = file.timing_for(0, 1).expect("sector 1 timing");
@@ -364,9 +414,27 @@ fn multi_sector_round_trips_and_reports_its_sectors() {
         "sector 0 takes META's bottom exposure"
     );
     assert_eq!(
-        sector_1.exposure_ms, 35000,
-        "sector 1 overrides the bottom exposure"
+        sector_1.exposure_ms, 4321,
+        "layer 0's sector 1 takes its own override"
     );
+
+    // Layer 1 has no override on sector 1, so the sector entry's own bottom
+    // exposure shows through there.
+    assert_eq!(
+        file.timing_for(1, 1).expect("layer 1 sector 1").exposure_ms,
+        35000
+    );
+
+    // The overrides reach exactly the (layer, sector) that carries them.
+    assert_eq!(file.timing_for(2, 0).expect("layer 2").exposure_ms, 1234);
+    assert_eq!(
+        file.timing_for(1, 0).expect("layer 1").exposure_ms,
+        30000,
+        "layer 1 carries no override"
+    );
+
+    file.verify_all()
+        .expect("the integrity tree must verify over concatenated slices");
 }
 
 #[test]
@@ -400,11 +468,261 @@ fn extensions_and_embedded_scene_round_trip() {
     assert_eq!(extensions[0].data, vec![1, 2, 3, 4]);
 }
 
-/// A file whose layer table claims more bytes than the layer's stream uses.
+#[test]
+fn the_encoder_refuses_a_malformed_sector_table() {
+    // META's own shape rules, enforced where the file is assembled, so the
+    // encoder cannot write something its validator would reject.
+    let mut encoder = Encoder::new(hdr(1), meta());
+    encoder.set_sectors(vec![Sector {
+        sector_id: 0,
+        ..Sector::default()
+    }]);
+    encoder
+        .push_layer(&vec![255u8; PIXELS])
+        .expect("a pushable layer");
+    let error = encoder.finish().expect_err("sector 0 is implicit");
+    assert_eq!(error.check_name(), "meta.sectors_shape");
+
+    let mut encoder = Encoder::new(hdr(1), meta());
+    encoder.set_sectors(vec![
+        Sector {
+            sector_id: 2,
+            ..Sector::default()
+        },
+        Sector {
+            sector_id: 2,
+            ..Sector::default()
+        },
+    ]);
+    encoder
+        .push_layer(&vec![255u8; PIXELS])
+        .expect("a pushable layer");
+    let error = encoder.finish().expect_err("a sector id is unique");
+    assert_eq!(error.check_name(), "meta.sectors_shape");
+}
+
+/// A `LAYR` frame is sealed as its own unit, and its associated data binds it to
+/// the chunk's directory index.
+///
+/// This is the whole point of the binding: with every unit bound to slot zero, a
+/// ciphertext lifted out of one `LAYR` chunk and dropped into another would
+/// authenticate there, and a reader would print one sector's masks for another.
+/// Re-sealing one frame under slot zero is the mutation that says so, and a
+/// reader holding the key must report the binding rather than the tag.
+#[test]
+fn a_layer_frame_is_bound_to_its_directory_index() {
+    let mut encoder = Encoder::new(hdr(masks().len() as u32), meta());
+    encoder.set_layers_per_chunk(2);
+    encoder.set_encryption(EncryptOptions::password("correct horse"));
+    for mask in &masks() {
+        encoder.push_layer(mask).expect("a pushable layer");
+    }
+    let key = encoder
+        .session_key()
+        .expect("an encrypted encoder has a key");
+    let bytes = encoder.finish().expect("a writable file");
+    validate::validate_with_key(&bytes, Level::Strict, key)
+        .expect("the unmodified file is valid with its key");
+
+    let mutated = rebind_first_layer_frame(&bytes, &key);
+    let error = validate::validate_with_key(&mutated, Level::Strict, key)
+        .expect_err("a frame bound to slot zero must not authenticate");
+    assert_eq!(error.check_name(), "crypt.unit_index_binding");
+
+    let refused = LumenFile::open_with_key(&mutated, Level::Strict, key)
+        .expect_err("the reader must refuse it too");
+    assert_eq!(refused.check_name(), "crypt.unit_index_binding");
+}
+
+/// Seal the first `LAYR` chunk's frame under slot zero again, in place, and
+/// rebuild the file around it.
+fn rebind_first_layer_frame(bytes: &[u8], key: &lumen::crypto::SessionKey) -> Vec<u8> {
+    use lumen::container::{self, ChunkType};
+
+    let header = container::FileHeader::parse(bytes).unwrap();
+    let directory = container::parse_directory(bytes, &header).unwrap();
+    let (index, descriptor) = directory
+        .descriptors
+        .iter()
+        .enumerate()
+        .find(|(_, d)| d.chunk_type == ChunkType::LAYR && d.is_encrypted())
+        .map(|(index, d)| (index as u32, *d))
+        .expect("an encrypted file seals its layer frames");
+    let start = descriptor.offset as usize;
+    let stored = &bytes[start..start + descriptor.stored_len() as usize];
+    let frame = lumen::chunks::layr::frame(stored).unwrap();
+    let plain = lumen::crypto::open(Cipher::Aes256Gcm, key, ChunkType::LAYR, index, frame).unwrap();
+    let rebound = lumen::crypto::seal(Cipher::Aes256Gcm, key, ChunkType::LAYR, 0, &plain).unwrap();
+
+    let mut mutated = Vec::from(&bytes[..start]);
+    mutated.extend_from_slice(&lumen::chunks::layr::to_bytes(&rebound));
+    mutated.extend_from_slice(&bytes[start + stored.len()..bytes.len() - 8]);
+    let crc = container::crc32c(&mutated);
+    mutated.extend_from_slice(&container::TRAILER_MAGIC);
+    mutated.extend_from_slice(&crc.to_le_bytes());
+    mutated
+}
+
+/// One defect introduced into a written file: the check it must fail, and the
+/// mutation that introduces it.
+type Mutation = (&'static str, fn(&[u8]) -> Vec<u8>);
+
+/// The layer table, and the header flag that summarizes it, must describe the
+/// file they are in.
+///
+/// Three defects, three rules: a `first_layr` that names no `LAYR` chunk, two
+/// slices of one chunk that overlap, and an `LROV` chunk no entry points at.
+#[test]
+fn a_layer_table_that_lies_is_rejected() {
+    let mut encoder = Encoder::new(hdr(4), meta());
+    encoder.set_layers_per_chunk(2);
+    encoder.set_sectors(vec![Sector {
+        sector_id: 1,
+        name: Some("supports".to_string()),
+        material_index: None,
+        color_rgba: None,
+        timing: Timing::default(),
+    }]);
+    let mut primary = vec![0u8; PIXELS];
+    let mut supports = vec![0u8; PIXELS];
+    for (i, pixel) in primary.iter_mut().enumerate() {
+        if i % 4 < 2 {
+            *pixel = 255;
+        }
+    }
+    for (i, pixel) in supports.iter_mut().enumerate() {
+        if i % 4 >= 2 {
+            *pixel = 255;
+        }
+    }
+    encoder
+        .push_layer_sectors(&[(0, primary.clone()), (1, supports.clone())])
+        .expect("a pushable layer");
+    encoder.push_layer(&primary).expect("a pushable layer");
+    encoder.push_layer(&primary).expect("a pushable layer");
+    encoder.push_layer(&primary).expect("a pushable layer");
+    encoder
+        .set_overrides(vec![Override {
+            layer: 0,
+            sector_id: 1,
+            timing: Timing {
+                normal_exposure_ms: Some(1234),
+                ..Timing::default()
+            },
+        }])
+        .expect("one override set per (layer, sector)");
+    let bytes = encoder.finish().expect("a writable file");
+    validate::validate(&bytes, Level::Strict).expect("the unmodified file is valid");
+
+    let cases: [Mutation; 4] = [
+        ("ltbl.first_layr_in_range", mutate_first_layr_to_zero),
+        ("ltbl.slices_disjoint", overlap_two_slices),
+        ("ltbl.first_lrov_null", drop_the_override_reference),
+        ("hdr.multi_sector_flag", clear_multi_sector),
+    ];
+    for (expected, mutate) in cases {
+        let mutated = mutate(&bytes);
+        let error = validate::validate(&mutated, Level::Strict)
+            .err()
+            .unwrap_or_else(|| panic!("{expected}: the file must be refused"));
+        assert_eq!(error.check_name(), expected);
+        let refused = LumenFile::open(&mutated, Level::Strict)
+            .err()
+            .unwrap_or_else(|| panic!("{expected}: the reader must refuse it too"));
+        assert_eq!(refused.check_name(), expected);
+    }
+}
+
+/// Rewrite the table with `edit` applied, and rebuild the file around it.
+fn edit_layer_table(bytes: &[u8], edit: impl FnOnce(&mut LayerTable)) -> Vec<u8> {
+    let header = container::FileHeader::parse(bytes).unwrap();
+    let directory = container::parse_directory(bytes, &header).unwrap();
+    let descriptor = directory.find(ChunkType::LTBL).unwrap();
+    let start = descriptor.offset as usize;
+    let end = start + descriptor.stored_len() as usize;
+    let mut table = LayerTable::parse(&bytes[start..end]).unwrap();
+    edit(&mut table);
+    let mut mutated = Vec::from(&bytes[..start]);
+    mutated.extend_from_slice(&table.to_bytes());
+    mutated.extend_from_slice(&bytes[end..bytes.len() - 8]);
+    let crc = container::crc32c(&mutated);
+    mutated.extend_from_slice(&container::TRAILER_MAGIC);
+    mutated.extend_from_slice(&crc.to_le_bytes());
+    mutated
+}
+
+/// Name the primary sector's own chunk as HDR's index, which no entry may.
+fn mutate_first_layr_to_zero(bytes: &[u8]) -> Vec<u8> {
+    edit_layer_table(bytes, |table| {
+        assert!(!table.entries[0].is_empty());
+        table.entries[0].first_layr = 0;
+    })
+}
+
+/// Give one slice a byte of the next one's, keeping both inside their chunk.
+fn overlap_two_slices(bytes: &[u8]) -> Vec<u8> {
+    edit_layer_table(bytes, |table| {
+        let mut previous: Option<(u32, usize)> = None;
+        let mut pair = None;
+        for (i, entry) in table.entries.iter().enumerate() {
+            if entry.is_empty() {
+                continue;
+            }
+            if let Some((chunk, first)) = previous {
+                if chunk == entry.first_layr {
+                    pair = Some((first, i));
+                    break;
+                }
+            }
+            previous = Some((entry.first_layr, i));
+        }
+        let (first, second) = pair.expect("a chunk holding two slices");
+        assert!(table.entries[first].data_offset < table.entries[second].data_offset);
+        table.entries[first].data_size += 1;
+    })
+}
+
+/// Keep the overrides but stop pointing at them.
+///
+/// The chunk stays in the file, so what the zeroed entry asserts - that this pair
+/// has no overrides - is contradicted by an override set nothing applies, which is
+/// `ltbl.first_lrov_null`. The orphan rule would see the same chunk one check
+/// later; section 11 orders the two so this one names the defect.
+fn drop_the_override_reference(bytes: &[u8]) -> Vec<u8> {
+    edit_layer_table(bytes, |table| {
+        let entry = table
+            .entries
+            .iter_mut()
+            .find(|entry| entry.first_lrov != 0)
+            .expect("the file carries an override");
+        entry.first_lrov = 0;
+    })
+}
+
+/// Clear the `MULTI_SECTOR` flag on a file whose layers carry two sectors.
+fn clear_multi_sector(bytes: &[u8]) -> Vec<u8> {
+    let mut mutated = Vec::from(bytes);
+    let flags = u32::from_le_bytes(mutated[20..24].try_into().unwrap());
+    assert_ne!(flags & 0b10, 0);
+    mutated[20..24].copy_from_slice(&(flags & !0b10u32).to_le_bytes());
+    let crc = container::crc32c(&mutated[..mutated.len() - 8]);
+    let end = mutated.len() - 8;
+    mutated.truncate(end);
+    mutated.extend_from_slice(&container::TRAILER_MAGIC);
+    mutated.extend_from_slice(&crc.to_le_bytes());
+    mutated
+}
+
+/// A file whose layer table claims more bytes for a layer than its stream uses.
 ///
 /// This is the corpus' own invalid-vector style: introduce one defect, recompute
 /// the trailer CRC, and assert that the advertised check is the first to fail -
 /// at both levels, since padding is not a strict-only defect.
+///
+/// One byte moves from layer 2's slice to layer 1's: layer 1's stream now has a
+/// byte after its end, and the two slices stay disjoint and inside the chunk, so
+/// the trailing byte is the only defect and `ree.no_trailing_bytes` is the first
+/// check to see it.
 #[test]
 fn padding_after_a_layer_stream_is_rejected() {
     let bytes = encode_without_hashes();
@@ -438,7 +756,8 @@ fn encode_without_hashes() -> Vec<u8> {
     encoder.finish().expect("a writable file")
 }
 
-/// Grow layer 1's `data_size` by one byte and rebuild the file around it.
+/// Move one byte from layer 2's slice to layer 1's and rebuild the file around
+/// it.
 fn pad_layer_one(bytes: &[u8]) -> Vec<u8> {
     use lumen::chunks::ltbl::LayerTable;
     use lumen::container::{self, ChunkType};
@@ -449,7 +768,10 @@ fn pad_layer_one(bytes: &[u8]) -> Vec<u8> {
     let start = descriptor.offset as usize;
     let end = start + descriptor.stored_len() as usize;
     let mut table = LayerTable::parse(&bytes[start..end]).unwrap();
+    assert!(table.entries[1].data_size > 1, "layer 1 carries a stream");
     table.entries[1].data_size += 1;
+    table.entries[2].data_offset += 1;
+    table.entries[2].data_size -= 1;
 
     let mut mutated = Vec::from(&bytes[..start]);
     mutated.extend_from_slice(&table.to_bytes());

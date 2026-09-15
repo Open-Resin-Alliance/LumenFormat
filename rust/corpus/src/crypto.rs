@@ -20,7 +20,7 @@ use sha2::{Digest, Sha256};
 use x25519_dalek::{PublicKey, StaticSecret};
 
 use crate::bytes::at;
-use crate::container::{type_name, Block, Entry, AEAD_OVERHEAD, SEALED_FLAG};
+use crate::container::{type_name, Chunk, AEAD_OVERHEAD, LAYR_HEADER_SIZE, SEALED_FLAG};
 
 /// A sealed unit that does not open: an unknown cipher, a unit too short to
 /// hold its framing, or a tag that does not verify.
@@ -28,9 +28,8 @@ use crate::container::{type_name, Block, Entry, AEAD_OVERHEAD, SEALED_FLAG};
 pub struct SealError;
 
 /// §9.1: chunk types whose payload must be sealed when the file is encrypted.
-pub const SEALED_CHUNK_TYPES: [&[u8; 4]; 7] = [
-    b"LAYR", b"META", b"PROF", b"SECT", b"LROV", b"VOXL", b"ZDIC",
-];
+pub const SEALED_CHUNK_TYPES: [&[u8; 4]; 6] =
+    [b"LAYR", b"META", b"PROF", b"LROV", b"VOXL", b"ZDIC"];
 
 /// §9.1: chunk types that must stay in the clear.
 pub const CLEAR_CHUNK_TYPES: [&[u8; 4]; 3] = [b"HDR\0", b"AUTH", b"LTBL"];
@@ -39,8 +38,8 @@ pub const CLEAR_CHUNK_TYPES: [&[u8; 4]; 3] = [b"HDR\0", b"AUTH", b"LTBL"];
 /// [`SEALED_CHUNK_TYPES`]: a clear PREV beside a sealed one is not a defect. Its
 /// `ENCRYPTED` bit still has to be honoured when it is set, so the decrypt phase
 /// covers it too.
-pub const SEALABLE_CHUNK_TYPES: [&[u8; 4]; 8] = [
-    b"LAYR", b"META", b"PROF", b"SECT", b"LROV", b"VOXL", b"ZDIC", b"PREV",
+pub const SEALABLE_CHUNK_TYPES: [&[u8; 4]; 7] = [
+    b"LAYR", b"META", b"PROF", b"LROV", b"VOXL", b"ZDIC", b"PREV",
 ];
 
 /// The credentials a manifest entry (or a caller) supplies for an AUTH chunk.
@@ -216,20 +215,20 @@ fn unhex32(text: &str) -> Option<[u8; 32]> {
 }
 
 /// `(ok, detail)` for `crypt.chunk_flags` - §11.4 / §9.1.
-pub fn chunk_flag_report(
-    real: &[&Entry],
-    blocks: &[Block],
-    encrypted_flag: bool,
-    sealed_layr: bool,
-) -> (bool, String) {
+///
+/// `real` is the directory's live records. A `LAYR` chunk's frame is the sealed
+/// unit and its 4-byte version field stays in the clear, so a sealed LAYR chunk
+/// whose container cannot even hold its framing is reported here rather than
+/// left for the seam to notice.
+pub fn chunk_flag_report(real: &[Chunk], encrypted_flag: bool) -> (bool, String) {
     if !encrypted_flag {
         // §9.1: the chunk-level flag requires AUTH in the same file. Without it
         // there is no key, so a sealed unit is unreadable rather than merely
         // unchecked.
         let sealed: Vec<String> = real
             .iter()
-            .filter(|e| e.flags & SEALED_FLAG != 0)
-            .map(|e| type_name(&e.ctype))
+            .filter(|chunk| chunk.entry.flags & SEALED_FLAG != 0)
+            .map(|chunk| type_name(&chunk.entry.ctype))
             .collect();
         if sealed.is_empty() {
             return (true, String::new());
@@ -237,17 +236,21 @@ pub fn chunk_flag_report(
         return (false, format!("{} sealed without AUTH", sealed.join(", ")));
     }
     let mut bad = Vec::new();
-    for entry in real {
-        let name = type_name(&entry.ctype);
-        if SEALED_CHUNK_TYPES.contains(&&entry.ctype) && entry.flags & SEALED_FLAG == 0 {
+    for chunk in real {
+        let name = type_name(&chunk.entry.ctype);
+        if SEALED_CHUNK_TYPES.contains(&&chunk.entry.ctype) && chunk.entry.flags & SEALED_FLAG == 0
+        {
             bad.push(format!("{name} not sealed"));
         }
-        if CLEAR_CHUNK_TYPES.contains(&&entry.ctype) && entry.flags & SEALED_FLAG != 0 {
+        if CLEAR_CHUNK_TYPES.contains(&&chunk.entry.ctype) && chunk.entry.flags & SEALED_FLAG != 0 {
             bad.push(format!("{name} sealed"));
         }
-    }
-    if sealed_layr && blocks.iter().any(|b| b.frame_size < AEAD_OVERHEAD as u64) {
-        bad.push("LAYR block frame shorter than 28 bytes".to_string());
+        if chunk.entry.ctype == *b"LAYR"
+            && chunk.entry.flags & SEALED_FLAG != 0
+            && chunk.entry.size() < LAYR_HEADER_SIZE + AEAD_OVERHEAD as u64
+        {
+            bad.push("LAYR frame shorter than 28 bytes".to_string());
+        }
     }
     (bad.is_empty(), bad.join(", "))
 }

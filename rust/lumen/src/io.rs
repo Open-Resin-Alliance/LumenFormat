@@ -16,14 +16,14 @@ pub struct Reader<'a> {
 }
 
 impl<'a> Reader<'a> {
-    /// A reader that reports truncation as [`Check::LayrBlockRegionBounds`].
+    /// A reader that reports truncation as [`Check::DirChunkExtent`].
     ///
     /// Callers parsing a specific structure should prefer [`Reader::checked`].
     pub fn new(buf: &'a [u8]) -> Self {
         Reader {
             buf,
             pos: 0,
-            check: Check::LayrBlockRegionBounds,
+            check: Check::DirChunkExtent,
         }
     }
 

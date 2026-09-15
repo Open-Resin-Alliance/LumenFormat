@@ -3,7 +3,7 @@
 //! The file is written to the directory given as the first argument, or to
 //! `target/` when none is given. It exercises the parts of the format that are
 //! worth looking at by hand: an empty layer, binary and anti-aliased masks,
-//! multiple zstd blocks, a trained dictionary, the bottom/transition timing
+//! several `LAYR` chunks, a trained dictionary, the bottom/transition timing
 //! blend, a material library, a reusable profile, a preview and an extension.
 //!
 //! `cargo run --example make_test_file`
@@ -249,7 +249,7 @@ fn build(encryption: Option<EncryptOptions>, layer_hashes: bool) -> Vec<u8> {
     for mask in &masks {
         encoder.push_layer(mask).expect("a pushable layer");
     }
-    encoder.set_block_layers(4);
+    encoder.set_layers_per_chunk(4);
     encoder.set_zstd_level(6);
     encoder.set_dictionary(true);
     encoder.set_layer_hashes(layer_hashes);
@@ -404,46 +404,51 @@ fn describe(bytes: &[u8], password: Option<&str>) {
         None => println!("ZDIC: none (training was refused for this little data)"),
     }
 
-    println!(
-        "\nLAYR: {} block(s), block table entry size {}",
-        file.layr().block_count(),
-        file.layr().block_table_entry_size
-    );
-    for (index, block) in file.layr().blocks.iter().enumerate() {
+    println!("\nLAYR: {} chunk(s)", file.layr_chunks().len());
+    for chunk in file.layr_chunks() {
+        let overlay = file
+            .layr_chunk_data(chunk.index)
+            .expect("a readable chunk")
+            .len();
         println!(
-            "  block {index}: offset {:>6} stored {:>6} uncompressed {:>6}",
-            block.frame_offset, block.frame_size, block.uncompressed_size
+            "  index {:>3}: container {:>7} bytes stored, {:>8} decompressed, flags {:#06x}",
+            chunk.index,
+            chunk.descriptor.stored_len(),
+            overlay,
+            chunk.descriptor.flags
         );
     }
 
-    println!("\nlayers:");
+    println!("\nlayers, one entry per (layer, sector):");
     println!(
-        "  {:>5}  {:>5} {:>6} {:>6} {:>5} {:>8}  {:>10} {:>8}  leaf",
-        "layer", "block", "offset", "size", "secs", "tag", "exposed", "pixels"
+        "  {:>5} {:>6} {:>6} {:>6} {:>6} {:>6} {:>8}  {:>10} {:>8}  leaf",
+        "layer", "sector", "chunk", "lrov", "offset", "size", "tag", "exposed", "pixels"
     );
     for index in 0..file.layer_count() {
-        let entry = &file.layer_table().entries[index as usize];
         let decoded: DecodedLayer = file.layer(index).expect("a decodable layer");
         let exposed = decoded.pixels.iter().filter(|p| **p != 0).count();
         let leaf = file
             .layer_hashes()
             .map(|h| hex(&h.layer_hashes[index as usize])[..12].to_string())
             .unwrap_or_else(|| "-".to_string());
-        println!(
-            "  {:>5}  {:>5} {:>6} {:>6} {:>5} {:>8}  {:>10} {:>8}  {}",
-            index,
-            entry.block_index,
-            entry.data_offset,
-            entry.data_size,
-            entry.sector_count,
-            decoded
-                .tag
-                .map(|t| format!("{t:#04x}"))
-                .unwrap_or_else(|| "empty".to_string()),
-            exposed,
-            decoded.pixels.len(),
-            leaf
-        );
+        for entry in file.layer_table().layer_entries(index) {
+            println!(
+                "  {:>5} {:>6} {:>6} {:>6} {:>6} {:>6} {:>8}  {:>10} {:>8}  {}",
+                index,
+                entry.sector_id,
+                entry.first_layr,
+                entry.first_lrov,
+                entry.data_offset,
+                entry.data_size,
+                decoded
+                    .tag
+                    .map(|t| format!("{t:#04x}"))
+                    .unwrap_or_else(|| "empty".to_string()),
+                exposed,
+                decoded.pixels.len(),
+                leaf
+            );
+        }
     }
     if let Some(hashes) = file.layer_hashes() {
         println!("\nLHAS: Merkle root {}", hex(&hashes.merkle_root));

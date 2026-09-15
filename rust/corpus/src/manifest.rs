@@ -16,6 +16,7 @@ use sha2::{Digest, Sha256};
 
 use crate::bytes::{at, hex, le, u32_at, u64_at};
 use crate::crypto::CryptoBlock;
+use crate::decompress::{frame_content_size, frame_dict_id};
 use crate::reader::Payload;
 use crate::reportln;
 use crate::timing::{self, Resolved, TimingInputs};
@@ -39,7 +40,11 @@ pub struct Valid {
     pub header_flags: u32,
     pub total_uncompressed_size: u64,
     pub trailer_crc32c: String,
-    pub blocks: Vec<BlockRecord>,
+    /// One record per `LAYR` chunk, in directory order (§4.10).
+    pub layr_chunks: Vec<LayrChunkRecord>,
+    /// One record per `LTBL` entry, in table order (§4.8).
+    pub ltbl: Vec<LtblRecord>,
+    /// One record per layer, in layer order (§4.11).
     pub layers: Vec<LayerRecord>,
     pub merkle_root: String,
     #[serde(default)]
@@ -71,18 +76,61 @@ pub struct Invalid {
     pub crypto: Option<CryptoBlock>,
 }
 
+/// One `LAYR` chunk as the manifest records it (§4.10).
+///
+/// There is no block table any more, so this record *is* the chunk: the frame's
+/// header, the descriptor's sizes, and the `(sector, layer group)` the chunk
+/// holds - which only `LTBL` can say, and which is checked against it.
 #[derive(Deserialize)]
-pub struct BlockRecord {
-    pub frame_offset: u64,
+pub struct LayrChunkRecord {
+    /// Directory index.
+    pub index: u32,
+    pub sector_id: u32,
+    pub first_layer: u32,
+    pub layer_count: u32,
+    pub version: u32,
+    /// The frame header's dictionary ID; `0` when the frame uses none.
+    pub dict_id: u32,
+    /// The decompressed length the frame header declares.
+    pub content_size: u64,
+    /// The stored frame's byte length, without the 4-byte version field.
     pub frame_size: u64,
-    pub uncompressed_size: u64,
+    /// The descriptor's `size_uncompressed`: `4 + frame_size`.
+    pub stored_len: u64,
+    /// Whether the frame is sealed - the descriptor's `size_compressed != 0`.
+    pub sealed: bool,
 }
 
+/// One `LTBL` record as the manifest records it (§4.8), in table order.
+#[derive(Deserialize)]
+pub struct LtblRecord {
+    pub entry_index: u32,
+    /// The layer the record belongs to, which the table expresses by grouping
+    /// rather than by a field.
+    pub layer: u32,
+    pub sector_id: u32,
+    pub data_size: u32,
+    pub first_lrov: u32,
+    pub first_layr: u32,
+    pub additional_sector_count: u32,
+    pub data_offset: u64,
+}
+
+/// One layer as the manifest records it (§4.11).
 #[derive(Deserialize)]
 pub struct LayerRecord {
-    pub block_index: u32,
-    pub data_size: u32,
+    pub index: u32,
+    /// Every one of the layer's slices is empty, so the layer holds nothing.
+    pub empty: bool,
     pub sector_count: u32,
+    /// Sector 0's encoding tag - the first byte of its data - or `null` when it
+    /// carries no data.
+    #[serde(default)]
+    pub tag: Option<u8>,
+    /// Each sector's tag, in table order, `null` for a sector with no data.
+    #[serde(default)]
+    pub sector_tags: Vec<Option<u8>>,
+    pub decompressed_sha256: String,
     pub lhas_leaf: String,
 }
 
@@ -102,24 +150,28 @@ pub enum Pin {
 /// `chunk_payload_sha256` pins can be compared without re-deriving the session
 /// key here. A payload the reader did not produce has no pin to check.
 ///
-/// `timing` carries the `META`, `SECT` and `LROV` objects the same run parsed,
-/// so the recorded `resolved_timing` is recomputed from §8 rather than re-read
-/// here.
+/// `layers` carries each layer's decompressed data - its sectors' slices
+/// concatenated in ascending `sector_id` - as the reader decoded it, which is
+/// what the recorded tags and per-layer digests describe.
+///
+/// `timing` carries the `META` and `LROV` objects the same run parsed, so the
+/// recorded `resolved_timing` is recomputed from §8 rather than re-read here.
 pub fn check_manifest(
     valid: &Valid,
     path: &Path,
     payloads: &BTreeMap<[u8; 4], Payload>,
+    layers: &[Vec<u8>],
     timing: Option<&TimingInputs>,
 ) -> Comparison {
     let mut failures = Vec::new();
-    check_golden_values(valid, path, payloads, &mut failures);
+    check_golden_values(valid, path, payloads, layers, &mut failures);
     let timing = check_resolved_timing(valid, timing, &mut failures);
     Comparison { failures, timing }
 }
 
-/// The byte-level comparison: the recorded size, digest, layout, block table,
-/// per-layer hashes, Merkle root and chunk pins, read back out of the committed
-/// file.
+/// The byte-level comparison: the recorded size, digest, layout, layer table,
+/// frame headers, per-layer hashes, Merkle root and chunk pins, read back out of
+/// the committed file.
 ///
 /// It stops at the first structural escape - a file that is not a container has
 /// no layout to compare - and reports what it found in `bad`.
@@ -127,6 +179,7 @@ fn check_golden_values(
     valid: &Valid,
     path: &Path,
     payloads: &BTreeMap<[u8; 4], Payload>,
+    layers: &[Vec<u8>],
     bad: &mut Vec<String>,
 ) {
     let Ok(raw) = std::fs::read(path) else {
@@ -175,8 +228,9 @@ fn check_golden_values(
         bad.push("manifest.trailer_crc32c".to_string());
     }
 
-    // The recorded chunk offsets, by type. Python's dict comprehension keeps
-    // the last record for a repeated type; so does this.
+    // The recorded chunks, by directory index and by type. Python's dict
+    // comprehension keeps the last record for a repeated type; so does this.
+    let mut records: Vec<([u8; 4], u64, u64, u64)> = Vec::new();
     let mut offsets: HashMap<[u8; 4], u64> = HashMap::new();
     for index in 0..chunk_count as usize {
         let Some(base) = index
@@ -193,53 +247,73 @@ fn check_golden_values(
             return;
         };
         let ctype: [u8; 4] = record[..4].try_into().expect("a type tag is four bytes");
-        offsets.insert(
-            ctype,
-            u64::from_le_bytes(record[4..12].try_into().expect("u64")),
-        );
+        let offset = u64::from_le_bytes(record[4..12].try_into().expect("u64"));
+        let usz = u64::from_le_bytes(record[12..20].try_into().expect("u64"));
+        let csz = u64::from_le_bytes(record[20..28].try_into().expect("u64"));
+        offsets.insert(ctype, offset);
+        records.push((ctype, offset, usz, csz));
     }
 
-    let Some(&layr_offset) = offsets.get(b"LAYR") else {
-        bad.push("manifest.layout".to_string());
-        return;
-    };
-    let (Some(_version), Some(block_count), Some(table_entry)) = (
-        u32_at(&raw, layr_offset as usize),
-        u32_at(&raw, layr_offset as usize + 4),
-        u32_at(&raw, layr_offset as usize + 8),
-    ) else {
-        bad.push("manifest.layout".to_string());
-        return;
-    };
-    if block_count as usize != valid.blocks.len() {
-        bad.push("manifest.block_count".to_string());
-    } else {
-        for (index, block) in valid.blocks.iter().enumerate() {
-            let Some(offset) = (index)
-                .checked_mul(table_entry as usize)
-                .and_then(|row| row.checked_add(12))
-                .and_then(|row| row.checked_add(layr_offset as usize))
-            else {
-                bad.push("manifest.layout".to_string());
-                return;
-            };
-            let (Some(frame_offset), Some(frame_size), Some(uncompressed_size)) = (
-                u64_at(&raw, offset),
-                u64_at(&raw, offset + 8),
-                u64_at(&raw, offset + 16),
-            ) else {
-                bad.push("manifest.layout".to_string());
-                return;
-            };
-            let recorded = (
-                block.frame_offset,
-                block.frame_size,
-                block.uncompressed_size,
-            );
-            if (frame_offset, frame_size, uncompressed_size) != recorded {
-                bad.push(format!("manifest.block[{index}]"));
-                break;
-            }
+    // ---- LAYR chunks ----------------------------------------------------
+    // One chunk per (sector, layer group), and no block table: the descriptor
+    // and the frame header are the whole record (§4.10). What the chunk *holds*
+    // is not in the chunk at all - only `LTBL` says which points at it - so the
+    // two records are checked against each other as well as against the bytes.
+    let layr_chunk_count = records
+        .iter()
+        .filter(|(ctype, offset, _, _)| ctype == b"LAYR" && *offset != 0)
+        .count();
+    if layr_chunk_count != valid.layr_chunks.len() {
+        bad.push("manifest.layr_chunks".to_string());
+    }
+    for chunk in &valid.layr_chunks {
+        let Some((ctype, offset, usz, csz)) = records.get(chunk.index as usize) else {
+            bad.push(format!("manifest.layr_chunk[{}]", chunk.index));
+            break;
+        };
+        if ctype != b"LAYR" || *offset == 0 {
+            bad.push(format!("manifest.layr_chunk[{}]", chunk.index));
+            break;
+        }
+        // §3.2: a `LAYR` chunk's stored length is `size_compressed` when it is
+        // sealed, and `size_uncompressed` when it is not.
+        let stored_len = if *csz != 0 { *csz } else { *usz };
+        let payload = at(&raw, u128::from(*offset), u128::from(stored_len));
+        let frame = payload.get(4..).unwrap_or_default();
+        let mut ok = u32_at(payload, 0) == Some(chunk.version)
+            && stored_len == chunk.stored_len
+            && chunk.frame_size + 4 == chunk.stored_len
+            && chunk.sealed == (*csz != 0);
+        // A sealed frame is AEAD-framed on disk, so its header is not readable
+        // without the key - the reader's own `layr.*` checks cover those bytes.
+        if ok && !chunk.sealed {
+            ok = frame_dict_id(frame) == Some(chunk.dict_id)
+                && frame_content_size(frame).flatten() == Some(chunk.content_size);
+        }
+        // What the chunk holds is not in the chunk: only the table says which
+        // entries point at it, and a sector that is absent from a layer
+        // contributes no bytes, so the layers it holds need not be every layer
+        // of the span the encoder planned. What can be pinned from the file is
+        // that the entries naming this chunk all belong to its sector and sit
+        // inside that span.
+        let pointing: Vec<&LtblRecord> = valid
+            .ltbl
+            .iter()
+            .filter(|entry| entry.first_layr == chunk.index)
+            .collect();
+        // A chunk no entry names is legal: it is the empty frame a plan wrote
+        // for a sector that has nothing on those layers, and `encrypted-both`
+        // carries one.
+        let span = chunk.first_layer..chunk.first_layer.saturating_add(chunk.layer_count);
+        if pointing
+            .iter()
+            .any(|entry| entry.sector_id != chunk.sector_id || !span.contains(&entry.layer))
+        {
+            ok = false;
+        }
+        if !ok {
+            bad.push(format!("manifest.layr_chunk[{}]", chunk.index));
+            break;
         }
     }
 
@@ -255,34 +329,112 @@ fn check_golden_values(
         bad.push("manifest.layout".to_string());
         return;
     };
-    let (Some(_table_version), Some(_layer_count), Some(entry_size)) = (
+    let (Some(_table_version), Some(layer_count), Some(entry_size), Some(entry_count)) = (
         u32_at(&raw, ltbl_offset as usize),
         u32_at(&raw, ltbl_offset as usize + 4),
         u32_at(&raw, ltbl_offset as usize + 8),
+        u32_at(&raw, ltbl_offset as usize + 12),
     ) else {
         bad.push("manifest.layout".to_string());
         return;
     };
-    for (index, layer) in valid.layers.iter().enumerate() {
-        let Some(offset) = (index)
-            .checked_mul(entry_size as usize)
-            .and_then(|row| row.checked_add(12))
-            .and_then(|row| row.checked_add(ltbl_offset as usize))
+    if valid.ltbl.len() != entry_count as usize {
+        bad.push("manifest.ltbl_entries".to_string());
+    }
+    for (index, entry) in valid.ltbl.iter().enumerate() {
+        let Some(offset) = u64::try_from(index)
+            .ok()
+            .and_then(|index| index.checked_mul(u64::from(entry_size)))
+            .and_then(|row| row.checked_add(16))
+            .and_then(|row| row.checked_add(ltbl_offset))
+            .and_then(|row| usize::try_from(row).ok())
         else {
             bad.push("manifest.layout".to_string());
             return;
         };
-        let (Some(_data_offset), Some(block_index), Some(data_size), Some(sector_count)) = (
-            u64_at(&raw, offset),
+        let (
+            Some(data_size),
+            Some(first_lrov),
+            Some(first_layr),
+            Some(additional),
+            Some(data_offset),
+            Some(sector_id),
+        ) = (
+            u32_at(&raw, offset),
+            u32_at(&raw, offset + 4),
             u32_at(&raw, offset + 8),
             u32_at(&raw, offset + 12),
-            u32_at(&raw, offset + 16),
-        ) else {
+            u64_at(&raw, offset + 16),
+            u32_at(&raw, offset + 24),
+        )
+        else {
             bad.push("manifest.layout".to_string());
             return;
         };
-        let recorded = (layer.block_index, layer.data_size, layer.sector_count);
-        if (block_index, data_size, sector_count) != recorded {
+        if entry.entry_index as usize != index
+            || entry.data_size != data_size
+            || entry.first_lrov != first_lrov
+            || entry.first_layr != first_layr
+            || entry.additional_sector_count != additional
+            || entry.data_offset != data_offset
+            || entry.sector_id != sector_id
+        {
+            bad.push(format!("manifest.ltbl_entry[{index}]"));
+            break;
+        }
+    }
+    // The layer a record belongs to is the table's grouping rather than a
+    // field, so the grouping has to hold: each layer's records are contiguous,
+    // there are `1 + additional_sector_count` of them, and the first is sector
+    // 0's.
+    let grouping_holds = valid.ltbl.iter().enumerate().all(|(index, entry)| {
+        match index.checked_sub(1).map(|previous| &valid.ltbl[previous]) {
+            Some(previous) if previous.layer == entry.layer => entry.additional_sector_count == 0,
+            _ => {
+                let count = valid.ltbl[index..]
+                    .iter()
+                    .take_while(|later| later.layer == entry.layer)
+                    .count() as u32;
+                count == entry.additional_sector_count + 1 && entry.sector_id == 0
+            }
+        }
+    });
+    if !grouping_holds {
+        bad.push("manifest.ltbl_layout".to_string());
+    }
+
+    // ---- layers ---------------------------------------------------------
+    // Each layer's bytes are its sectors' slices concatenated in ascending
+    // `sector_id`; the tags are the first byte of each slice, and a slice of no
+    // bytes carries no tag (§4.11).
+    if valid.layers.len() != layer_count as usize {
+        bad.push("manifest.layers".to_string());
+    }
+    for (index, layer) in valid.layers.iter().enumerate() {
+        let entries: Vec<&LtblRecord> = valid
+            .ltbl
+            .iter()
+            .filter(|entry| entry.layer == index as u32)
+            .collect();
+        let mut tags: Vec<Option<u8>> = Vec::new();
+        let data = layers.get(index);
+        let mut offset = 0usize;
+        for entry in &entries {
+            let size = entry.data_size as usize;
+            tags.push(
+                data.and_then(|data| data.get(offset))
+                    .copied()
+                    .filter(|_| size != 0),
+            );
+            offset += size;
+        }
+        let ok = layer.index as usize == index
+            && layer.sector_count as usize == entries.len()
+            && layer.empty == entries.iter().all(|entry| entry.data_size == 0)
+            && layer.sector_tags == tags
+            && layer.tag == tags.first().copied().flatten()
+            && data.is_some_and(|data| hex(&Sha256::digest(data)) == layer.decompressed_sha256);
+        if !ok {
             bad.push(format!("manifest.layer[{index}]"));
             break;
         }

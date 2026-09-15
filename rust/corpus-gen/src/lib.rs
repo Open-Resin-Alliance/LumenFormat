@@ -27,7 +27,7 @@ pub mod vectors;
 /// vectors, so the value moves with the corpus and not with the toolchain.
 pub const FORMAT_REVISION: &str = "1.0";
 
-/// The zstd level used for layer blocks (spec 4.10).
+/// The zstd level used for the `LAYR` frames (spec 4.10).
 pub const ZSTD_LAYER_LEVEL: i32 = 6;
 
 /// The zstd level used for the small metadata payloads (spec 3.2).

@@ -10,9 +10,9 @@
 - **AEAD only.** Authenticated encryption prevents undetected tampering.
 - **Compress-then-encrypt.** zstd compression is applied first, then the compressed
   frame is encrypted.
-- **Content-scoped encryption.** The directory, HDR, AUTH, LTBL, and the LAYR header
-  and block table remain plaintext. Everything that carries content or content-derived
-  data (LAYR block frames, ZDIC, META, PROF, SECT, LROV, VOXL) is encrypted. PREV and
+- **Content-scoped encryption.** The directory, HDR, AUTH, LTBL, and the `LAYR` version
+  field remain plaintext. Everything that carries content or content-derived
+  data (the `LAYR` frames, ZDIC, META, PROF, LROV, VOXL) is encrypted. PREV and
   EXTD are optionally encrypted: a file may carry either sealed or in the clear, and a
   reader that skips them never needs the key. When `AUTH` is present every content chunk
   MUST be encrypted; v1 has no partial-encryption mode, so the `ENCRYPTED` flag is set on
@@ -22,7 +22,7 @@
 - **Confidentiality and per-chunk integrity, not authenticity.** Encryption hides
   content and detects modification of each sealed unit, and the AAD binds a unit to its
   chunk type and index ([§9.3](#93-encryption-format)). It does **not** authenticate the file: the fixed header,
-  the chunk directory, `LTBL`, `LHAS`, and the LAYR header and block table are plaintext
+  the chunk directory, `LTBL`, `LHAS`, and the `LAYR` version fields are plaintext
   and unauthenticated, so an attacker can still add, remove, reorder or repoint chunks.
   A file-level signature (`EXTD`/`SIGN`) is the only mechanism that proves origin, and
   it is optional in v1.
@@ -49,17 +49,32 @@ tag          : [u8; 16]     - AEAD authentication tag.
 
 `AEAD-Open(key, nonce, ciphertext, associated_data)` MUST verify the tag before any
 parsing or decompression. `associated_data` binds the unit to its identity in the
-file: `chunk_type || 0x00 || unit_index_le_u32`. For a single-unit chunk,
-`unit_index` is `0`.
+file: `chunk_type || 0x00 || unit_index_le_u32`, with `unit_index` little-endian and
+
+- `0` for a chunk stored as one unit - every chunk except `LAYR`;
+- **the chunk's directory index** for a `LAYR` chunk, whose payload is its version field
+  followed by one sealed frame.
+
+The index is what keeps two `LAYR` chunks apart. A file has as many of them as it has
+`(sector, layer group)` pairs, all with the same `chunk_type` and one unit each; with
+`unit_index` fixed at `0`, a sealed frame lifted out of one `LAYR` chunk and written into
+another would authenticate exactly as it did before, because nothing in the AAD or in the
+ciphertext would differ. Binding each frame to the directory position of the chunk it
+belongs to denies that, which is the whole purpose of an index in the AAD. A reader
+therefore computes the index of the chunk it is opening - its position in the chunk
+directory, counted from `0` over all descriptors including `HDR` - and passes it as
+`unit_index`; an implementation that leaves it at `0` accepts files a conforming reader
+rejects.
 
 For every chunk except `LAYR`, the chunk payload is exactly one unit, and the chunk
 descriptor's `size_compressed` includes the 28-byte framing overhead.
 
-For `LAYR`, the `layr_header` and `block_table` stay plaintext and each block frame
-is its own unit (`unit_index` = block index, [§4.10](06-layer-data.md#410-layr---layer-data-chunk)). This keeps per-block random
-access working on encrypted files: a reader can seek to a block, decrypt just that
-block, and decompress it instead of streaming the whole ciphertext. The block
-table's `frame_size` includes the 28-byte overhead for its unit.
+For `LAYR`, the 4-byte version field stays plaintext and the frame that follows it is the
+sealed unit ([§4.10](06-layer-data.md#410-layr---layer-data-chunk)). One frame is one unit,
+decrypted whole, and no sealed unit spans two frames, so the version can be read before the
+key is used without a decompression pass. The container's `size_compressed` includes the
+28-byte overhead and `size_uncompressed` does not, so the frame's stored length is
+`size_compressed - 32`.
 
 ### 9.4 Session Key Lifecycle
 

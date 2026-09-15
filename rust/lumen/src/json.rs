@@ -1,7 +1,8 @@
-//! Typed models for the JSON chunks: `META`, `PROF`, `SECT` and `LROV`.
+//! Typed models for the JSON chunks: `META` (with its `sectors` entries),
+//! `PROF` and `LROV`.
 //!
-//! META, a `SECT` definition, a `PROF` profile's `settings` block and an `LROV`
-//! override entry all draw on the same field namespace, so they share [`Timing`].
+//! META, a `META.sectors` entry, a `PROF` profile's `settings` block and an
+//! `LROV` payload all draw on the same field namespace, so they share [`Timing`].
 //! Unknown JSON keys are preserved in `Timing::extra` rather than dropped, which
 //! is what lets this crate re-emit a chunk it did not fully understand
 //! ([`spec/13-versioning.md`] section 10.2).
@@ -29,12 +30,12 @@ pub const REQUIRED_META_FIELDS: [&str; 10] = [
     "retract_fast_speed_um_min",
 ];
 
-/// The timing, motion, PWM and temperature namespace shared by META, `SECT`,
-/// `PROF.settings` and `LROV` entries.
+/// The timing, motion, PWM and temperature namespace shared by META, a
+/// `META.sectors` entry, `PROF.settings` and an `LROV` payload.
 ///
-/// Every field is optional: META requires some of them, a `SECT` or `LROV`
-/// override supplies only what it changes, and a `PROF` supplies all of them.
-/// A `bottom_*` field that is absent equals its normal counterpart
+/// Every field is optional: META requires some of them, a sector entry or an
+/// `LROV` payload supplies only what it changes, and a `PROF` supplies all of
+/// them. A `bottom_*` field that is absent equals its normal counterpart
 /// ([`spec/11-layer-timing.md`] section 8).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Timing {
@@ -398,6 +399,10 @@ pub struct Meta {
     /// Authoritative material library for this print.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub materials: Option<Vec<Material>>,
+    /// One entry per non-zero sector this print uses, each carrying that
+    /// sector's identity and the base timing fields it changes.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub sectors: Option<Vec<Sector>>,
     /// Printer identity.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub printer: Option<Printer>,
@@ -472,48 +477,29 @@ pub struct Profile {
     pub extra: Option<Value>,
 }
 
-/// A `SECT` chunk body: one sector's identity and its timing overrides.
+/// A `META.sectors` entry: one non-zero sector's identity and base timing.
+///
+/// The entry carries only what differs from META's own values: every timing
+/// field it leaves out is inherited from META's, field by field, and a sector
+/// with no entry at all - sector 0, the primary one, always - resolves from META
+/// alone ([`spec/11-layer-timing.md`] section 8). A sector carries no material
+/// until its entry names one.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct Sect {
-    /// Sector identifier. `0` is reserved for the implicit default sector, so a
-    /// `SECT` chunk carries `>= 1`.
+pub struct Sector {
+    /// Sector identifier. `0` is reserved for the implicit primary sector, so an
+    /// entry carries `>= 1`.
     #[serde(default)]
     pub sector_id: u32,
     /// Display name.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub name: Option<String>,
-    /// Index into the material library. Defaults to `0` when absent.
+    /// Index into `META.materials`. Absent means no material.
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub material_index: Option<usize>,
+    pub material_index: Option<u32>,
     /// Display hint overriding the material's color for this sector.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub color_rgba: Option<[u8; 4]>,
-    /// Timing overrides; absent fields inherit from META.
-    #[serde(flatten)]
-    pub timing: Timing,
-}
-
-/// The `LROV` chunk body: a list of per-layer or per-range timing overrides.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct Lrov {
-    /// Overrides in file order; the last matching entry wins per `(layer, sector)`.
-    #[serde(default)]
-    pub overrides: Vec<LrovEntry>,
-}
-
-/// One `LROV` override. Carries exactly one of `layer` or `layer_range`.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct LrovEntry {
-    /// A single 0-based layer index.
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub layer: Option<u32>,
-    /// An inclusive `[start, end]` layer range.
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub layer_range: Option<[u32; 2]>,
-    /// When present, the entry applies only to this sector; when absent, to all.
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub sector_id: Option<u32>,
-    /// The timing fields this entry overrides.
+    /// Base timing for this sector; absent fields inherit from META.
     #[serde(flatten)]
     pub timing: Timing,
 }

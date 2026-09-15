@@ -11,9 +11,10 @@
 //! * Data after the first frame is ignored, not treated as an error.
 //!
 //! And one is structural: a `ZSTD_DCtx` carries an unfinished frame into the
-//! next call, so a decoder reused across a block table behaves differently from
-//! a fresh one per block. [`Decoder`] is reused exactly where the oracle reuses
-//! its `ZstdDecompressor`.
+//! next call, so a decoder reused across a file's frames behaves differently
+//! from a fresh one per frame. [`Decoder`] is reused exactly where the oracle
+//! reuses its `ZstdDecompressor`: across the `LAYR` frames of one file, and not
+//! across the payloads of two chunks.
 
 use std::num::NonZeroU32;
 
@@ -85,4 +86,14 @@ impl Decoder {
 pub fn frame_dict_id(frame: &[u8]) -> Option<u32> {
     zstd_safe::get_frame_content_size(frame).ok()?;
     Some(zstd_safe::get_dict_id_from_frame(frame).map_or(0, NonZeroU32::get))
+}
+
+/// What a frame header says about its output size (§4.10).
+///
+/// The outer `None` is "these bytes are not a frame header at all"; the inner
+/// one is "the frame leaves its content size implicit", which a writer is not
+/// allowed to do and a reader cannot allocate for. The two are different
+/// defects, so they are not folded together.
+pub fn frame_content_size(frame: &[u8]) -> Option<Option<u64>> {
+    zstd_safe::get_frame_content_size(frame).ok()
 }

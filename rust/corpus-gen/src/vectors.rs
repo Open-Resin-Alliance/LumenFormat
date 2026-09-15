@@ -1,21 +1,22 @@
 //! The corpus: the twelve valid vectors, the deliberate defects, and the manifest.
 
+use std::collections::BTreeSet;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-use crate::container::{self, BLOCK_TABLE_ENTRY_SIZE, LTBL_ENTRY_SIZE};
+use crate::container;
 use crate::json;
 use crate::obj;
 use crate::payload::{self, Extd, ProfOverrides, ProfSettings};
 use crate::png;
-use crate::vector::{self, Built, CryptoSpec, Role, VectorSpec};
+use crate::vector::{self, Built, CryptoSpec, Override, Role, VectorSpec};
 use crate::{FORMAT_REVISION, ZSTD_LAYER_LEVEL, ZSTD_SMALL_LEVEL};
 
 /// What the manifest says about the bytes an implementer can and cannot rely on.
 const NOTE: &str = "Compressed payload bytes depend on the zstd version and level. \
-Uncompressed structures (HDR, AUTH, LTBL, LAYR header and block table, LHAS, REE \
+Uncompressed structures (HDR, AUTH, LTBL, LAYR's version field, LHAS, REE \
 streams, directory, trailer) are exact. Sealed units are exact too: every nonce, \
 salt and key is derived from a fixed SHAKE-256 seed, so regeneration is \
 deterministic. Those values are public test data; real encoders must draw them from \
@@ -47,45 +48,278 @@ pub fn run() -> i32 {
         fs::write(valid_dir.join(format!("{name}.lumen")), &built.raw).expect("vector file");
         let meta = json::merge(built.meta.clone(), &[("file", Value::from(file.clone()))]);
         println!(
-            "wrote {:<28} {:>6} bytes, {:>2} chunks, {} blocks",
+            "wrote {:<28} {:>6} bytes, {:>2} chunks, {} LAYR chunks",
             file,
             built.raw.len(),
             meta["chunk_count"].as_u64().expect("a chunk count"),
-            meta["blocks"].as_array().expect("a block table").len()
+            meta["layr_chunks"]
+                .as_array()
+                .expect("a LAYR chunk list")
+                .len()
         );
         manifest_valid.push(meta);
     }
 
     let mut manifest_invalid: Vec<Value> = Vec::new();
 
-    // The invalid vectors are cut from two of the files above.
+    // The invalid vectors are cut from the files above.
     let binary_basic = binary_basic();
+    let multi = multi_sector();
+    let overridden = layer_overrides();
+    let dictionary = dict_multi_block();
     let encrypted_password = encrypted_password();
     let encrypted_crypto = encrypted_password.meta["crypto"].clone();
-
-    // x01: an empty layer (sector_count 0) that claims bytes
-    let mut b = binary_basic.raw.clone();
     let ltbl = binary_basic.layout.offset(b"LTBL");
-    container::write_u32(&mut b, ltbl + 12 + 12, 2);
+
+    // x01: the header's entry_count does not match the table
+    let mut b = binary_basic.raw.clone();
+    let entry_count = container::read_u32(&b, ltbl + container::LTBL_ENTRY_COUNT);
+    container::write_u32(&mut b, ltbl + container::LTBL_ENTRY_COUNT, entry_count + 1);
     emit(
         &invalid_dir,
         &mut manifest_invalid,
         Invalid::new(
-            "empty-layer-with-bytes",
-            "LTBL entry 0 has sector_count 0 but data_size 2.",
-            "ltbl.empty_layer_no_bytes",
+            "ltbl-entry-count",
+            "LTBL's entry_count says seven while the table holds six entries, so the table does not end where the header says it does.",
+            "ltbl.entry_count",
             container::repack(&b, &binary_basic.layout),
         )
         .base("binary-basic"),
     );
 
-    // x02: the non-canonical run_count == 0 all-black form (decodable, not canonical)
+    // x02: an entry that claims a following entry that is not there
+    let mut b = binary_basic.raw.clone();
+    let last_entry = ltbl + container::LTBL_HEADER_SIZE + 5 * container::LTBL_ENTRY_SIZE;
+    container::write_u32(&mut b, last_entry + container::LTBL_ADDITIONAL_SECTORS, 1);
+    emit(
+        &invalid_dir,
+        &mut manifest_invalid,
+        Invalid::new(
+            "ltbl-entry-count-overrun",
+            "The last entry claims one further entry for its layer, so the sum of 1 + additional_sector_count over the layers' first entries runs one past the table the header declares.",
+            "ltbl.entry_count",
+            container::repack(&b, &binary_basic.layout),
+        )
+        .base("binary-basic"),
+    );
+
+    // x03: sector ids that descend within a layer
+    let three_sector = three_sector_source();
+    let three_ltbl = three_sector.layout.offset(b"LTBL");
+    let mut b = three_sector.raw.clone();
+    let first = three_ltbl + container::LTBL_HEADER_SIZE + container::LTBL_ENTRY_SIZE;
+    let second = first + container::LTBL_ENTRY_SIZE;
+    container::write_u32(&mut b, first + container::LTBL_SECTOR_ID, 2);
+    container::write_u32(&mut b, second + container::LTBL_SECTOR_ID, 1);
+    emit(
+        &invalid_dir,
+        &mut manifest_invalid,
+        Invalid::new(
+            "ltbl-sector-ids-descending",
+            "Layer 0 carries sectors 0, 1 and 2, and its last two entries are written in the order 0, 2, 1: the ids descend where the table requires them to ascend.",
+            "ltbl.sector_ids_ascending",
+            container::repack(&b, &three_sector.layout),
+        ),
+    );
+
+    // x04: the same sector twice in one layer
+    let multi_ltbl = multi.layout.offset(b"LTBL");
+    let mut b = multi.raw.clone();
+    let second = multi_ltbl + container::LTBL_HEADER_SIZE + container::LTBL_ENTRY_SIZE;
+    container::write_u32(&mut b, second + container::LTBL_SECTOR_ID, 0);
+    emit(
+        &invalid_dir,
+        &mut manifest_invalid,
+        Invalid::new(
+            "ltbl-sector-id-duplicate",
+            "Layer 0's two entries both name sector 0, so the layer carries one sector twice instead of two sectors once.",
+            "ltbl.sector_id_unique",
+            container::repack(&b, &multi.layout),
+        )
+        .base("multi-sector"),
+    );
+
+    // x05: a layer whose first entry is not sector 0
+    let mut b = multi.raw.clone();
+    let single = multi_ltbl + container::LTBL_HEADER_SIZE + 2 * container::LTBL_ENTRY_SIZE;
+    container::write_u32(&mut b, single + container::LTBL_SECTOR_ID, 3);
+    emit(
+        &invalid_dir,
+        &mut manifest_invalid,
+        Invalid::new(
+            "ltbl-first-entry-not-sector-zero",
+            "Layer 1's only entry names sector 3. Sector 0 is primary and implicitly present on every layer with data, so a layer's first entry is sector 0's.",
+            "ltbl.first_entry_is_sector_zero",
+            container::repack(&b, &multi.layout),
+        )
+        .base("multi-sector"),
+    );
+
+    // x06: first_layr that is not a LAYR chunk
+    let mut b = binary_basic.raw.clone();
+    container::write_u32(
+        &mut b,
+        ltbl + container::LTBL_HEADER_SIZE + container::LTBL_FIRST_LAYR,
+        2,
+    );
+    emit(
+        &invalid_dir,
+        &mut manifest_invalid,
+        Invalid::new(
+            "ltbl-first-layr-not-layr",
+            "Entry 0 names directory index 2, which is the LTBL chunk itself, so the slice has no frame to be read out of.",
+            "ltbl.first_layr_in_range",
+            container::repack(&b, &binary_basic.layout),
+        )
+        .base("binary-basic"),
+    );
+
+    // x07: a slice that runs past the end of its frame
+    let mut b = binary_basic.raw.clone();
+    let entry = ltbl + container::LTBL_HEADER_SIZE + container::LTBL_ENTRY_SIZE;
+    container::write_u32(&mut b, entry + container::LTBL_DATA_SIZE, 0x00FF_FFFF);
+    emit(
+        &invalid_dir,
+        &mut manifest_invalid,
+        Invalid::new(
+            "ltbl-offset-past-frame",
+            "Entry 1 claims 0x00FFFFFF bytes even though it is the last slice of the frame it names, so its end lies past the frame's decompressed output.",
+            "ltbl.offset_within_chunk",
+            container::repack(&b, &binary_basic.layout),
+        )
+        .base("binary-basic"),
+    );
+
+    // x08: two slices of one frame that overlap
+    let mut b = binary_basic.raw.clone();
+    let third = ltbl + container::LTBL_HEADER_SIZE + 3 * container::LTBL_ENTRY_SIZE;
+    container::write_u32(&mut b, third + container::LTBL_DATA_OFFSET, 0);
+    emit(
+        &invalid_dir,
+        &mut manifest_invalid,
+        Invalid::new(
+            "ltbl-slices-overlap",
+            "Entries 2 and 3 are two slices of one frame and both now start at offset 0, so layers 2 and 3 would be read out of the same bytes.",
+            "ltbl.slices_disjoint",
+            container::repack(&b, &binary_basic.layout),
+        )
+        .base("binary-basic"),
+    );
+
+    // x09: an entry that says a point has no overrides while its chunk is there
+    let overridden_ltbl = overridden.layout.offset(b"LTBL");
+    let mut b = overridden.raw.clone();
+    let entry = overridden_ltbl + container::LTBL_HEADER_SIZE + 2 * container::LTBL_ENTRY_SIZE;
+    container::write_u32(&mut b, entry + container::LTBL_FIRST_LROV, 0);
+    emit(
+        &invalid_dir,
+        &mut manifest_invalid,
+        Invalid::new(
+            "ltbl-first-lrov-zero",
+            "Layer 2's entry names no LROV chunk although the file carries one for that point: first_lrov is 0 exactly when a (layer, sector) has no overrides. Because an LROV payload carries no identity, that chunk is now unreachable - this file violates lrov.orphan as well, and the check order decides which is reported.",
+            "ltbl.first_lrov_null",
+            container::repack(&b, &overridden.layout),
+        )
+        .base("layer-overrides"),
+    );
+
+    // x10: first_lrov that is not an LROV chunk
+    let mut b = binary_basic.raw.clone();
+    container::write_u32(
+        &mut b,
+        ltbl + container::LTBL_HEADER_SIZE + container::LTBL_FIRST_LROV,
+        2,
+    );
+    emit(
+        &invalid_dir,
+        &mut manifest_invalid,
+        Invalid::new(
+            "ltbl-first-lrov-not-lrov",
+            "Entry 0 names directory index 2, which is the LTBL chunk, as the override set of its point, so the entry points at a chunk that carries no overrides.",
+            "ltbl.first_lrov_in_range",
+            container::repack(&b, &binary_basic.layout),
+        )
+        .base("binary-basic"),
+    );
+
+    // x11: two entries naming one LROV chunk
+    let mut b = overridden.raw.clone();
+    let shared = container::read_u32(
+        &b,
+        overridden_ltbl
+            + container::LTBL_HEADER_SIZE
+            + 2 * container::LTBL_ENTRY_SIZE
+            + container::LTBL_FIRST_LROV,
+    );
+    container::write_u32(
+        &mut b,
+        overridden_ltbl + container::LTBL_HEADER_SIZE + container::LTBL_FIRST_LROV,
+        shared,
+    );
+    emit(
+        &invalid_dir,
+        &mut manifest_invalid,
+        Invalid::new(
+            "lrov-shared-chunk",
+            "Entry 0 names the same LROV chunk as layer 2's entry, so one override set is claimed by two points at once. The payload carries no layer and no sector, so a reader cannot tell which of the two it belongs to - it would have to apply layer 2's override to layer 0 as well, or ignore one of them.",
+            "lrov.orphan",
+            container::repack(&b, &overridden.layout),
+        )
+        .base("layer-overrides"),
+    );
+
+    // x12: an LROV chunk no entry names
+    emit(
+        &invalid_dir,
+        &mut manifest_invalid,
+        Invalid::new(
+            "lrov-orphan-chunk",
+            "The file carries an LROV chunk that no entry names. An LROV payload carries no layer and no sector - the entry that names the chunk is what places it - so these overrides can never be applied to anything, and a reader that silently ignores them prints the wrong timings.",
+            "lrov.orphan",
+            orphan_lrov_vector(),
+        ),
+    );
+
+    // x13: an LROV payload that is not a JSON object
+    emit(
+        &invalid_dir,
+        &mut manifest_invalid,
+        Invalid::new(
+            "lrov-not-json",
+            "An LROV payload is truncated JSON, so the override set cannot be read at all.",
+            "lrov.json",
+            lrov_raw_vector(b"{ \"normal_exposure_ms\": 2800,"),
+        ),
+    );
+
+    // x14: a fractional wait time in an override
+    emit(
+        &invalid_dir,
+        &mut manifest_invalid,
+        Invalid::new(
+            "lrov-wait-fractional",
+            "An LROV payload carries wait_time_before_cure_ms = 500.5. A wait time is a whole \
+number of milliseconds, so a fractional value is not a duration this format \
+can express.",
+            "lrov.time_integer",
+            override_vector(vec![Override {
+                layer: 2,
+                sector_id: 0,
+                fields: vec![
+                    ("normal_exposure_ms", Value::from(2800)),
+                    ("wait_time_before_cure_ms", Value::from(500.5)),
+                ],
+            }]),
+        ),
+    );
+
+    // x15: the non-canonical run_count == 0 all-black form (decodable, not canonical)
     let source = vector::build_vector(&VectorSpec {
         name: "x-source",
         description: "source",
         display: (64, 48),
         layers: vector::repeated(4, &[(0, 0, 0)]),
-        block_size: 2,
+        layers_per_chunk: 2,
         force_run_count_zero: vec![0],
         ..Default::default()
     });
@@ -101,43 +335,197 @@ pub fn run() -> i32 {
         .strict_only(),
     );
 
-    // x03: block_index out of range
+    // x16: a LAYR container whose version is not 1
     let mut b = binary_basic.raw.clone();
-    container::write_u32(&mut b, ltbl + 12 + LTBL_ENTRY_SIZE + 8, 99);
+    container::write_u32(&mut b, layr_of(&binary_basic), 2);
     emit(
         &invalid_dir,
         &mut manifest_invalid,
         Invalid::new(
-            "block-index-out-of-range",
-            "LTBL entry 1 points at block 99 when the file has three blocks.",
-            "ltbl.block_index_in_range",
+            "layr-container-version",
+            "A LAYR container declares version 2, which no reader implements; the frame behind it is well formed, so only the version refuses the file.",
+            "layr.version",
             container::repack(&b, &binary_basic.layout),
         )
         .base("binary-basic"),
     );
 
-    // x04: a gap in the block table
-    let mut b = binary_basic.raw.clone();
-    let layr = binary_basic.layout.offset(b"LAYR");
-    let first_frame_size = container::read_u64(&b, layr + 12 + 8);
-    container::write_u64(
-        &mut b,
-        layr + 12 + BLOCK_TABLE_ENTRY_SIZE,
-        first_frame_size + 1,
-    );
+    // x17: a frame that declares no decompressed size
     emit(
         &invalid_dir,
         &mut manifest_invalid,
         Invalid::new(
-            "block-table-gap",
-            "Block 1 frame_offset leaves a one-byte gap, breaking contiguity.",
-            "layr.block_table_contiguous",
+            "layr-content-size-absent",
+            "The LAYR frames are compressed without their content size. A writer MUST declare it (spec 4.10), because the descriptor's size_uncompressed is the container's length and the reader has nothing else to size the frame's output from.",
+            "layr.content_size_present",
+            frame_without_content_size(),
+        ),
+    );
+
+    // x18: a frame whose declared size is not its output size
+    let mut b = binary_basic.raw.clone();
+    let off = layr_of(&binary_basic);
+    let (at, width) = content_size_field(&b[off + 4..]);
+    assert_eq!(width, 1, "this vector patches a one-byte content size");
+    let declared = b[off + 4 + at];
+    b[off + 4 + at] = declared + 1;
+    emit(
+        &invalid_dir,
+        &mut manifest_invalid,
+        Invalid::new(
+            "layr-frame-size-lie",
+            "The first LAYR frame's header declares one byte more than the frame decompresses to, so its output cannot be allocated or checked against the declaration.",
+            "layr.frame_decompressed_size",
             container::repack(&b, &binary_basic.layout),
         )
         .base("binary-basic"),
     );
 
-    // x05: merkle root does not match the leaf table
+    // x19: a frame that will not decompress at all
+    let mut b = binary_basic.raw.clone();
+    let block_header = off + 4 + 6;
+    b[block_header] |= 0x06;
+    emit(
+        &invalid_dir,
+        &mut manifest_invalid,
+        Invalid::new(
+            "layr-frame-corrupt",
+            "The first block header of the first LAYR frame is rewritten to the reserved block type 3, so the frame cannot be decompressed.",
+            "layr.frame_decompressed_size",
+            container::repack(&b, &binary_basic.layout),
+        )
+        .base("binary-basic"),
+    );
+
+    // x20: frames whose dictionary id is not the ZDIC chunk's
+    let zdic = dictionary.layout.offset(b"ZDIC");
+    let mut b = dictionary.raw.clone();
+    let dict_id = container::read_u32(&b, zdic + 4);
+    container::write_u32(&mut b, zdic + 4, dict_id + 1);
+    emit(
+        &invalid_dir,
+        &mut manifest_invalid,
+        Invalid::new(
+            "layr-dict-id-mismatch",
+            "ZDIC.dict_id is rewritten while the frames keep the id of the dictionary they were compressed with, so every LAYR frame disagrees with the file's dictionary.",
+            "layr.dict_id_match",
+            container::repack(&b, &dictionary.layout),
+        )
+        .base("dict-multi-block"),
+    );
+
+    // x21: frames that name a dictionary the file does not carry
+    emit(
+        &invalid_dir,
+        &mut manifest_invalid,
+        Invalid::new(
+            "layr-dict-id-without-zdic",
+            "The frames are compressed with a trained dictionary but the file carries no ZDIC chunk, so their dictionary ids name a dictionary no reader can find.",
+            "layr.dict_id_absent",
+            dictionary_without_zdic(),
+        ),
+    );
+
+    // x22: sealed frames bound to a unit index that is not their chunk's
+    let wrong_unit = vector::build_encrypted_vector(
+        &VectorSpec {
+            name: "x-unit-index",
+            description: "source",
+            display: (64, 48),
+            layers: vector::repeated(4, &[(0, 300, 255)]),
+            layers_per_chunk: 2,
+            ..Default::default()
+        },
+        &CryptoSpec {
+            cipher_id: "A256",
+            mode: 1,
+            bad_unit_index: true,
+            ..Default::default()
+        },
+    );
+    emit(
+        &invalid_dir,
+        &mut manifest_invalid,
+        Invalid::new(
+            "crypt-unit-index-binding",
+            "Every sealed LAYR frame is bound to unit index 0 instead of the directory index of the chunk that carries it. Each frame is intact, but a reader that authenticates it under the chunk's own index must refuse the file - which is what stops a ciphertext from being swapped between two LAYR chunks, since with one unit per chunk an all-zero index would authenticate in either place.",
+            "crypt.unit_index_binding",
+            wrong_unit.raw,
+        )
+        .crypto(wrong_unit.meta["crypto"].clone()),
+    );
+
+    // x23: the walk reaches fewer layers than the header declares
+    let mut b = multi.raw.clone();
+    let layer_one = multi_ltbl + container::LTBL_HEADER_SIZE + 2 * container::LTBL_ENTRY_SIZE;
+    container::write_u32(&mut b, layer_one + container::LTBL_ADDITIONAL_SECTORS, 1);
+    emit(
+        &invalid_dir,
+        &mut manifest_invalid,
+        Invalid::new(
+            "ltbl-layer-index-range",
+            "Layer 1's entry claims one further entry, so the walk takes layer 1 and layer 2 for one layer and reaches layer 2 of a four-layer file; the entries no longer cover every layer the header declares. The merged layer also holds sector 0 twice, which is what the entries it swallowed carry.",
+            "ltbl.layer_index_range",
+            container::repack(&b, &multi.layout),
+        )
+        .base("multi-sector"),
+    );
+
+    // x24: a frame that declares far more output than its slices justify
+    let bound = allocation_bound_source();
+    let mut b = bound.raw.clone();
+    let frame = layr_of(&bound) + 4;
+    let (at, width) = content_size_field(&b[frame..]);
+    assert_eq!(width, 4, "this vector patches a four-byte content size");
+    b[frame + at..frame + at + width].copy_from_slice(&0x7FFF_FFFFu32.to_le_bytes());
+    emit(
+        &invalid_dir,
+        &mut manifest_invalid,
+        Invalid::new(
+            "layr-allocation-bound",
+            "The file's only LAYR frame declares a decompressed size of 2147483647 bytes, some four thousand times what the slices pointing into it could hold, so a reader that sizes its buffer from the declaration allocates two gigabytes for a layer group of a 64 by 48 display.",
+            "layr.allocation_bound",
+            container::repack(&b, &bound.layout),
+        ),
+    );
+
+    // x25: a ZDIC chunk no frame uses
+    emit(
+        &invalid_dir,
+        &mut manifest_invalid,
+        Invalid::new(
+            "presence-zdic-unused",
+            "The file carries a ZDIC chunk while every LAYR frame declares no dictionary (dictionary id 0), so the dictionary is present but nothing in the file refers to it.",
+            "presence.zdic",
+            unused_dictionary(),
+        ),
+    );
+
+    // x26: a sector list that names one sector twice
+    emit(
+        &invalid_dir,
+        &mut manifest_invalid,
+        Invalid::new(
+            "meta-sectors-shape",
+            "META.sectors has two entries with sector_id 1, so the sector's timing is defined twice over.",
+            "meta.sectors_shape",
+            sectors_shape_vector(),
+        ),
+    );
+
+    // x27: a sector naming a material the library does not have
+    emit(
+        &invalid_dir,
+        &mut manifest_invalid,
+        Invalid::new(
+            "meta-sector-material-index",
+            "META.sectors[0].material_index is 3 while META.materials holds one entry, so the sector names a material that is not there.",
+            "meta.sector_material_index",
+            sector_material_vector(),
+        ),
+    );
+
+    // x28: merkle root does not match the leaf table
     let mut b = binary_basic.raw.clone();
     let lhas = binary_basic.layout.offset(b"LHAS");
     b[lhas + 6] ^= 0xFF;
@@ -153,7 +541,7 @@ pub fn run() -> i32 {
         .base("binary-basic"),
     );
 
-    // x06: layer hash does not match the layer bytes (root recomputed to stay consistent)
+    // x29: layer hash does not match the layer bytes (root recomputed to stay consistent)
     let mut b = binary_basic.raw.clone();
     let leaves_off = lhas + 38;
     let n_layers = container::read_u32(&b, lhas + 2) as usize;
@@ -182,22 +570,39 @@ pub fn run() -> i32 {
         .base("binary-basic"),
     );
 
-    // x07: layer byte range runs past the end of its block
-    let mut b = binary_basic.raw.clone();
-    container::write_u32(&mut b, ltbl + 12 + 2 * LTBL_ENTRY_SIZE + 12, 0x00FF_FFFF);
+    // x30: the MULTI_SECTOR flag cleared in a file whose layers carry two sectors
+    let mut b = multi.raw.clone();
+    let flags = container::read_u32(&b, 20);
+    container::write_u32(&mut b, 20, flags & !container::FLAG_MULTI_SECTOR);
     emit(
         &invalid_dir,
         &mut manifest_invalid,
         Invalid::new(
-            "layer-range-past-block",
-            "LTBL entry 2 claims a data_size far beyond its block's decompressed size.",
-            "ltbl.offsets_within_block",
+            "multi-sector-flag-clear",
+            "The file's layers carry two sectors but the header does not set MULTI_SECTOR, so a reader that trusts the flag prints one sector per layer and never notices the rest.",
+            "hdr.multi_sector_flag",
+            container::repack(&b, &multi.layout),
+        )
+        .base("multi-sector"),
+    );
+
+    // x31: the MULTI_SECTOR flag set in a file that carries one sector per layer
+    let mut b = binary_basic.raw.clone();
+    let flags = container::read_u32(&b, 20);
+    container::write_u32(&mut b, 20, flags | container::FLAG_MULTI_SECTOR);
+    emit(
+        &invalid_dir,
+        &mut manifest_invalid,
+        Invalid::new(
+            "multi-sector-flag-set",
+            "No layer of the file carries more than one sector, but the header sets MULTI_SECTOR, so the flag promises a structure the file does not have.",
+            "hdr.multi_sector_flag",
             container::repack(&b, &binary_basic.layout),
         )
         .base("binary-basic"),
     );
 
-    // x08: corrupted trailer CRC (the only failure that is not repacked)
+    // x32: corrupted trailer CRC (the only failure that is not repacked)
     let mut b = binary_basic.raw.clone();
     b[binary_basic.layout.trailer_offset + 4] ^= 0xFF;
     emit(
@@ -212,7 +617,7 @@ pub fn run() -> i32 {
         .base("binary-basic"),
     );
 
-    // x09: a fractional duration. Durations are exact whole milliseconds, so a
+    // x33: a fractional duration. Durations are exact whole milliseconds, so a
     // value with a fractional part is not a duration the format can carry; the
     // file is otherwise valid, so the type rule is the only thing wrong with it.
     let fractional = vector::build_vector(&VectorSpec {
@@ -220,7 +625,7 @@ pub fn run() -> i32 {
         description: "source",
         display: (64, 48),
         layers: vector::repeated(4, &[(0, 255, 255)]),
-        block_size: 2,
+        layers_per_chunk: 2,
         meta_extra: vec![("normal_exposure_ms", Value::from(2500.5))],
         ..Default::default()
     });
@@ -299,7 +704,7 @@ milliseconds, so a fractional value is not a duration this format can express.",
             description: "source",
             display: (64, 48),
             layers: vector::repeated(4, &[(0, 300, 255)]),
-            block_size: 2,
+            layers_per_chunk: 2,
             ..Default::default()
         },
         &CryptoSpec {
@@ -326,7 +731,7 @@ milliseconds, so a fractional value is not a duration this format can express.",
             description: "source",
             display: (64, 48),
             layers: vector::repeated(4, &[(0, 300, 255)]),
-            block_size: 2,
+            layers_per_chunk: 2,
             ..Default::default()
         },
         &CryptoSpec {
@@ -353,7 +758,7 @@ milliseconds, so a fractional value is not a duration this format can express.",
             description: "source",
             display: (64, 48),
             layers: vector::repeated(4, &[(0, 300, 255)]),
-            block_size: 2,
+            layers_per_chunk: 2,
             ..Default::default()
         },
         &CryptoSpec {
@@ -394,20 +799,16 @@ milliseconds, so a fractional value is not a duration this format can express.",
         .crypto(encrypted_crypto.clone()),
     );
 
-    // e08: a tampered ciphertext byte inside a sealed LAYR block frame
+    // e08: a tampered ciphertext byte inside a sealed LAYR frame
     let mut b = encrypted_password.raw.clone();
-    let block_count = encrypted_password.meta["blocks"]
-        .as_array()
-        .expect("a block table")
-        .len();
-    let body_off = 12 + block_count * BLOCK_TABLE_ENTRY_SIZE;
-    b[layr_of(&encrypted_password) + body_off + 16] ^= 0xFF;
+    // Past the version field and the nonce, inside the sealed frame.
+    b[layr_of(&encrypted_password) + 4 + 12 + 1] ^= 0xFF;
     emit(
         &invalid_dir,
         &mut manifest_invalid,
         Invalid::new(
             "crypt-tag-corrupt",
-            "One ciphertext byte of LAYR block 0 is flipped, so its AEAD tag must fail; a reader must not decompress or parse a block it cannot authenticate.",
+            "One ciphertext byte of the first sealed LAYR frame is flipped, so its AEAD tag must fail; a reader must not decompress or parse a frame it cannot authenticate.",
             "crypt.tag_verify",
             container::repack(&b, &encrypted_password.layout),
         )
@@ -529,80 +930,12 @@ milliseconds, so a fractional value is not a duration this format can express.",
         ),
     );
 
-    emit(
-        &invalid_dir,
-        &mut manifest_invalid,
-        Invalid::new(
-            "lrov-entry-form-both",
-            "An LROV entry carries both layer and layer_range, which the entry form forbids.",
-            "lrov.entry_form",
-            lrov_vector(vec![obj![
-                "layer" => 2,
-                "layer_range" => vec![2, 4],
-                "normal_exposure_ms" => 2800,
-            ]]),
-        ),
-    );
-    emit(
-        &invalid_dir,
-        &mut manifest_invalid,
-        Invalid::new(
-            "lrov-layer-out-of-range",
-            "An LROV entry overrides layer 40 in a ten-layer file.",
-            "lrov.layer_index_range",
-            lrov_vector(vec![obj!["layer" => 40, "normal_exposure_ms" => 2800]]),
-        ),
-    );
-    emit(
-        &invalid_dir,
-        &mut manifest_invalid,
-        Invalid::new(
-            "lrov-range-reversed",
-            "An LROV layer_range ends before it begins.",
-            "lrov.layer_range_order",
-            lrov_vector(vec![obj![
-                "layer_range" => vec![8, 3],
-                "normal_exposure_ms" => 2800,
-            ]]),
-        ),
-    );
-    emit(
-        &invalid_dir,
-        &mut manifest_invalid,
-        Invalid::new(
-            "lrov-sector-undefined",
-            "An LROV entry targets sector 7, which no SECT chunk in this single-sector file defines.",
-            "lrov.sector_id_defined",
-            lrov_vector(vec![obj![
-                "layer_range" => vec![3, 5],
-                "sector_id" => 7,
-                "normal_exposure_ms" => 2800,
-            ]]),
-        ),
-    );
-    emit(
-        &invalid_dir,
-        &mut manifest_invalid,
-        Invalid::new(
-            "lrov-wait-fractional",
-            "An LROV entry carries wait_time_before_cure_ms = 500.5. A wait time is a whole \
-number of milliseconds, so a fractional value is not a duration this format \
-can express.",
-            "lrov.time_integer",
-            lrov_vector(vec![obj![
-                "layer" => 2,
-                "normal_exposure_ms" => 2800,
-                "wait_time_before_cure_ms" => 500.5,
-            ]]),
-        ),
-    );
-
     let preview = vector::build_vector(&VectorSpec {
         name: "x-prev",
         description: "source",
         display: (64, 48),
         layers: vector::repeated(4, &[(0, 90, 255)]),
-        block_size: 2,
+        layers_per_chunk: 2,
         prevs: vec![(png::preview(24, 18, [200, 200, 200]), 1, false)],
         ..Default::default()
     });
@@ -639,7 +972,7 @@ can express.",
         description: "source",
         display: (64, 48),
         layers: vector::repeated(4, &[(0, 70, 255)]),
-        block_size: 2,
+        layers_per_chunk: 2,
         voxl: Some(b"[{\"magic\": \"VOXL\", \"version\": 1}]".to_vec()),
         ..Default::default()
     });
@@ -730,6 +1063,19 @@ can express.",
         .base("binary-basic"),
     );
 
+    // The corpus is exactly what the manifest lists.
+    let expected: BTreeSet<PathBuf> = manifest_valid
+        .iter()
+        .chain(manifest_invalid.iter())
+        .map(|record| root.join(record["file"].as_str().expect("a file name")))
+        .collect();
+    let mut removed = 0;
+    prune(&valid_dir, &expected, &mut removed);
+    prune(&invalid_dir, &expected, &mut removed);
+    if removed > 0 {
+        println!("\n{removed} stale vectors removed");
+    }
+
     let (valid_count, invalid_count) = (manifest_valid.len(), manifest_invalid.len());
     let manifest = obj![
         "generator" => obj![
@@ -748,6 +1094,22 @@ can express.",
 
     println!("\nmanifest.json: {valid_count} valid, {invalid_count} invalid");
     0
+}
+
+/// Remove every `.lumen` file the corpus no longer lists.
+///
+/// A revision that retires a vector must retire its file too: a stale one is not
+/// small noise, it is a file written to the previous layout sitting in the
+/// directory a validator sweeps, so it fails as if it were a current vector.
+fn prune(dir: &Path, written: &BTreeSet<PathBuf>, removed: &mut usize) {
+    for entry in fs::read_dir(dir).expect("vector directory") {
+        let path = entry.expect("a directory entry").path();
+        if path.extension().is_some_and(|ext| ext == "lumen") && !written.contains(&path) {
+            fs::remove_file(&path).expect("stale vector");
+            println!("removed stale {}", path.display());
+            *removed += 1;
+        }
+    }
 }
 
 // --------------------------------------------------------------------------
@@ -772,7 +1134,7 @@ pub fn valid_vectors() -> Vec<Built> {
     ]
 }
 
-/// 6 layers, three tags, no dictionary, three blocks.
+/// 6 layers, three REE forms, no dictionary, three LAYR chunks.
 fn binary_basic() -> Built {
     let layers: Vec<vector::Layer> = vec![
         vec![vec![(0, 0, 0)]], // all black -> empty form
@@ -784,18 +1146,18 @@ fn binary_basic() -> Built {
     ];
     vector::build_vector(&VectorSpec {
         name: "binary-basic",
-        description: "Six layers covering the empty-layer form, binary REE, grayscale REE and split REE, across three blocks with no dictionary, over a bottom range whose motion, wait and PWM values differ from the normal ones: the bottom layers take the bottom-prefixed values verbatim, the transition layer blends them, and light_pwm switches to the normal value at the first non-bottom layer instead of blending.",
+        description: "Six layers over one sector covering the empty-layer form, binary REE, grayscale REE and split REE, in three LAYR chunks of two layers each with no dictionary, over a bottom range whose motion, wait and PWM values differ from the normal ones: the bottom layers take the bottom-prefixed values verbatim, the transition layer blends them, and light_pwm switches to the normal value at the first non-bottom layer instead of blending.",
         features: &[
             "empty-layer",
             "binary-ree",
             "grayscale-ree",
             "split-ree",
-            "multi-block",
+            "multi-chunk",
             "no-dictionary",
         ],
         display: (64, 48),
         layers,
-        block_size: 2,
+        layers_per_chunk: 2,
         split_layers: vec![4],
         meta_extra: vec![
             ("bottom_lift_slow_distance_um", Value::from(7000)),
@@ -808,21 +1170,21 @@ fn binary_basic() -> Built {
     })
 }
 
-/// 64 layers with a trained dictionary, four blocks.
+/// 64 layers with a trained dictionary, four LAYR chunks.
 fn dict_multi_block() -> Built {
     vector::build_vector(&VectorSpec {
         name: "dict-multi-block",
-        description: "64 layers with a trained ZDIC dictionary, four blocks of sixteen layers.",
+        description: "64 layers with a trained ZDIC dictionary, in four LAYR chunks of sixteen layers each, every frame carrying the dictionary's id.",
         features: &[
             "dictionary",
             "dictionary-id",
-            "multi-block",
+            "multi-chunk",
             "grayscale-ree",
             "split-ree",
         ],
         display: (256, 192),
         layers: vector::sparse_layers(64, 256 * 192),
-        block_size: 16,
+        layers_per_chunk: 16,
         use_dict: true,
         dict_samples_bytes: 1024,
         split_layers: every(2, 64),
@@ -830,27 +1192,43 @@ fn dict_multi_block() -> Built {
     })
 }
 
-/// 4 layers, two sectors, partition invariant.
+/// 4 layers, two sectors, one override on one of the two.
 fn multi_sector() -> Built {
+    // The two sectors' masks partition each layer's exposed image: sector 0
+    // covers the runs listed first, sector 1 the gap between them, and no pixel
+    // is exposed by both (spec 7.3).
     let layers: Vec<vector::Layer> = vec![
-        vec![vec![(0, 100, 255)], vec![(200, 300, 255)]],
+        vec![vec![(0, 100, 255), (200, 300, 255)], vec![(100, 200, 255)]],
         vec![vec![(0, 64, 255)]],
         vec![vec![(0, 0, 0)]], // empty layer
-        vec![vec![(500, 600, 255)], vec![(1000, 1100, 255)]],
+        vec![vec![(500, 600, 255)], vec![(600, 660, 255)]],
     ];
     vector::build_vector(&VectorSpec {
         name: "multi-sector",
-        description: "Four layers with two non-overlapping sectors, exercising the multi-sector varint framing and the sector partition invariant.",
+        description: "Four layers with two non-overlapping sectors, the second defined by META.sectors: layer 2 carries no data at all and is the empty layer, its single sector-0 entry holding a zero length, and two LROV chunks override one layer of one sector each - sector 1 of layer 0 and sector 0 of layer 1 - so the timing of a point is the timing of that point and not of its layer.",
         features: &[
             "multi-sector",
-            "sector-framing",
+            "sector-chunks",
             "empty-layer",
             "binary-ree",
+            "sector-scoped-override",
         ],
         display: (64, 48),
         layers,
-        block_size: 2,
+        layers_per_chunk: 2,
         meta_extra: vec![("materials", standard_grey_material())],
+        overrides: vec![
+            Override {
+                layer: 0,
+                sector_id: 1,
+                fields: vec![("normal_exposure_ms", Value::from(2800))],
+            },
+            Override {
+                layer: 1,
+                sector_id: 0,
+                fields: vec![("lift_slow_distance_um", Value::from(6000))],
+            },
+        ],
         ..Default::default()
     })
 }
@@ -870,41 +1248,41 @@ fn sector_blend_ranges() -> Built {
         .collect();
     vector::build_vector(&VectorSpec {
         name: "sector-blend-ranges",
-        description: "Ten layers over two sectors whose SECT definition carries bottom_layer_count 5 and no transition_layer_count, so sector 1 is blended over a bottom range of its own and inherits META's transition count; layer 4 is the layer where the two readings part, fully normal at 2500 ms for sector 0 and still a bottom layer at 30000 ms for sector 1, and their transition steps fall on layers 2 and 5 rather than together.",
+        description: "Ten layers over two sectors whose META.sectors entry for sector 1 carries bottom_layer_count 5 and no transition_layer_count, so sector 1 is blended over a bottom range of its own and inherits META's transition count; layer 4 is the layer where the two readings part, fully normal at 2500 ms for sector 0 and still a bottom layer at 30000 ms for sector 1, and their transition steps fall on layers 2 and 5 rather than together.",
         features: &[
             "multi-sector",
-            "sector-framing",
+            "sector-chunks",
             "sector-layer-count",
             "per-sector-bottom-range",
             "binary-ree",
         ],
         display: (64, 48),
         layers,
-        block_size: 5,
+        layers_per_chunk: 5,
         meta_extra: vec![("materials", standard_grey_material())],
-        sect_extra: vec![("bottom_layer_count", Value::from(5))],
+        sector_extra: vec![("bottom_layer_count", Value::from(5))],
         ..Default::default()
     })
 }
 
-/// Password mode, AES-256-GCM, dictionary, two sealed blocks.
+/// Password mode, AES-256-GCM, dictionary, two sealed LAYR chunks.
 fn encrypted_password() -> Built {
     vector::build_encrypted_vector(
         &VectorSpec {
             name: "encrypted-password",
-            description: "Password-mode AES-256-GCM: an Argon2id-wrapped session key, a sealed dictionary and metadata, and two blocks of sealed layer frames.",
+            description: "Password-mode AES-256-GCM: an Argon2id-wrapped session key, a sealed dictionary and metadata, and two LAYR chunks whose frames are sealed one by one under the directory index of the chunk that carries each.",
             features: &[
                 "encryption",
                 "password-mode",
                 "aes-256-gcm",
                 "argon2id",
                 "dictionary",
-                "sealed-blocks",
-                "multi-block",
+                "sealed-frames",
+                "multi-chunk",
             ],
             display: (256, 192),
             layers: vector::sparse_layers(32, 256 * 192),
-            block_size: 16,
+            layers_per_chunk: 16,
             use_dict: true,
             dict_samples_bytes: 1024,
             split_layers: every(2, 32),
@@ -918,7 +1296,7 @@ fn encrypted_password() -> Built {
     )
 }
 
-/// Machine mode, ChaCha20-Poly1305, one block, three recipient entries.
+/// Machine mode, ChaCha20-Poly1305, one LAYR chunk, three recipient entries.
 fn encrypted_machine() -> Built {
     let layers: Vec<vector::Layer> = vec![
         vec![vec![(0, 120, 255)]],
@@ -941,7 +1319,7 @@ fn encrypted_machine() -> Built {
             ],
             display: (64, 48),
             layers,
-            block_size: 4,
+            layers_per_chunk: 4,
             split_layers: vec![1],
             ..Default::default()
         },
@@ -967,18 +1345,18 @@ fn encrypted_both() -> Built {
     vector::build_encrypted_vector(
         &VectorSpec {
             name: "encrypted-both",
-            description: "Both wrapping modes set in one AUTH chunk, with multi-sector layer content sealed under a single session key.",
+            description: "Both wrapping modes set in one AUTH chunk, with two sectors whose frames are sealed one by one, each under the directory index of the chunk that carries it.",
             features: &[
                 "encryption",
                 "password-mode",
                 "machine-binding",
                 "multi-sector",
-                "sealed-sectors",
+                "sealed-frames",
                 "aes-256-gcm",
             ],
             display: (64, 48),
             layers,
-            block_size: 2,
+            layers_per_chunk: 2,
             split_layers: vec![5],
             meta_extra: vec![("materials", standard_grey_material())],
             ..Default::default()
@@ -1010,7 +1388,7 @@ fn print_profile() -> Built {
             ],
             display: (64, 48),
             layers: vector::repeated(4, &[(0, 150, 255)]),
-            block_size: 2,
+            layers_per_chunk: 2,
             prof: Some(payload::prof(ProfSettings::default(), ProfOverrides::default())),
             ..Default::default()
         },
@@ -1022,32 +1400,49 @@ fn print_profile() -> Built {
     )
 }
 
-/// Plaintext, per-layer and per-range overrides.
+/// Plaintext, one override chunk per point.
 fn layer_overrides() -> Built {
-    let overrides = vec![
-        obj![
-            "layer" => 2,
-            "normal_exposure_ms" => 2800,
-            "lift_slow_distance_um" => 6000,
+    // A range is one chunk per layer it covers now: an override set belongs to
+    // exactly one (layer, sector), and nothing folds several of them onto a
+    // point's timing.
+    let ranged = |layers: std::ops::RangeInclusive<u32>, fields: Vec<(&'static str, Value)>| {
+        layers
+            .map(|layer| Override {
+                layer,
+                sector_id: 0,
+                fields: fields.clone(),
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut overrides = vec![Override {
+        layer: 2,
+        sector_id: 0,
+        fields: vec![
+            ("normal_exposure_ms", Value::from(2800)),
+            ("lift_slow_distance_um", Value::from(6000)),
         ],
-        obj![
-            "layer_range" => vec![3, 5],
-            "sector_id" => 0,
-            "normal_exposure_ms" => 2200,
-            "wait_time_before_cure_ms" => 500,
+    }];
+    overrides.extend(ranged(
+        3..=5,
+        vec![
+            ("normal_exposure_ms", Value::from(2200)),
+            ("wait_time_before_cure_ms", Value::from(500)),
         ],
-        obj![
-            "layer_range" => vec![6, 8],
-            "wait_time_after_lift_ms" => 1000,
-        ],
-        obj![
-            "layer" => 4,
-            "wait_time_after_lift_ms" => 900,
-        ],
-    ];
+    ));
+    overrides.extend(ranged(
+        6..=8,
+        vec![("wait_time_after_lift_ms", Value::from(1000))],
+    ));
+    // Layer 4 is covered by the range and by a set of its own: one chunk, so the
+    // set is written out with the field the single-layer override adds.
+    for over in overrides.iter_mut().filter(|over| over.layer == 4) {
+        over.fields
+            .push(("wait_time_after_lift_ms", Value::from(900)));
+    }
+
     vector::build_vector(&VectorSpec {
         name: "layer-overrides",
-        description: "Ten layers with an LROV chunk whose four entries cover a single layer, an inclusive range scoped to sector 0, a range that applies to every sector, and a second entry on layer 4, which the range already matches. The two entries that match layer 4 fold field by field rather than the later one replacing the earlier, so that layer keeps the range's exposure and wait while taking the single-layer entry's wait after the lift.",
+        description: "Ten layers of one sector with seven LROV chunks: a single layer, a range of three layers written as one chunk per layer, a second range, and layer 4, which the first range covers too. An override set belongs to exactly one (layer, sector) - the entry that names the chunk is the only thing that places it - so nothing folds: layer 4 resolves to the values of its own set, which keeps the range's exposure and wait while taking the single-layer chunk's wait after the lift.",
         features: &[
             "lrov-chunk",
             "layer-override",
@@ -1056,8 +1451,8 @@ fn layer_overrides() -> Built {
         ],
         display: (64, 48),
         layers: vector::repeated(10, &[(0, 120, 255)]),
-        block_size: 5,
-        lrov: Some(overrides),
+        layers_per_chunk: 5,
+        overrides,
         ..Default::default()
     })
 }
@@ -1079,7 +1474,7 @@ fn previews() -> Built {
             ],
             display: (64, 48),
             layers: vector::repeated(4, &[(0, 100, 255)]),
-            block_size: 2,
+            layers_per_chunk: 2,
             prevs: vec![
                 (png::preview(400, 300, [200, 200, 200]), 1, false),
                 (png::preview(16, 16, [255, 0, 0]), 3, true),
@@ -1110,7 +1505,7 @@ fn embedded_scene() -> Built {
             ],
             display: (64, 48),
             layers: vector::repeated(4, &[(0, 80, 255)]),
-            block_size: 2,
+            layers_per_chunk: 2,
             voxl: Some(payload::voxl()),
             ..Default::default()
         },
@@ -1154,7 +1549,7 @@ fn extensions() -> Built {
         ],
         display: (64, 48),
         layers: vector::repeated(4, &[(0, 60, 255)]),
-        block_size: 2,
+        layers_per_chunk: 2,
         extds,
         ..Default::default()
     })
@@ -1271,25 +1666,227 @@ fn prof_vector(settings: ProfSettings, overrides: ProfOverrides) -> Vec<u8> {
         description: "source",
         display: (64, 48),
         layers: vector::repeated(4, &[(0, 200, 255)]),
-        block_size: 2,
+        layers_per_chunk: 2,
         prof: Some(payload::prof(settings, overrides)),
         ..Default::default()
     })
     .raw
 }
 
-/// A plaintext file carrying one LROV payload.
-fn lrov_vector(overrides: Vec<Value>) -> Vec<u8> {
+/// A plaintext file carrying one `LROV` chunk per override set, over ten layers.
+fn override_vector(overrides: Vec<Override<'static>>) -> Vec<u8> {
     vector::build_vector(&VectorSpec {
         name: "x-lrov",
         description: "source",
         display: (64, 48),
         layers: vector::repeated(10, &[(0, 120, 255)]),
-        block_size: 5,
-        lrov: Some(overrides),
+        layers_per_chunk: 5,
+        overrides,
         ..Default::default()
     })
     .raw
+}
+
+/// A plaintext file whose first `LROV` chunk carries `raw` as its payload.
+fn lrov_raw_vector(raw: &[u8]) -> Vec<u8> {
+    vector::build_vector(&VectorSpec {
+        name: "x-lrov-raw",
+        description: "source",
+        display: (64, 48),
+        layers: vector::repeated(10, &[(0, 120, 255)]),
+        layers_per_chunk: 5,
+        overrides: vec![Override {
+            layer: 2,
+            sector_id: 0,
+            fields: vec![("normal_exposure_ms", Value::from(2800))],
+        }],
+        lrov_raw: Some(raw.to_vec()),
+        ..Default::default()
+    })
+    .raw
+}
+
+/// A plaintext file carrying an `LROV` chunk that no entry names.
+fn orphan_lrov_vector() -> Vec<u8> {
+    vector::build_vector(&VectorSpec {
+        name: "x-lrov-orphan",
+        description: "source",
+        display: (64, 48),
+        layers: vector::repeated(10, &[(0, 120, 255)]),
+        layers_per_chunk: 5,
+        overrides: vec![Override {
+            layer: 2,
+            sector_id: 0,
+            fields: vec![("normal_exposure_ms", Value::from(2800))],
+        }],
+        orphan_lrov: Some(vec![("normal_exposure_ms", Value::from(2800))]),
+        ..Default::default()
+    })
+    .raw
+}
+
+/// A plaintext file whose two layers each carry three sectors.
+fn three_sector_source() -> Built {
+    let spans = |sector: usize| vec![(sector * 200, sector * 200 + 64, 255u8)];
+    let layer: vector::Layer = (0..3).map(spans).collect();
+    vector::build_vector(&VectorSpec {
+        name: "x-three-sectors",
+        description: "source",
+        display: (64, 48),
+        layers: vec![layer.clone(), layer],
+        layers_per_chunk: 1,
+        meta_extra: vec![("materials", standard_grey_material())],
+        sectors: Some(Value::Array(vec![
+            payload::sector_value(1, "Support", 3000),
+            payload::sector_value(2, "Second support", 2500),
+        ])),
+        ..Default::default()
+    })
+}
+
+/// A plaintext file whose frames do not declare their decompressed size.
+fn frame_without_content_size() -> Vec<u8> {
+    vector::build_vector(&VectorSpec {
+        name: "x-content-size",
+        description: "source",
+        display: (64, 48),
+        layers: vector::repeated(4, &[(0, 200, 255)]),
+        layers_per_chunk: 2,
+        omit_content_size: true,
+        ..Default::default()
+    })
+    .raw
+}
+
+/// A plaintext file compressed with a dictionary it does not carry.
+fn dictionary_without_zdic() -> Vec<u8> {
+    vector::build_vector(&VectorSpec {
+        name: "x-dict-absent",
+        description: "source",
+        display: (256, 192),
+        layers: vector::sparse_layers(16, 256 * 192),
+        layers_per_chunk: 8,
+        use_dict: true,
+        dict_samples_bytes: 1024,
+        omit_zdic: true,
+        ..Default::default()
+    })
+    .raw
+}
+
+/// A plaintext file carrying a dictionary no frame uses.
+fn unused_dictionary() -> Vec<u8> {
+    vector::build_vector(&VectorSpec {
+        name: "x-dict-unused",
+        description: "source",
+        display: (256, 192),
+        layers: vector::sparse_layers(16, 256 * 192),
+        layers_per_chunk: 8,
+        use_dict: true,
+        dict_samples_bytes: 1024,
+        unused_zdic: true,
+        ..Default::default()
+    })
+    .raw
+}
+
+/// A plaintext file whose `META.sectors` names one sector twice.
+fn sectors_shape_vector() -> Vec<u8> {
+    vector::build_vector(&VectorSpec {
+        name: "x-sectors-shape",
+        description: "source",
+        display: (64, 48),
+        layers: two_sector_layers(),
+        layers_per_chunk: 2,
+        meta_extra: vec![("materials", standard_grey_material())],
+        sectors: Some(Value::Array(vec![
+            payload::sector_value(1, "Support", 3000),
+            payload::sector_value(1, "Support again", 3000),
+        ])),
+        ..Default::default()
+    })
+    .raw
+}
+
+/// A plaintext file whose sector names a material the library does not have.
+fn sector_material_vector() -> Vec<u8> {
+    vector::build_vector(&VectorSpec {
+        name: "x-sector-material",
+        description: "source",
+        display: (64, 48),
+        layers: two_sector_layers(),
+        layers_per_chunk: 2,
+        meta_extra: vec![("materials", standard_grey_material())],
+        sector_extra: vec![("material_index", Value::from(3))],
+        ..Default::default()
+    })
+    .raw
+}
+
+/// Four layers that each carry two sectors.
+fn two_sector_layers() -> Vec<vector::Layer> {
+    (0..4)
+        .map(|index| {
+            let offset = 16 * index;
+            vec![
+                vec![(0, 64 + offset, 255u8)],
+                vec![(200 + offset, 264 + offset, 255u8)],
+            ]
+        })
+        .collect()
+}
+
+/// Where the frame's content-size field sits inside `frame`, read off the frame
+/// header, and how wide it is (spec 4.10, zstd's frame format).
+///
+/// The invalid vectors that lie about the size patch the field in place, so they
+/// need its position rather than a hard-coded offset: the header carries an
+/// optional window descriptor, an optional dictionary id and a content-size field
+/// of one, two, four or eight bytes.
+fn content_size_field(frame: &[u8]) -> (usize, usize) {
+    let descriptor = frame[4];
+    let single_segment = descriptor & 0x20 != 0;
+    let dictionary = [0usize, 1, 2, 4][usize::from(descriptor & 0x03)];
+    let width = match descriptor >> 6 {
+        0 => usize::from(single_segment),
+        1 => 2,
+        2 => 4,
+        _ => 8,
+    };
+    (5 + usize::from(!single_segment) + dictionary, width)
+}
+
+/// A source whose single frame is wide enough to declare a four-byte size.
+///
+/// A 64 by 48 display of 32 layers in one group is at most 5 bytes per pixel per
+/// slice of decompressed data - a few hundred kilobytes - while the frame's own
+/// declaration has four bytes to lie in.
+fn allocation_bound_source() -> Built {
+    vector::build_vector(&VectorSpec {
+        name: "x-allocation",
+        description: "source",
+        display: (64, 48),
+        layers: dense_layers(32, 64 * 48),
+        layers_per_chunk: 32,
+        ..Default::default()
+    })
+}
+
+/// `count` layers of alternating one-pixel runs, which REE cannot compress.
+fn dense_layers(count: usize, total: usize) -> Vec<vector::Layer> {
+    (0..count)
+        .map(|start| {
+            let mut spans = Vec::new();
+            let mut pos = start % 2;
+            let mut value = 255u8;
+            while pos + 1 < total {
+                spans.push((pos, pos + 1, value));
+                value = if value == 255 { 128 } else { 255 };
+                pos += 2;
+            }
+            vec![spans]
+        })
+        .collect()
 }
 
 /// A plaintext file carrying the given extensions.
@@ -1299,7 +1896,7 @@ fn extd_vector(extds: &[Extd]) -> Vec<u8> {
         description: "source",
         display: (64, 48),
         layers: vector::repeated(4, &[(0, 50, 255)]),
-        block_size: 2,
+        layers_per_chunk: 2,
         extds: extds.iter().map(|extd| payload::extd(*extd)).collect(),
         ..Default::default()
     })

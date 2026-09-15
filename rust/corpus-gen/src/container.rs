@@ -16,10 +16,21 @@ pub const HEADER_SIZE: usize = 32;
 pub const DESCRIPTOR_SIZE: usize = 32;
 /// Payloads are aligned to this many bytes (spec 3.2 recommends 8).
 pub const CHUNK_ALIGN: usize = 8;
-/// One LTBL entry.
-pub const LTBL_ENTRY_SIZE: usize = 20;
-/// One LAYR block table entry.
-pub const BLOCK_TABLE_ENTRY_SIZE: usize = 24;
+/// One LTBL entry (spec 4.9).
+pub const LTBL_ENTRY_SIZE: usize = 28;
+/// One LTBL header.
+pub const LTBL_HEADER_SIZE: usize = 16;
+/// The offset of `entry_count` in the LTBL header (spec 4.9).
+pub const LTBL_ENTRY_COUNT: usize = 12;
+/// Field offsets inside one LTBL entry (spec 4.9).
+pub const LTBL_DATA_SIZE: usize = 0;
+pub const LTBL_FIRST_LROV: usize = 4;
+pub const LTBL_FIRST_LAYR: usize = 8;
+pub const LTBL_ADDITIONAL_SECTORS: usize = 12;
+pub const LTBL_DATA_OFFSET: usize = 16;
+pub const LTBL_SECTOR_ID: usize = 24;
+/// The LAYR container's version field, ahead of the frame (spec 4.10).
+pub const LAYR_VERSION: u32 = 1;
 
 pub const FLAG_MULTI_SECTOR: u32 = 0x02;
 pub const FLAG_ENCRYPTED: u32 = 0x08;
@@ -84,7 +95,6 @@ impl Chunk {
         match &self.ctype {
             b"HDR\0" => "HDR",
             b"META" => "META",
-            b"SECT" => "SECT",
             b"PROF" => "PROF",
             b"LROV" => "LROV",
             b"PREV" => "PREV",
@@ -112,17 +122,20 @@ pub struct Entry {
 /// Where everything landed, for the manifest and for the invalid vectors that
 /// rewrite a field in place.
 pub struct Layout {
-    offsets: HashMap<[u8; 4], usize>,
+    offsets: HashMap<[u8; 4], Vec<usize>>,
     pub dir_offset: usize,
     pub trailer_offset: usize,
     pub entries: Vec<Entry>,
 }
 
 impl Layout {
-    /// The offset of a chunk's payload; the last chunk of a type wins, as in the
-    /// producer this ports.
+    /// The offset of the first chunk that carries `ctype`.
+    ///
+    /// LAYR and LROV repeat - one chunk per (sector, layer group) and one per
+    /// (layer, sector) - so the first of a type is what a caller that names no
+    /// index gets.
     pub fn offset(&self, ctype: &[u8; 4]) -> usize {
-        self.offsets[ctype]
+        self.offsets[ctype][0]
     }
 }
 
@@ -156,7 +169,10 @@ pub fn build_file(chunks: &[Chunk], header_flags: u32) -> (Vec<u8>, Layout) {
                 (&chunk.payload, chunk.payload.len(), 0)
             };
 
-        offsets.insert(chunk.ctype, pos);
+        offsets
+            .entry(chunk.ctype)
+            .or_insert_with(Vec::new)
+            .push(pos);
         entries.push(Entry {
             ctype: chunk.ctype,
             offset: pos,
@@ -207,25 +223,55 @@ pub fn build_file(chunks: &[Chunk], header_flags: u32) -> (Vec<u8>, Layout) {
     )
 }
 
-/// The LAYR block table exactly as written to the file (spec 4.10).
+/// The LTBL exactly as written to the file (spec 4.9).
 ///
-/// Read back rather than recomputed: an encrypted vector's frames are sealed, so
-/// their frame_size includes the AEAD overhead, and the manifest must describe the
-/// bytes that are actually there.
-pub fn stored_block_table(raw: &[u8], layout: &Layout) -> Vec<serde_json::Value> {
-    let off = layout.offset(b"LAYR");
-    let block_count = read_u32(raw, off + 4);
+/// Read back rather than recomputed, so the manifest describes the bytes that are
+/// actually there. An entry does not carry its layer, so the walk takes it from
+/// the accounting: a layer has one entry plus however many more its first entry
+/// says, and the entries of a layer are adjacent.
+pub fn stored_layer_table(raw: &[u8], layout: &Layout) -> Vec<serde_json::Value> {
+    let off = layout.offset(b"LTBL");
     let entry_size = read_u32(raw, off + 8) as usize;
-    (0..block_count)
-        .map(|k| {
-            let base = off + 12 + k as usize * entry_size;
-            crate::obj![
-                "frame_offset" => read_u64(raw, base),
-                "frame_size" => read_u64(raw, base + 8),
-                "uncompressed_size" => read_u64(raw, base + 16),
-            ]
-        })
-        .collect()
+    let entry_count = read_u32(raw, off + 12) as usize;
+    let entry = |index: usize| {
+        let base = off + 16 + index * entry_size;
+        (
+            read_u32(raw, base),
+            read_u32(raw, base + 4),
+            read_u32(raw, base + 8),
+            read_u32(raw, base + 12),
+            read_u64(raw, base + 16),
+            read_u32(raw, base + 24),
+        )
+    };
+
+    let mut records = Vec::with_capacity(entry_count);
+    let mut layer = 0u32;
+    let mut index = 0usize;
+    while index < entry_count {
+        let (_, _, _, additional, _, _) = entry(index);
+        let count = 1 + additional as usize;
+        for position in 0..count {
+            if index + position >= entry_count {
+                break;
+            }
+            let (data_size, first_lrov, first_layr, additional, data_offset, sector_id) =
+                entry(index + position);
+            records.push(crate::obj![
+                "entry_index" => index + position,
+                "layer" => layer,
+                "sector_id" => sector_id,
+                "data_size" => data_size,
+                "first_lrov" => first_lrov,
+                "first_layr" => first_layr,
+                "additional_sector_count" => additional,
+                "data_offset" => data_offset,
+            ]);
+        }
+        index += count;
+        layer += 1;
+    }
+    records
 }
 
 /// The trailer CRC-32C over everything before it.

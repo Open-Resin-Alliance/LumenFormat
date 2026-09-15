@@ -1,7 +1,7 @@
 {
   "generator": {
     "format_revision": "1.0",
-    "note": "Compressed payload bytes depend on the zstd version and level. Uncompressed structures (HDR, AUTH, LTBL, LAYR header and block table, LHAS, REE streams, directory, trailer) are exact. Sealed units are exact too: every nonce, salt and key is derived from a fixed SHAKE-256 seed, so regeneration is deterministic. Those values are public test data; real encoders must draw them from a CSPRNG.",
+    "note": "Compressed payload bytes depend on the zstd version and level. Uncompressed structures (HDR, AUTH, LTBL, LAYR's version field, LHAS, REE streams, directory, trailer) are exact. Sealed units are exact too: every nonce, salt and key is derived from a fixed SHAKE-256 seed, so regeneration is deterministic. Those values are public test data; real encoders must draw them from a CSPRNG.",
     "zstd_layer_level": 6,
     "zstd_small_level": 3,
     "zstd_version": "1.5.7"
@@ -9,12 +9,142 @@
   "invalid": [
     {
       "base_vector": "binary-basic",
-      "description": "LTBL entry 0 has sector_count 0 but data_size 2.",
-      "expected_failure": "ltbl.empty_layer_no_bytes",
-      "file": "invalid/empty-layer-with-bytes.lumen",
-      "file_sha256": "6d50ad95593d8119027a24c82da3f1b24c0a0a8a689320566c20d8df93fc3e5f",
-      "file_size": 1043,
-      "name": "empty-layer-with-bytes",
+      "description": "LTBL's entry_count says seven while the table holds six entries, so the table does not end where the header says it does.",
+      "expected_failure": "ltbl.entry_count",
+      "file": "invalid/ltbl-entry-count.lumen",
+      "file_sha256": "6f7e35615a23ce6a3ab67d7733bc18c882e1e238a91a05e8ed9420b8a496e26f",
+      "file_size": 1093,
+      "name": "ltbl-entry-count",
+      "strict_only": false
+    },
+    {
+      "base_vector": "binary-basic",
+      "description": "The last entry claims one further entry for its layer, so the sum of 1 + additional_sector_count over the layers' first entries runs one past the table the header declares.",
+      "expected_failure": "ltbl.entry_count",
+      "file": "invalid/ltbl-entry-count-overrun.lumen",
+      "file_sha256": "6d11e3eb2edf7766c05dd2f1e1fed8d90a3259ca0b380ec2a0e09ddd3595a7dd",
+      "file_size": 1093,
+      "name": "ltbl-entry-count-overrun",
+      "strict_only": false
+    },
+    {
+      "base_vector": null,
+      "description": "Layer 0 carries sectors 0, 1 and 2, and its last two entries are written in the order 0, 2, 1: the ids descend where the table requires them to ascend.",
+      "expected_failure": "ltbl.sector_ids_ascending",
+      "file": "invalid/ltbl-sector-ids-descending.lumen",
+      "file_sha256": "8d124f9e225618517d51122967d1da88f90649c2edec51d5af3c02afbf7fa6ed",
+      "file_size": 1219,
+      "name": "ltbl-sector-ids-descending",
+      "strict_only": false
+    },
+    {
+      "base_vector": "multi-sector",
+      "description": "Layer 0's two entries both name sector 0, so the layer carries one sector twice instead of two sectors once.",
+      "expected_failure": "ltbl.sector_id_unique",
+      "file": "invalid/ltbl-sector-id-duplicate.lumen",
+      "file_sha256": "7e60616737b7a7db24dfa8801e082d7c33353743283cc3a94b32b93dba087a48",
+      "file_size": 1315,
+      "name": "ltbl-sector-id-duplicate",
+      "strict_only": false
+    },
+    {
+      "base_vector": "multi-sector",
+      "description": "Layer 1's only entry names sector 3. Sector 0 is primary and implicitly present on every layer with data, so a layer's first entry is sector 0's.",
+      "expected_failure": "ltbl.first_entry_is_sector_zero",
+      "file": "invalid/ltbl-first-entry-not-sector-zero.lumen",
+      "file_sha256": "3c3d23448f841e3f08343e73c9c562e85ad372eff16383c0fca999d43ef40ede",
+      "file_size": 1315,
+      "name": "ltbl-first-entry-not-sector-zero",
+      "strict_only": false
+    },
+    {
+      "base_vector": "binary-basic",
+      "description": "Entry 0 names directory index 2, which is the LTBL chunk itself, so the slice has no frame to be read out of.",
+      "expected_failure": "ltbl.first_layr_in_range",
+      "file": "invalid/ltbl-first-layr-not-layr.lumen",
+      "file_sha256": "24cb013c6bfc6319602a058fdca7572457e91a9f6d2abd38bf4986e007a1af14",
+      "file_size": 1093,
+      "name": "ltbl-first-layr-not-layr",
+      "strict_only": false
+    },
+    {
+      "base_vector": "binary-basic",
+      "description": "Entry 1 claims 0x00FFFFFF bytes even though it is the last slice of the frame it names, so its end lies past the frame's decompressed output.",
+      "expected_failure": "ltbl.offset_within_chunk",
+      "file": "invalid/ltbl-offset-past-frame.lumen",
+      "file_sha256": "dd4825799b7b01374c2e25fd24df796b43456e34cf311c332765f6c6bdb92656",
+      "file_size": 1093,
+      "name": "ltbl-offset-past-frame",
+      "strict_only": false
+    },
+    {
+      "base_vector": "binary-basic",
+      "description": "Entries 2 and 3 are two slices of one frame and both now start at offset 0, so layers 2 and 3 would be read out of the same bytes.",
+      "expected_failure": "ltbl.slices_disjoint",
+      "file": "invalid/ltbl-slices-overlap.lumen",
+      "file_sha256": "9aec9e914f86c4b08ac372fcc2858a49610ecf9a2c037df9acae29e96abd2776",
+      "file_size": 1093,
+      "name": "ltbl-slices-overlap",
+      "strict_only": false
+    },
+    {
+      "base_vector": "layer-overrides",
+      "description": "Layer 2's entry names no LROV chunk although the file carries one for that point: first_lrov is 0 exactly when a (layer, sector) has no overrides. Because an LROV payload carries no identity, that chunk is now unreachable - this file violates lrov.orphan as well, and the check order decides which is reported.",
+      "expected_failure": "ltbl.first_lrov_null",
+      "file": "invalid/ltbl-first-lrov-zero.lumen",
+      "file_sha256": "9e0b8d33276c3fab5b976b6281017ee71c4a1a821b1f04aa4e94508190ccfcbc",
+      "file_size": 1887,
+      "name": "ltbl-first-lrov-zero",
+      "strict_only": false
+    },
+    {
+      "base_vector": "binary-basic",
+      "description": "Entry 0 names directory index 2, which is the LTBL chunk, as the override set of its point, so the entry points at a chunk that carries no overrides.",
+      "expected_failure": "ltbl.first_lrov_in_range",
+      "file": "invalid/ltbl-first-lrov-not-lrov.lumen",
+      "file_sha256": "de8944ac9b509e86f43ed001943f8f8bac2830ee68161d9bbf25c6fd445381f1",
+      "file_size": 1093,
+      "name": "ltbl-first-lrov-not-lrov",
+      "strict_only": false
+    },
+    {
+      "base_vector": "layer-overrides",
+      "description": "Entry 0 names the same LROV chunk as layer 2's entry, so one override set is claimed by two points at once. The payload carries no layer and no sector, so a reader cannot tell which of the two it belongs to - it would have to apply layer 2's override to layer 0 as well, or ignore one of them.",
+      "expected_failure": "lrov.orphan",
+      "file": "invalid/lrov-shared-chunk.lumen",
+      "file_sha256": "24e99ef0a2b489c53fc7cab6d4f14351d35a97faca9d3c4ce75745566e5f7dde",
+      "file_size": 1887,
+      "name": "lrov-shared-chunk",
+      "strict_only": false
+    },
+    {
+      "base_vector": null,
+      "description": "The file carries an LROV chunk that no entry names. An LROV payload carries no layer and no sector - the entry that names the chunk is what places it - so these overrides can never be applied to anything, and a reader that silently ignores them prints the wrong timings.",
+      "expected_failure": "lrov.orphan",
+      "file": "invalid/lrov-orphan-chunk.lumen",
+      "file_sha256": "20c4ead71917085fed9a30e811a7d4ce8d1778590d881bc2839cb1e86f95daa2",
+      "file_size": 1351,
+      "name": "lrov-orphan-chunk",
+      "strict_only": false
+    },
+    {
+      "base_vector": null,
+      "description": "An LROV payload is truncated JSON, so the override set cannot be read at all.",
+      "expected_failure": "lrov.json",
+      "file": "invalid/lrov-not-json.lumen",
+      "file_sha256": "f60dfdfcdf497f21853fb7e9f9b0c4ba9579ed61707569369a4404aeac365d97",
+      "file_size": 1263,
+      "name": "lrov-not-json",
+      "strict_only": false
+    },
+    {
+      "base_vector": null,
+      "description": "An LROV payload carries wait_time_before_cure_ms = 500.5. A wait time is a whole number of milliseconds, so a fractional value is not a duration this format can express.",
+      "expected_failure": "lrov.time_integer",
+      "file": "invalid/lrov-wait-fractional.lumen",
+      "file_sha256": "8ddc2ad063e771d26791360abd8e49cc0f9ccd487b7dabe49bcca1d2beb6108c",
+      "file_size": 1303,
+      "name": "lrov-wait-fractional",
       "strict_only": false
     },
     {
@@ -22,29 +152,144 @@
       "description": "Layer 0 stores all-black as tag 0x00 with run_count 0 instead of the empty-layer form.",
       "expected_failure": "ree.no_run_count_zero",
       "file": "invalid/run-count-zero-all-black.lumen",
-      "file_sha256": "12442271c835c3635f6c3bea451e90eff8fb4b0ae6e6a4c398baf620a6f03978",
-      "file_size": 801,
+      "file_sha256": "f2c232125c4a696ad5de46920b198935540a30712e58a4cabc3e0ed082d6b0a3",
+      "file_size": 813,
       "name": "run-count-zero-all-black",
       "strict_only": true
     },
     {
       "base_vector": "binary-basic",
-      "description": "LTBL entry 1 points at block 99 when the file has three blocks.",
-      "expected_failure": "ltbl.block_index_in_range",
-      "file": "invalid/block-index-out-of-range.lumen",
-      "file_sha256": "6968407640e200c18544042d4925350b683708b32473a9691c3a4c8a75623c57",
-      "file_size": 1043,
-      "name": "block-index-out-of-range",
+      "description": "A LAYR container declares version 2, which no reader implements; the frame behind it is well formed, so only the version refuses the file.",
+      "expected_failure": "layr.version",
+      "file": "invalid/layr-container-version.lumen",
+      "file_sha256": "5b2462b2215d959f8704adb0ab5aecb92415d20e1f6c5f624253bf055a74a2e7",
+      "file_size": 1093,
+      "name": "layr-container-version",
+      "strict_only": false
+    },
+    {
+      "base_vector": null,
+      "description": "The LAYR frames are compressed without their content size. A writer MUST declare it (spec 4.10), because the descriptor's size_uncompressed is the container's length and the reader has nothing else to size the frame's output from.",
+      "expected_failure": "layr.content_size_present",
+      "file": "invalid/layr-content-size-absent.lumen",
+      "file_sha256": "43e0bc2232bc19e18ede920366497bb4d58ff0b1397eefd3d208b13f2705806f",
+      "file_size": 831,
+      "name": "layr-content-size-absent",
       "strict_only": false
     },
     {
       "base_vector": "binary-basic",
-      "description": "Block 1 frame_offset leaves a one-byte gap, breaking contiguity.",
-      "expected_failure": "layr.block_table_contiguous",
-      "file": "invalid/block-table-gap.lumen",
-      "file_sha256": "1156d74fbf45ae257f7d82b94ba53cdac99e5c3a0d51fbd87345d074586b72cd",
-      "file_size": 1043,
-      "name": "block-table-gap",
+      "description": "The first LAYR frame's header declares one byte more than the frame decompresses to, so its output cannot be allocated or checked against the declaration.",
+      "expected_failure": "layr.frame_decompressed_size",
+      "file": "invalid/layr-frame-size-lie.lumen",
+      "file_sha256": "9c2c0348fa5562acb15d8799c16020d58c7476103ea5d59ec92267e033379ef4",
+      "file_size": 1093,
+      "name": "layr-frame-size-lie",
+      "strict_only": false
+    },
+    {
+      "base_vector": "binary-basic",
+      "description": "The first block header of the first LAYR frame is rewritten to the reserved block type 3, so the frame cannot be decompressed.",
+      "expected_failure": "layr.frame_decompressed_size",
+      "file": "invalid/layr-frame-corrupt.lumen",
+      "file_sha256": "a7b9d4a67458b8fcbd47df1488ebcfae67125a54acc990c133cc51dc24d70048",
+      "file_size": 1093,
+      "name": "layr-frame-corrupt",
+      "strict_only": false
+    },
+    {
+      "base_vector": "dict-multi-block",
+      "description": "ZDIC.dict_id is rewritten while the frames keep the id of the dictionary they were compressed with, so every LAYR frame disagrees with the file's dictionary.",
+      "expected_failure": "layr.dict_id_match",
+      "file": "invalid/layr-dict-id-mismatch.lumen",
+      "file_sha256": "2442043dda7e6ec3b7a4e0f6b098822ead1a4bc6114c3eb14000cc720cb61f10",
+      "file_size": 21370,
+      "name": "layr-dict-id-mismatch",
+      "strict_only": false
+    },
+    {
+      "base_vector": null,
+      "description": "The frames are compressed with a trained dictionary but the file carries no ZDIC chunk, so their dictionary ids name a dictionary no reader can find.",
+      "expected_failure": "layr.dict_id_absent",
+      "file": "invalid/layr-dict-id-without-zdic.lumen",
+      "file_sha256": "c6888813da1ad5a040823bfbb4ce077cc32bdad1b1bf701cc4a0ae329ef94180",
+      "file_size": 5585,
+      "name": "layr-dict-id-without-zdic",
+      "strict_only": false
+    },
+    {
+      "base_vector": null,
+      "crypto": {
+        "argon2": {
+          "iterations": 1,
+          "memory_kib": 8,
+          "parallelism": 1,
+          "salt": "e848045be768cbef8568032fba9b3e97"
+        },
+        "auth_version": 1,
+        "cipher_id": "A256",
+        "mode": 1,
+        "mode_names": [
+          "password"
+        ],
+        "password_utf8": "lumen-test-vector"
+      },
+      "description": "Every sealed LAYR frame is bound to unit index 0 instead of the directory index of the chunk that carries it. Each frame is intact, but a reader that authenticates it under the chunk's own index must refuse the file - which is what stops a ciphertext from being swapped between two LAYR chunks, since with one unit per chunk an all-zero index would authenticate in either place.",
+      "expected_failure": "crypt.unit_index_binding",
+      "file": "invalid/crypt-unit-index-binding.lumen",
+      "file_sha256": "c411b5e5ad537e66d06ea979e55701c37f7a6457e49c3f2961a6a3207419af3c",
+      "file_size": 1035,
+      "name": "crypt-unit-index-binding",
+      "strict_only": false
+    },
+    {
+      "base_vector": "multi-sector",
+      "description": "Layer 1's entry claims one further entry, so the walk takes layer 1 and layer 2 for one layer and reaches layer 2 of a four-layer file; the entries no longer cover every layer the header declares. The merged layer also holds sector 0 twice, which is what the entries it swallowed carry.",
+      "expected_failure": "ltbl.layer_index_range",
+      "file": "invalid/ltbl-layer-index-range.lumen",
+      "file_sha256": "0deb2e2a61e0f7ad4befed8398f432e77e2547ac90fd70eee8bad429019a4237",
+      "file_size": 1315,
+      "name": "ltbl-layer-index-range",
+      "strict_only": false
+    },
+    {
+      "base_vector": null,
+      "description": "The file's only LAYR frame declares a decompressed size of 2147483647 bytes, some four thousand times what the slices pointing into it could hold, so a reader that sizes its buffer from the declaration allocates two gigabytes for a layer group of a 64 by 48 display.",
+      "expected_failure": "layr.allocation_bound",
+      "file": "invalid/layr-allocation-bound.lumen",
+      "file_sha256": "28db282983978da19464175b6436de4d7502dc91fb870c07a4eada492e952ed8",
+      "file_size": 16281,
+      "name": "layr-allocation-bound",
+      "strict_only": false
+    },
+    {
+      "base_vector": null,
+      "description": "The file carries a ZDIC chunk while every LAYR frame declares no dictionary (dictionary id 0), so the dictionary is present but nothing in the file refers to it.",
+      "expected_failure": "presence.zdic",
+      "file": "invalid/presence-zdic-unused.lumen",
+      "file_sha256": "f0387b159606a91eb5c5c4c998549723d84620f520528b40a91957ea28d6e626",
+      "file_size": 7342,
+      "name": "presence-zdic-unused",
+      "strict_only": false
+    },
+    {
+      "base_vector": null,
+      "description": "META.sectors has two entries with sector_id 1, so the sector's timing is defined twice over.",
+      "expected_failure": "meta.sectors_shape",
+      "file": "invalid/meta-sectors-shape.lumen",
+      "file_sha256": "74e208b7865f248c0c649575c385356763bdae3693c7642ce5e6b2544b94aad3",
+      "file_size": 1241,
+      "name": "meta-sectors-shape",
+      "strict_only": false
+    },
+    {
+      "base_vector": null,
+      "description": "META.sectors[0].material_index is 3 while META.materials holds one entry, so the sector names a material that is not there.",
+      "expected_failure": "meta.sector_material_index",
+      "file": "invalid/meta-sector-material-index.lumen",
+      "file_sha256": "139368f8a892b009fc558ca9b2af0f89dc9351f9754f2e28c6ef3f125f8a2066",
+      "file_size": 1225,
+      "name": "meta-sector-material-index",
       "strict_only": false
     },
     {
@@ -52,8 +297,8 @@
       "description": "One byte of merkle_root is flipped, so recomputation from layer_hashes disagrees.",
       "expected_failure": "lhas.root_recompute",
       "file": "invalid/merkle-root-mismatch.lumen",
-      "file_sha256": "b09cd4136c26edcb2271d1825024edb684071d440d6769a9023114c7649da061",
-      "file_size": 1043,
+      "file_sha256": "d26ab1ca6b87648e8044f8863aa1a781a136ddfff99bd9e875997b067db3e34e",
+      "file_size": 1093,
       "name": "merkle-root-mismatch",
       "strict_only": false
     },
@@ -62,19 +307,29 @@
       "description": "Layer 0's stored leaf hash is altered and merkle_root recomputed to match, so only hashing the actual bytes catches it.",
       "expected_failure": "lhas.leaf_match",
       "file": "invalid/layer-hash-mismatch.lumen",
-      "file_sha256": "192e0a547bcec9e77740143d70b98685f50df3efc117597406407a6a2c69047a",
-      "file_size": 1043,
+      "file_sha256": "9ddfbccfa80dc5f2c130260bd4060cd21a9f6f7acb1cd16438f6671a9d8f3c21",
+      "file_size": 1093,
       "name": "layer-hash-mismatch",
       "strict_only": true
     },
     {
+      "base_vector": "multi-sector",
+      "description": "The file's layers carry two sectors but the header does not set MULTI_SECTOR, so a reader that trusts the flag prints one sector per layer and never notices the rest.",
+      "expected_failure": "hdr.multi_sector_flag",
+      "file": "invalid/multi-sector-flag-clear.lumen",
+      "file_sha256": "bba5f2e266388f18498b965f887ccc2d82fd76a8b9548922b15756ba911b5c71",
+      "file_size": 1315,
+      "name": "multi-sector-flag-clear",
+      "strict_only": false
+    },
+    {
       "base_vector": "binary-basic",
-      "description": "LTBL entry 2 claims a data_size far beyond its block's decompressed size.",
-      "expected_failure": "ltbl.offsets_within_block",
-      "file": "invalid/layer-range-past-block.lumen",
-      "file_sha256": "8c35966b6462904669ad6c6681cdd96d2aec163647522059042ff0cef666b816",
-      "file_size": 1043,
-      "name": "layer-range-past-block",
+      "description": "No layer of the file carries more than one sector, but the header sets MULTI_SECTOR, so the flag promises a structure the file does not have.",
+      "expected_failure": "hdr.multi_sector_flag",
+      "file": "invalid/multi-sector-flag-set.lumen",
+      "file_sha256": "f18bd3dca3fa3547a21e7b63a455bc334cc9419ff78ae90b360829013c71345d",
+      "file_size": 1093,
+      "name": "multi-sector-flag-set",
       "strict_only": false
     },
     {
@@ -82,8 +337,8 @@
       "description": "The trailer CRC-32C does not match the file bytes.",
       "expected_failure": "trailer.crc32c",
       "file": "invalid/trailer-crc-mismatch.lumen",
-      "file_sha256": "ee07a0de7b3bfbc47599e003ff011a9a365e56f885dc8f5949fd371241059705",
-      "file_size": 1043,
+      "file_sha256": "dc81bdd0dc435b7f28784c1b8bb84c8aa54988b0aac6a1611d2caa417f6e0bc6",
+      "file_size": 1093,
       "name": "trailer-crc-mismatch",
       "strict_only": false
     },
@@ -92,8 +347,8 @@
       "description": "META carries normal_exposure_ms = 2500.5. Durations are exact whole milliseconds, so a fractional value is not a duration this format can express.",
       "expected_failure": "meta.time_integer",
       "file": "invalid/meta-exposure-fractional.lumen",
-      "file_sha256": "c5b08edc5ce56b3dc418a1e8ebde6f0bb119706ce26ab3d402db0a483edfa971",
-      "file_size": 818,
+      "file_sha256": "cfdbac314d498d9bdbb2ce104728a39f5187b05d7ffe3aa92dd4cea9ced948f7",
+      "file_size": 831,
       "name": "meta-exposure-fractional",
       "strict_only": false
     },
@@ -102,8 +357,8 @@
       "description": "The file header sets ENCRYPTED but there is no AUTH chunk, so no session key can ever be derived.",
       "expected_failure": "presence.auth",
       "file": "invalid/encrypted-flag-without-auth.lumen",
-      "file_sha256": "ead8f4473f243edf6da629855a057835b962cf67d0f74c95c2c706a6a55e8779",
-      "file_size": 1043,
+      "file_sha256": "2518cf3255a912e153d321ac828a8d63afc0424504dfe204cd2aa6233b6c50a2",
+      "file_size": 1093,
       "name": "encrypted-flag-without-auth",
       "strict_only": false
     },
@@ -127,8 +382,8 @@
       "description": "AUTH.cipher_id is XXXX, which names no algorithm.",
       "expected_failure": "auth.cipher_known",
       "file": "invalid/auth-cipher-unknown.lumen",
-      "file_sha256": "ea1e0bb81719d1c7d73e847d87757de4ded6e5da97a2a703371cc623636c8604",
-      "file_size": 11227,
+      "file_sha256": "5ef51f18d45bb8e933606fa50dcd73426fc23e1f7c0c559f406e3043b53e4c5f",
+      "file_size": 11469,
       "name": "auth-cipher-unknown",
       "strict_only": false
     },
@@ -150,8 +405,8 @@
       "description": "AUTH.mode is 0: neither a password nor a machine binding is declared, so the session key is unreachable.",
       "expected_failure": "crypt.mode_empty",
       "file": "invalid/crypt-mode-empty.lumen",
-      "file_sha256": "d33945cda1415a31aeaee280501a3f219eebd553f28f54a7f712da1bd5995a52",
-      "file_size": 11227,
+      "file_sha256": "d067702bbb77747463d2b99768aad02cba9a1c4af4a1a7c4465b413d6f8b1be3",
+      "file_size": 11469,
       "name": "crypt-mode-empty",
       "strict_only": false
     },
@@ -175,8 +430,8 @@
       "description": "The password section declares Argon2id iterations = 99, above the recommended ceiling of 10; it is otherwise coherent, so only the cost rule refuses it.",
       "expected_failure": "crypt.argon2_budget",
       "file": "invalid/crypt-argon2-budget.lumen",
-      "file_sha256": "ebb6754d770245fa5d52ecd9e41baf8daa333460f92634baf4e144d6e6ee3c85",
-      "file_size": 1018,
+      "file_sha256": "5a57e9ecf78d78900bfe36f6c230186f2695a12bda1bfa59d767a6d7ff4fa493",
+      "file_size": 1035,
       "name": "crypt-argon2-budget",
       "strict_only": false
     },
@@ -200,8 +455,8 @@
       "description": "AUTH declares a 64-byte password section, one byte short of the fixed section size.",
       "expected_failure": "crypt.password_section_len",
       "file": "invalid/crypt-password-len-short.lumen",
-      "file_sha256": "6dd8fd9e024b1ef78a53237b12b9a5c80b3e5008e0b61e0ff2008621bf6ef226",
-      "file_size": 1018,
+      "file_sha256": "e02c60f7c878a2631aac7cb2116c52827c79b1eb8d002ec1a9606a8dd100a34e",
+      "file_size": 1035,
       "name": "crypt-password-len-short",
       "strict_only": false
     },
@@ -218,8 +473,8 @@
       "description": "AUTH.mode sets machine-binding but the machine section is empty: no recipient can ever unwrap the session key.",
       "expected_failure": "crypt.machine_section_len",
       "file": "invalid/crypt-machine-len-empty.lumen",
-      "file_sha256": "fc16e203131c7c4e685da95b14f647f13da0b27465f25d7136107efa56c77bdc",
-      "file_size": 954,
+      "file_sha256": "1a4c962bd9ff555c07ccac2dc9ffd7f5300cf44d0b6d2ba0f9c7961c02192f18",
+      "file_size": 971,
       "name": "crypt-machine-len-empty",
       "strict_only": false
     },
@@ -243,8 +498,8 @@
       "description": "ZDIC's descriptor does not set the encrypted flag although the file is encrypted; its bytes are sealed regardless, so the flag is the only disagreement.",
       "expected_failure": "crypt.chunk_flags",
       "file": "invalid/crypt-plaintext-content.lumen",
-      "file_sha256": "26d01a267eeaa790cd8299b92c65e2e5a23385b6a749d4b294364ba77049ebd6",
-      "file_size": 11227,
+      "file_sha256": "25644862584757489b9ae1e391ff3bca50f59c18bed67345de9682aeabbcc06e",
+      "file_size": 11469,
       "name": "crypt-plaintext-content",
       "strict_only": false
     },
@@ -265,11 +520,11 @@
         ],
         "password_utf8": "lumen-test-vector"
       },
-      "description": "One ciphertext byte of LAYR block 0 is flipped, so its AEAD tag must fail; a reader must not decompress or parse a block it cannot authenticate.",
+      "description": "One ciphertext byte of the first sealed LAYR frame is flipped, so its AEAD tag must fail; a reader must not decompress or parse a frame it cannot authenticate.",
       "expected_failure": "crypt.tag_verify",
       "file": "invalid/crypt-tag-corrupt.lumen",
-      "file_sha256": "eeef45e00eafa2812c3049f6a1e6edfabf79fecb7c106a1f676df4d20b6ebafd",
-      "file_size": 11227,
+      "file_sha256": "27860e4c7e851e446587f582dde1c993f0828192ddd299c6b9c478507a8fff5d",
+      "file_size": 11469,
       "name": "crypt-tag-corrupt",
       "strict_only": false
     },
@@ -278,8 +533,8 @@
       "description": "PROF.profile_type is \"resin\", which is not one of the three defined types.",
       "expected_failure": "prof.profile_type",
       "file": "invalid/prof-type-unknown.lumen",
-      "file_sha256": "5159fc2e3d876c7bd694ad7e9a9fee1b790ff9a7da82d4beec350f4221b310c8",
-      "file_size": 1466,
+      "file_sha256": "1d0c50ba83bef6e79e13be6826dbca095f636e14e7abcc116be3c1f882fba36b",
+      "file_size": 1479,
       "name": "prof-type-unknown",
       "strict_only": false
     },
@@ -288,8 +543,8 @@
       "description": "PROF.profile_name is an empty string.",
       "expected_failure": "prof.profile_identity",
       "file": "invalid/prof-identity-empty.lumen",
-      "file_sha256": "3aeecf19402e745bfda52217a8d0aaf92a0f0949a359983ac2d115727ce72a8b",
-      "file_size": 1458,
+      "file_sha256": "c0712d22c7d882a0aabe74c90be099425f07349b3f3e1aceb33e7867b712b03f",
+      "file_size": 1471,
       "name": "prof-identity-empty",
       "strict_only": false
     },
@@ -298,8 +553,8 @@
       "description": "PROF settings carry a zero normal exposure.",
       "expected_failure": "prof.settings_exposure",
       "file": "invalid/prof-settings-exposure.lumen",
-      "file_sha256": "e1ed363466b10b77884601536117331c90800e165938a0b0e5365f125244977f",
-      "file_size": 1466,
+      "file_sha256": "5e686048f51986670e35fdf8fe3b977417dce744185684a274d7d08b950b2038",
+      "file_size": 1479,
       "name": "prof-settings-exposure",
       "strict_only": false
     },
@@ -308,8 +563,8 @@
       "description": "PROF settings carry a zero layer height.",
       "expected_failure": "prof.settings_layer_height",
       "file": "invalid/prof-settings-layer-height.lumen",
-      "file_sha256": "4a24bd06dc2fae4dafbcde9e98080e3136094a2247b24d3a6329cfbf7ee0a06e",
-      "file_size": 1466,
+      "file_sha256": "75f40d1adfd3f6286582c4463ca956e31c873400aafa29bfa3c064362bf29d64",
+      "file_size": 1479,
       "name": "prof-settings-layer-height",
       "strict_only": false
     },
@@ -318,8 +573,8 @@
       "description": "PROF cure curve has dp_um = 0.0, which no resin can have.",
       "expected_failure": "prof.cure_curve",
       "file": "invalid/prof-cure-curve.lumen",
-      "file_sha256": "dc120a4804ed9a0d11123309b52582683d532721f285669c3769fbf37393195e",
-      "file_size": 1466,
+      "file_sha256": "cd90c28885502540ffbeeb9ad7bc29339cb015e8695c4d70bc1cc175279987f0",
+      "file_size": 1479,
       "name": "prof-cure-curve",
       "strict_only": false
     },
@@ -328,8 +583,8 @@
       "description": "PROF.profile_uuid is not a UUID.",
       "expected_failure": "prof.profile_uuid",
       "file": "invalid/prof-uuid-malformed.lumen",
-      "file_sha256": "2d15322e8d31e4ee74a9002d6c80c020133a1483ecb268587db150457780baf5",
-      "file_size": 1450,
+      "file_sha256": "09088349b49451e3a0d93af42f676ece7521682f577f23d1520819df6e6b4402",
+      "file_size": 1463,
       "name": "prof-uuid-malformed",
       "strict_only": false
     },
@@ -338,59 +593,9 @@
       "description": "PROF.materials is an empty array, which the META.materials shape rules forbid.",
       "expected_failure": "prof.materials_shape",
       "file": "invalid/prof-materials-shape.lumen",
-      "file_sha256": "8baeb9d8018de555df6ebcd37dcfea7d055c7d2c8c575595ef8592ea84d14608",
-      "file_size": 1346,
+      "file_sha256": "6d116c4a36d3ad766f37608d92bded8a6e8c61605f1a6821faacc796a5dbe536",
+      "file_size": 1359,
       "name": "prof-materials-shape",
-      "strict_only": false
-    },
-    {
-      "base_vector": null,
-      "description": "An LROV entry carries both layer and layer_range, which the entry form forbids.",
-      "expected_failure": "lrov.entry_form",
-      "file": "invalid/lrov-entry-form-both.lumen",
-      "file_sha256": "b71a5544a4a666832c9f55529e52fa1dc45c03d49464f26f46c4e4da058cb9e0",
-      "file_size": 1266,
-      "name": "lrov-entry-form-both",
-      "strict_only": false
-    },
-    {
-      "base_vector": null,
-      "description": "An LROV entry overrides layer 40 in a ten-layer file.",
-      "expected_failure": "lrov.layer_index_range",
-      "file": "invalid/lrov-layer-out-of-range.lumen",
-      "file_sha256": "570637a391cb2c63721144b6133edf126d01e75dfc0e690f03c83d4fdbb9b0cf",
-      "file_size": 1258,
-      "name": "lrov-layer-out-of-range",
-      "strict_only": false
-    },
-    {
-      "base_vector": null,
-      "description": "An LROV layer_range ends before it begins.",
-      "expected_failure": "lrov.layer_range_order",
-      "file": "invalid/lrov-range-reversed.lumen",
-      "file_sha256": "9b00d2cdc0e5e440b735dab9693d0341a66496193004036f1628ad05976989ff",
-      "file_size": 1266,
-      "name": "lrov-range-reversed",
-      "strict_only": false
-    },
-    {
-      "base_vector": null,
-      "description": "An LROV entry targets sector 7, which no SECT chunk in this single-sector file defines.",
-      "expected_failure": "lrov.sector_id_defined",
-      "file": "invalid/lrov-sector-undefined.lumen",
-      "file_sha256": "f3fc19c3219aab92c140532e74a2c6a16f17740c3528fa6ee33325001420a550",
-      "file_size": 1282,
-      "name": "lrov-sector-undefined",
-      "strict_only": false
-    },
-    {
-      "base_vector": null,
-      "description": "An LROV entry carries wait_time_before_cure_ms = 500.5. A wait time is a whole number of milliseconds, so a fractional value is not a duration this format can express.",
-      "expected_failure": "lrov.time_integer",
-      "file": "invalid/lrov-wait-fractional.lumen",
-      "file_sha256": "e8312b2fbed48a9980c9bf593d8380d08af525e41e10817618c32f3e0ca2d51c",
-      "file_size": 1274,
-      "name": "lrov-wait-fractional",
       "strict_only": false
     },
     {
@@ -398,8 +603,8 @@
       "description": "A PREV chunk sets reserved flag bit 5 alongside role 1; only bits 0-3 carry the role.",
       "expected_failure": "prev.flags",
       "file": "invalid/prev-flags.lumen",
-      "file_sha256": "fabb747d873f4a9037204f3f7b1ea0ff528ae6406f89a35e0f39c7dbc4bf6d9a",
-      "file_size": 934,
+      "file_sha256": "9464fe241de1bc916116a8acd0640bead8040a3952efc4c0814e88b278aa4dfb",
+      "file_size": 949,
       "name": "prev-flags",
       "strict_only": false
     },
@@ -408,8 +613,8 @@
       "description": "A PREV payload does not begin with the PNG signature. A loose reader ignores previews and must still accept the file; a strict validator rejects it.",
       "expected_failure": "prev.png_signature",
       "file": "invalid/prev-not-png.lumen",
-      "file_sha256": "f15da5288187fdcd0a63bc61ab4f3c813fc7fd9984609392143ecfa934fb9d71",
-      "file_size": 934,
+      "file_sha256": "7b9ce9eddd14df1c412ef5d5f371a2edcb703cff5bcc0ddb22d1214c5205032a",
+      "file_size": 949,
       "name": "prev-not-png",
       "strict_only": true
     },
@@ -418,8 +623,8 @@
       "description": "The embedded scene is a JSON array rather than a VOXL document: the payload begins with neither the V2 magic nor the V1 document marker. A loose reader never looks inside the chunk and must still accept the file; a strict validator rejects it.",
       "expected_failure": "voxl.signature",
       "file": "invalid/voxl-not-voxl.lumen",
-      "file_sha256": "19596945eaf94cdc0ecbaac624b31caa830cafcc12a872d6b867f99a12bb4343",
-      "file_size": 894,
+      "file_sha256": "5a2976c21e6e30639161a5572f1a34e7f315487507cbfe8db9a7f9f325aa0a3d",
+      "file_size": 909,
       "name": "voxl-not-voxl",
       "strict_only": true
     },
@@ -428,8 +633,8 @@
       "description": "An extension sets the critical bit, so a reader that does not implement it must refuse the file rather than print an approximation.",
       "expected_failure": "extd.critical",
       "file": "invalid/extd-critical.lumen",
-      "file_sha256": "4ee09d5eb4644e16d473fa29e03234fbcb94927bd5857f717ace72a5a968a234",
-      "file_size": 870,
+      "file_sha256": "1a315c4f54e16d2efb71bbdb6cd5730fb51fb5cdef8e6b41a799eba4d5274b97",
+      "file_size": 885,
       "name": "extd-critical",
       "strict_only": false
     },
@@ -438,8 +643,8 @@
       "description": "An EXTD payload is four bytes, too short to carry ext_version and ext_type.",
       "expected_failure": "extd.frame",
       "file": "invalid/extd-truncated.lumen",
-      "file_sha256": "05a063ce9849eec086b979b1ebe1b4ab2cec96781e3de8ce78507717a59c2c57",
-      "file_size": 862,
+      "file_sha256": "a8193115c24520c0ce6dc7bf2ef8fa577da0f51e7eaf229abbb52d8b8de8dd66",
+      "file_size": 877,
       "name": "extd-truncated",
       "strict_only": false
     },
@@ -448,8 +653,8 @@
       "description": "An EXTD chunk sets reserved flag bit 0, which must be 0.",
       "expected_failure": "extd.flags",
       "file": "invalid/extd-reserved-flags.lumen",
-      "file_sha256": "749eece2470a36437230ff4edb6c78b67c70036c8a4e9b777f1046e8787888ba",
-      "file_size": 870,
+      "file_sha256": "554348e1ed7e22cdf8100db29d4c6e7221f7ae74068a34ae953e0fb14ca8f6b3",
+      "file_size": 885,
       "name": "extd-reserved-flags",
       "strict_only": false
     },
@@ -458,8 +663,8 @@
       "description": "An EXTD ext_type is four non-ASCII bytes, so no reader can name the extension.",
       "expected_failure": "extd.ext_type",
       "file": "invalid/extd-type-nonascii.lumen",
-      "file_sha256": "fad67dcb06e9d340ec266b680842d89b2462521c4a64b83b1be619fe5c7a6a20",
-      "file_size": 870,
+      "file_sha256": "d3f57fac1b603fa11af267499d50faa10e427b6d838aa109c13ea1b4380e2734",
+      "file_size": 885,
       "name": "extd-type-nonascii",
       "strict_only": false
     },
@@ -468,40 +673,22 @@
       "description": "META's descriptor sets the encrypted bit while the file header does not, so the file carries no AUTH chunk and no key could open it.",
       "expected_failure": "crypt.chunk_flags",
       "file": "invalid/sealed-without-auth.lumen",
-      "file_sha256": "e91c06b0d20ae60f2edda0370836632ad5193bd195542e87826a0bdf5ab720ef",
-      "file_size": 1043,
+      "file_sha256": "a2122a0fc52d63da0ce58e62fc70c0e219caa61c80d774a92d04c9f7418de180",
+      "file_size": 1093,
       "name": "sealed-without-auth",
       "strict_only": false
     }
   ],
   "valid": [
     {
-      "block_size_layers": 2,
-      "blocks": [
-        {
-          "frame_offset": 0,
-          "frame_size": 15,
-          "uncompressed_size": 6
-        },
-        {
-          "frame_offset": 15,
-          "frame_size": 31,
-          "uncompressed_size": 22
-        },
-        {
-          "frame_offset": 46,
-          "frame_size": 33,
-          "uncompressed_size": 73
-        }
-      ],
-      "chunk_count": 5,
-      "description": "Six layers covering the empty-layer form, binary REE, grayscale REE and split REE, across three blocks with no dictionary, over a bottom range whose motion, wait and PWM values differ from the normal ones: the bottom layers take the bottom-prefixed values verbatim, the transition layer blends them, and light_pwm switches to the normal value at the first non-bottom layer instead of blending.",
+      "chunk_count": 7,
+      "description": "Six layers over one sector covering the empty-layer form, binary REE, grayscale REE and split REE, in three LAYR chunks of two layers each with no dictionary, over a bottom range whose motion, wait and PWM values differ from the normal ones: the bottom layers take the bottom-prefixed values verbatim, the transition layer blends them, and light_pwm switches to the normal value at the first non-bottom layer instead of blending.",
       "dict": {
         "dict_id": 0,
         "dict_size": 0,
         "present": false
       },
-      "dir_offset": 875,
+      "dir_offset": 861,
       "display_height_px": 48,
       "display_width_px": 64,
       "features": [
@@ -509,31 +696,29 @@
         "binary-ree",
         "grayscale-ree",
         "split-ree",
-        "multi-block",
+        "multi-chunk",
         "no-dictionary"
       ],
       "file": "valid/binary-basic.lumen",
-      "file_sha256": "a65dd780693c2c4a21f6f4fccd38af6f5f0d6bcc19ce5bff2164e1928aebd2f9",
-      "file_size": 1043,
+      "file_sha256": "b254873590a02651f287482e6b100ddd554a009c95e5fc5d06e1c393d9c9130f",
+      "file_size": 1093,
       "header_flags": 0,
       "layer_height_um": 50,
       "layers": [
         {
-          "block_index": 0,
-          "data_offset": 0,
-          "data_size": 0,
           "decompressed_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "empty": true,
           "index": 0,
           "lhas_leaf": "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d",
-          "sector_count": 0,
-          "sector_tags": [],
+          "sector_count": 1,
+          "sector_tags": [
+            null
+          ],
           "tag": null
         },
         {
-          "block_index": 0,
-          "data_offset": 0,
-          "data_size": 6,
           "decompressed_sha256": "a1b583bf00f453b9e52e82b1623d4b60e464196e44bfea9a5deb3f2a47d05666",
+          "empty": false,
           "index": 1,
           "lhas_leaf": "9683e5673ab539bdc59e60058d049e0e4b889c543a00ac407e42328337feb6c7",
           "sector_count": 1,
@@ -543,10 +728,8 @@
           "tag": 0
         },
         {
-          "block_index": 1,
-          "data_offset": 0,
-          "data_size": 7,
           "decompressed_sha256": "1c2c299e13cfc275dff741413853cd8ef3b75fd738e85ce325af3f6614810f10",
+          "empty": false,
           "index": 2,
           "lhas_leaf": "0a75ff57a15b4c236888554857c736aae949b40041e155bbf2f28cd0e8bb9b80",
           "sector_count": 1,
@@ -556,10 +739,8 @@
           "tag": 0
         },
         {
-          "block_index": 1,
-          "data_offset": 7,
-          "data_size": 15,
           "decompressed_sha256": "a8c4789dd86c669d8d234aed6bddc5da3678ff3c8b539e8e030edc5f47299aac",
+          "empty": false,
           "index": 3,
           "lhas_leaf": "991ff83b7f2001b74b45833fc6715ed7f6edf2a38c21c87d0020aac61263832e",
           "sector_count": 1,
@@ -569,10 +750,8 @@
           "tag": 1
         },
         {
-          "block_index": 2,
-          "data_offset": 0,
-          "data_size": 68,
           "decompressed_sha256": "0c165c76b8517b8e1c58d7d82ec09e8bd6a7f3138f233c1aa9bed1193a044c81",
+          "empty": false,
           "index": 4,
           "lhas_leaf": "0a8fb73317182b9fb29cb15111ded8667fe076412cb371c59c1d1a7500b5f127",
           "sector_count": 1,
@@ -582,10 +761,8 @@
           "tag": 2
         },
         {
-          "block_index": 2,
-          "data_offset": 68,
-          "data_size": 5,
           "decompressed_sha256": "0c4171601105ef00f07912fbbd7c843261e766fab85a279a93a66d4ecc5530ab",
+          "empty": false,
           "index": 5,
           "lhas_leaf": "798b978a41761e369368117fd591ccd921be2c8155d478b9d9dac802c32ce51a",
           "sector_count": 1,
@@ -593,6 +770,107 @@
             0
           ],
           "tag": 0
+        }
+      ],
+      "layers_per_chunk": 2,
+      "layr_chunks": [
+        {
+          "content_size": 6,
+          "dict_id": 0,
+          "first_layer": 0,
+          "frame_size": 15,
+          "index": 4,
+          "layer_count": 2,
+          "sealed": false,
+          "sector_id": 0,
+          "stored_len": 19,
+          "version": 1
+        },
+        {
+          "content_size": 22,
+          "dict_id": 0,
+          "first_layer": 2,
+          "frame_size": 31,
+          "index": 5,
+          "layer_count": 2,
+          "sealed": false,
+          "sector_id": 0,
+          "stored_len": 35,
+          "version": 1
+        },
+        {
+          "content_size": 73,
+          "dict_id": 0,
+          "first_layer": 4,
+          "frame_size": 33,
+          "index": 6,
+          "layer_count": 2,
+          "sealed": false,
+          "sector_id": 0,
+          "stored_len": 37,
+          "version": 1
+        }
+      ],
+      "ltbl": [
+        {
+          "additional_sector_count": 0,
+          "data_offset": 0,
+          "data_size": 0,
+          "entry_index": 0,
+          "first_layr": 4,
+          "first_lrov": 0,
+          "layer": 0,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 0,
+          "data_size": 6,
+          "entry_index": 1,
+          "first_layr": 4,
+          "first_lrov": 0,
+          "layer": 1,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 0,
+          "data_size": 7,
+          "entry_index": 2,
+          "first_layr": 5,
+          "first_lrov": 0,
+          "layer": 2,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 7,
+          "data_size": 15,
+          "entry_index": 3,
+          "first_layr": 5,
+          "first_lrov": 0,
+          "layer": 3,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 0,
+          "data_size": 68,
+          "entry_index": 4,
+          "first_layr": 6,
+          "first_lrov": 0,
+          "layer": 4,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 68,
+          "data_size": 5,
+          "entry_index": 5,
+          "first_layr": 6,
+          "first_lrov": 0,
+          "layer": 5,
+          "sector_id": 0
         }
       ],
       "merkle_root": "d58181d603793f6849f422ed55b101480aa3292e8c4d9948005df75da574709b",
@@ -691,61 +969,36 @@
         }
       ],
       "total_layers": 6,
-      "total_uncompressed_size": 1108,
-      "trailer_crc32c": "0xD6560862"
+      "total_uncompressed_size": 1088,
+      "trailer_crc32c": "0x94EAFACF"
     },
     {
-      "block_size_layers": 16,
-      "blocks": [
-        {
-          "frame_offset": 0,
-          "frame_size": 3942,
-          "uncompressed_size": 16589
-        },
-        {
-          "frame_offset": 3942,
-          "frame_size": 3936,
-          "uncompressed_size": 17512
-        },
-        {
-          "frame_offset": 7878,
-          "frame_size": 3981,
-          "uncompressed_size": 16191
-        },
-        {
-          "frame_offset": 11859,
-          "frame_size": 3958,
-          "uncompressed_size": 17151
-        }
-      ],
-      "chunk_count": 6,
-      "description": "64 layers with a trained ZDIC dictionary, four blocks of sixteen layers.",
+      "chunk_count": 9,
+      "description": "64 layers with a trained ZDIC dictionary, in four LAYR chunks of sixteen layers each, every frame carrying the dictionary's id.",
       "dict": {
         "dict_id": 59649903,
         "dict_size": 1024,
         "present": true
       },
-      "dir_offset": 20637,
+      "dir_offset": 21074,
       "display_height_px": 192,
       "display_width_px": 256,
       "features": [
         "dictionary",
         "dictionary-id",
-        "multi-block",
+        "multi-chunk",
         "grayscale-ree",
         "split-ree"
       ],
       "file": "valid/dict-multi-block.lumen",
-      "file_sha256": "91bdf763d597a62e3b627d95cfdd00b3791a96505ff1048e94192a2f7057a42f",
-      "file_size": 20837,
+      "file_sha256": "0cdb47f1b7b6f215c912f0cb18547da5968c80734826259d0f2c64a58082385d",
+      "file_size": 21370,
       "header_flags": 0,
       "layer_height_um": 50,
       "layers": [
         {
-          "block_index": 0,
-          "data_offset": 0,
-          "data_size": 1604,
           "decompressed_sha256": "cfdced78e46ac0ab7c34cfe90c7925efea485c0c680a90a6b6e17bae9d549107",
+          "empty": false,
           "index": 0,
           "lhas_leaf": "aa72f59f714ede88f636733c655e1681b299736335d3185c0b2ea7f4631648e8",
           "sector_count": 1,
@@ -755,10 +1008,8 @@
           "tag": 2
         },
         {
-          "block_index": 0,
-          "data_offset": 1604,
-          "data_size": 364,
           "decompressed_sha256": "d416e7df52b71cc8e2c60a0fd0bbf2403bb50132c05a1fec26b8ccb2e08d8c2e",
+          "empty": false,
           "index": 1,
           "lhas_leaf": "7e5abf0f39fd2f2d60fc9e8b8421ca827181a8fcd68cfeccbb874523e086a29c",
           "sector_count": 1,
@@ -768,10 +1019,8 @@
           "tag": 1
         },
         {
-          "block_index": 0,
-          "data_offset": 1968,
-          "data_size": 1645,
           "decompressed_sha256": "2434f8ff44d596bf37b04c2d5e6b68e1bba7c388aa8fa94efffeee3ac82210ed",
+          "empty": false,
           "index": 2,
           "lhas_leaf": "c98d3dbc2f97d20197d4a889e73a95c6e514e97825ceabc5ec7af1c0771d0e29",
           "sector_count": 1,
@@ -781,10 +1030,8 @@
           "tag": 2
         },
         {
-          "block_index": 0,
-          "data_offset": 3613,
-          "data_size": 364,
           "decompressed_sha256": "43023798b3ec3f10f573b060f7e9b47eca06e801f4750d1ec4402bd6020413bd",
+          "empty": false,
           "index": 3,
           "lhas_leaf": "caaf561924b8f8a1e3140fc3618f8710c727865dd09a044359c307ef8bcbfcdf",
           "sector_count": 1,
@@ -794,10 +1041,8 @@
           "tag": 1
         },
         {
-          "block_index": 0,
-          "data_offset": 3977,
-          "data_size": 1685,
           "decompressed_sha256": "6ae19e1387553ce3d0d6309feac500125798d83d7a6d9c807dac7693e6012fab",
+          "empty": false,
           "index": 4,
           "lhas_leaf": "03bf010e070b6e6d2fbbdf62ed90652a38cd23275d9f617c8a86b6dbdc01c442",
           "sector_count": 1,
@@ -807,10 +1052,8 @@
           "tag": 2
         },
         {
-          "block_index": 0,
-          "data_offset": 5662,
-          "data_size": 364,
           "decompressed_sha256": "178b3c9f2d8539d7841b9136ff6597cb3e0d32e749024b6b01921035377152d4",
+          "empty": false,
           "index": 5,
           "lhas_leaf": "87476cffea8526efa44565aa2382e20c2b4db5faf050ccc1fbcc51c05dafbbca",
           "sector_count": 1,
@@ -820,10 +1063,8 @@
           "tag": 1
         },
         {
-          "block_index": 0,
-          "data_offset": 6026,
-          "data_size": 1684,
           "decompressed_sha256": "d863cb17429884ee266e4aa6bef95d5596a97239e6e50a1a5084dfb0eeabd730",
+          "empty": false,
           "index": 6,
           "lhas_leaf": "a2bf9c17f4ebb77bb55dd504d011bb9a723c10e0292fa609bdc0530b12cf11b9",
           "sector_count": 1,
@@ -833,10 +1074,8 @@
           "tag": 2
         },
         {
-          "block_index": 0,
-          "data_offset": 7710,
-          "data_size": 364,
           "decompressed_sha256": "3f37dde9d6136372f5ee5f723c591f75f9256474fc686dd8a430337a3f3b9e99",
+          "empty": false,
           "index": 7,
           "lhas_leaf": "07faf135b603cd2e58776fb02694e7b122a4f22fb2fe90c966da1c7e0e9aecef",
           "sector_count": 1,
@@ -846,10 +1085,8 @@
           "tag": 1
         },
         {
-          "block_index": 0,
-          "data_offset": 8074,
-          "data_size": 1725,
           "decompressed_sha256": "73dcd3c15f108fcf218e4c84f28875ff93a06ec220ad8cdaf27301054d8f92bc",
+          "empty": false,
           "index": 8,
           "lhas_leaf": "37aa55f86cc685f5691828dab3c880c3aaec5e3d57cc8055c1aa37bc8ffc7edd",
           "sector_count": 1,
@@ -859,10 +1096,8 @@
           "tag": 2
         },
         {
-          "block_index": 0,
-          "data_offset": 9799,
-          "data_size": 364,
           "decompressed_sha256": "4c11eea73f3c21a0c8c0c8af0e82834139ea82123b12e79ecb3395e1e6353483",
+          "empty": false,
           "index": 9,
           "lhas_leaf": "765b8e16ae8097ebbf392dd047707e9c22b6698ff642d999eeaf3f8085d09d25",
           "sector_count": 1,
@@ -872,10 +1107,8 @@
           "tag": 1
         },
         {
-          "block_index": 0,
-          "data_offset": 10163,
-          "data_size": 1765,
           "decompressed_sha256": "d461c126ab7597cc523d70ebf0a0f09fcc1c8ddd8c9d9aae05aed85e8b664440",
+          "empty": false,
           "index": 10,
           "lhas_leaf": "2218ca88fbb48dc1455afd010ba000f4a1398b0ad2399f5f58b16b3512cb59ba",
           "sector_count": 1,
@@ -885,10 +1118,8 @@
           "tag": 2
         },
         {
-          "block_index": 0,
-          "data_offset": 11928,
-          "data_size": 364,
           "decompressed_sha256": "6757d7c1334570f1d1159319b7c16d446f1fddd019e228995342a71946a03ee0",
+          "empty": false,
           "index": 11,
           "lhas_leaf": "9740facbd632e436d2d8ee1a43aecdb9352ddf63aedd6368d05ca742e06cef7e",
           "sector_count": 1,
@@ -898,10 +1129,8 @@
           "tag": 1
         },
         {
-          "block_index": 0,
-          "data_offset": 12292,
-          "data_size": 1764,
           "decompressed_sha256": "d705e4dddcc06bb2f7cc7fad033ef6a900c6fc2d56fabffe8ca0b30b16581cc9",
+          "empty": false,
           "index": 12,
           "lhas_leaf": "53ce09a361ea9258a85d4a5bfa7808247cb0c86b46f005021a070ec1a1667480",
           "sector_count": 1,
@@ -911,10 +1140,8 @@
           "tag": 2
         },
         {
-          "block_index": 0,
-          "data_offset": 14056,
-          "data_size": 364,
           "decompressed_sha256": "5e594d1ee6d059fdcf942323a452061435f039955dae80046a86960501cfeea4",
+          "empty": false,
           "index": 13,
           "lhas_leaf": "0e6bb0892d30247da81ebc9787e2b79212fb39ab155a4d73d87767bfb98b7a56",
           "sector_count": 1,
@@ -924,10 +1151,8 @@
           "tag": 1
         },
         {
-          "block_index": 0,
-          "data_offset": 14420,
-          "data_size": 1805,
           "decompressed_sha256": "057bbe0fcacf92199bfdfb20b5a34840791001505deb73e8d821dc3812b69c4c",
+          "empty": false,
           "index": 14,
           "lhas_leaf": "c359470372128f2a8ba7096811bb25b9698a9256d5a12e5bf914519e5f5d6755",
           "sector_count": 1,
@@ -937,10 +1162,8 @@
           "tag": 2
         },
         {
-          "block_index": 0,
-          "data_offset": 16225,
-          "data_size": 364,
           "decompressed_sha256": "be5d18d505350881c2cd4b958204d4ffc5ca5ddbb725b4a4686791d00fe2aade",
+          "empty": false,
           "index": 15,
           "lhas_leaf": "34abcd8a6b42a5491084f28520e3ec9063c45726e20954ee332d4b785c922511",
           "sector_count": 1,
@@ -950,10 +1173,8 @@
           "tag": 1
         },
         {
-          "block_index": 1,
-          "data_offset": 0,
-          "data_size": 1845,
           "decompressed_sha256": "13c11af7780567973e1b444eece8602f19142e1748dc7860d079df7639cc66b9",
+          "empty": false,
           "index": 16,
           "lhas_leaf": "4e381c4386dd73453eb8e08b62f042ca8db93046dd67a7f0d0c4839b9a9f5ef9",
           "sector_count": 1,
@@ -963,10 +1184,8 @@
           "tag": 2
         },
         {
-          "block_index": 1,
-          "data_offset": 1845,
-          "data_size": 365,
           "decompressed_sha256": "317d7a1a07342b9fe162afa899b6a8bbe762c4b53b7a428c987209f88c90db28",
+          "empty": false,
           "index": 17,
           "lhas_leaf": "6d688633998ef671594d6dea75a5a73f618c1891ae3d9e83d7f4f0f8be9d3a77",
           "sector_count": 1,
@@ -976,10 +1195,8 @@
           "tag": 1
         },
         {
-          "block_index": 1,
-          "data_offset": 2210,
-          "data_size": 1844,
           "decompressed_sha256": "64c15583db798d1dd573bc590cc970772396e4b1564949f120be8182e330293c",
+          "empty": false,
           "index": 18,
           "lhas_leaf": "7741dc3429f841c6d457d16a2f320ab3bb3c395b89f7c4af2accd4ede68eb581",
           "sector_count": 1,
@@ -989,10 +1206,8 @@
           "tag": 2
         },
         {
-          "block_index": 1,
-          "data_offset": 4054,
-          "data_size": 364,
           "decompressed_sha256": "da6cac9ab01a65aacd50f6cac868ff636264f11fe0aacb670dd9b04b01150f63",
+          "empty": false,
           "index": 19,
           "lhas_leaf": "dc5bdf5d696417060417ae6c7a63cc571a9eb94f475fe6d96acbba9239dfd1bb",
           "sector_count": 1,
@@ -1002,10 +1217,8 @@
           "tag": 1
         },
         {
-          "block_index": 1,
-          "data_offset": 4418,
-          "data_size": 1885,
           "decompressed_sha256": "c41f4e6119e312c3692e4844bb84cb0e25c13b8ffea2efa21235ad2ca082d156",
+          "empty": false,
           "index": 20,
           "lhas_leaf": "27b37cec7da40176ad076abe5225343a4c649dce3fdbf572e51f617c6e91aa54",
           "sector_count": 1,
@@ -1015,10 +1228,8 @@
           "tag": 2
         },
         {
-          "block_index": 1,
-          "data_offset": 6303,
-          "data_size": 364,
           "decompressed_sha256": "759b0108708ef6fe4783ece16304556423ca9ed688c6e474462d68edeb83bd4c",
+          "empty": false,
           "index": 21,
           "lhas_leaf": "bba6608d2cdd4b29a75a5a49700b52bedec7a7aee1c64b35125627fa12b5bce8",
           "sector_count": 1,
@@ -1028,10 +1239,8 @@
           "tag": 1
         },
         {
-          "block_index": 1,
-          "data_offset": 6667,
-          "data_size": 1845,
           "decompressed_sha256": "3b914b9a4ce89682e5e970b2dd3d645d74ebaa7dfc3413a6333d4181486fb697",
+          "empty": false,
           "index": 22,
           "lhas_leaf": "544e86f626a06ecd29674b7e25bb8906e2fc876a4fe679d2cf65f2290db5c998",
           "sector_count": 1,
@@ -1041,10 +1250,8 @@
           "tag": 2
         },
         {
-          "block_index": 1,
-          "data_offset": 8512,
-          "data_size": 364,
           "decompressed_sha256": "0119b13aabbafb9428275d884cd78acf5e5d8ac1ec488d44158dd0bec8c04801",
+          "empty": false,
           "index": 23,
           "lhas_leaf": "983182a8b63d3c2599f2b8bd292fa24d6c1e082e5441ecdb59c65dc554fe1a09",
           "sector_count": 1,
@@ -1054,10 +1261,8 @@
           "tag": 1
         },
         {
-          "block_index": 1,
-          "data_offset": 8876,
-          "data_size": 1844,
           "decompressed_sha256": "eb09315fcdd6bed30cae9b2d2db3a978f99d07db170a10361e62bc7c1839a200",
+          "empty": false,
           "index": 24,
           "lhas_leaf": "462b2760720abd0c378c38ff3f47226fb4e38f35784d29e446faff108648cde2",
           "sector_count": 1,
@@ -1067,10 +1272,8 @@
           "tag": 2
         },
         {
-          "block_index": 1,
-          "data_offset": 10720,
-          "data_size": 365,
           "decompressed_sha256": "cf287346adb384d4618b09bfaae48689211117f7f621491e2a7a026ddee2344a",
+          "empty": false,
           "index": 25,
           "lhas_leaf": "3217b14b14aee6562c594bdf0691cd324959ca2e4148ef5d196faee108a23fab",
           "sector_count": 1,
@@ -1080,10 +1283,8 @@
           "tag": 1
         },
         {
-          "block_index": 1,
-          "data_offset": 11085,
-          "data_size": 1805,
           "decompressed_sha256": "7613dfe569fcc6a51c3118ada807b154be0879fc86575ca974fc1a1cb3e1fceb",
+          "empty": false,
           "index": 26,
           "lhas_leaf": "fb2d1364706ba1a1c42994b356b3f3c76b9259cdfbe9498ea18f4d3040e27a8a",
           "sector_count": 1,
@@ -1093,10 +1294,8 @@
           "tag": 2
         },
         {
-          "block_index": 1,
-          "data_offset": 12890,
-          "data_size": 364,
           "decompressed_sha256": "15f0e3ea34523e654925591d3771bea4ebbbd1283d729708bf37ce2263a3542c",
+          "empty": false,
           "index": 27,
           "lhas_leaf": "580e35317eeb5286921198e4aca6a8317b6b74fac17001f3ad95d6cc6aee7669",
           "sector_count": 1,
@@ -1106,10 +1305,8 @@
           "tag": 1
         },
         {
-          "block_index": 1,
-          "data_offset": 13254,
-          "data_size": 1765,
           "decompressed_sha256": "64846b8fe8f9e2af714847af14dc57abab46af9d26c3a2bd0bda7103757bcb84",
+          "empty": false,
           "index": 28,
           "lhas_leaf": "d33e01e43acb1ffd5bd2b01405eeb3eef403a6a838e511192d13df1a0a262054",
           "sector_count": 1,
@@ -1119,10 +1316,8 @@
           "tag": 2
         },
         {
-          "block_index": 1,
-          "data_offset": 15019,
-          "data_size": 364,
           "decompressed_sha256": "8a879445cfa373984dd7c584f54e2d2ba875cb8ef46db557e0cf47209e888616",
+          "empty": false,
           "index": 29,
           "lhas_leaf": "a42b9baed73b25c1607f3c07ecd410dd424758a656d7bc8e1127ac1d5cf8ae07",
           "sector_count": 1,
@@ -1132,10 +1327,8 @@
           "tag": 1
         },
         {
-          "block_index": 1,
-          "data_offset": 15383,
-          "data_size": 1764,
           "decompressed_sha256": "a7f375aa7b1ee4aa93884fea41f40ec582f79349fb367d2c14fb9d28b090d8aa",
+          "empty": false,
           "index": 30,
           "lhas_leaf": "9c509891691c655e43a898094c88a57029161ed55a061a5de53947494eb135a0",
           "sector_count": 1,
@@ -1145,10 +1338,8 @@
           "tag": 2
         },
         {
-          "block_index": 1,
-          "data_offset": 17147,
-          "data_size": 365,
           "decompressed_sha256": "94c6dc827fc6b94fcb0f2d044e11c3fbca516c26ab8fecb2a6ae378fca5e18da",
+          "empty": false,
           "index": 31,
           "lhas_leaf": "43105e2a8f7265abb7d853424613e9cde60580714cbdf7ccf8d4b316c3e16316",
           "sector_count": 1,
@@ -1158,10 +1349,8 @@
           "tag": 1
         },
         {
-          "block_index": 2,
-          "data_offset": 0,
-          "data_size": 1725,
           "decompressed_sha256": "cedd7885b9e84c041620966e6968b4741f42906c71ea15320a3dbd02393e2f1c",
+          "empty": false,
           "index": 32,
           "lhas_leaf": "e2a3de9a9b159da00d6f74f3fe7af46d4f3a7ac348e3841d11190e583d79e569",
           "sector_count": 1,
@@ -1171,10 +1360,8 @@
           "tag": 2
         },
         {
-          "block_index": 2,
-          "data_offset": 1725,
-          "data_size": 365,
           "decompressed_sha256": "9d9b41e4b04bf462c20b7ef4a6ecc058e1929eda1ecd063572e17a975f5fcebb",
+          "empty": false,
           "index": 33,
           "lhas_leaf": "d11f61cf9ca974fc92c98750ee2226cbbb22b07869d7b54f38c0e468e28e29b1",
           "sector_count": 1,
@@ -1184,10 +1371,8 @@
           "tag": 1
         },
         {
-          "block_index": 2,
-          "data_offset": 2090,
-          "data_size": 1685,
           "decompressed_sha256": "931215ac0278dd90ecb351688eaedd7793f27682645e73c3ec01e2011102c0ce",
+          "empty": false,
           "index": 34,
           "lhas_leaf": "23f026279d067af39bfec5534a8c0a6c6f4fff65c0dccf279d695a40eb106ace",
           "sector_count": 1,
@@ -1197,10 +1382,8 @@
           "tag": 2
         },
         {
-          "block_index": 2,
-          "data_offset": 3775,
-          "data_size": 364,
           "decompressed_sha256": "3c67622d4a04baa559cd645c8d925b19d6930b4fbbd240fd0aa3b70919da5049",
+          "empty": false,
           "index": 35,
           "lhas_leaf": "753d41fc643b24465d523993d20fec3e26455d18039789b150ac05d18fa2b24b",
           "sector_count": 1,
@@ -1210,10 +1393,8 @@
           "tag": 1
         },
         {
-          "block_index": 2,
-          "data_offset": 4139,
-          "data_size": 1684,
           "decompressed_sha256": "f5b37fff4d6774267afc0c48f70e43fd9bb2ff9905c678580f48f245a592f2c2",
+          "empty": false,
           "index": 36,
           "lhas_leaf": "eb71b046528e90231490bb84222887b9362a4068cf1b4386b03259ab61e27005",
           "sector_count": 1,
@@ -1223,10 +1404,8 @@
           "tag": 2
         },
         {
-          "block_index": 2,
-          "data_offset": 5823,
-          "data_size": 364,
           "decompressed_sha256": "ccd7dbbb18f18e78a4309ccaccb062112f0711ef41049ccc4c74ac84e04940b5",
+          "empty": false,
           "index": 37,
           "lhas_leaf": "47d98b3cd0737e264e754a82550814c300b479455a54c82b43152b3cf1b56cf8",
           "sector_count": 1,
@@ -1236,10 +1415,8 @@
           "tag": 1
         },
         {
-          "block_index": 2,
-          "data_offset": 6187,
-          "data_size": 1645,
           "decompressed_sha256": "9a01d38222caa2d14b954d592fa760d7f8dff8f28c8be0c4ca81715a741c065f",
+          "empty": false,
           "index": 38,
           "lhas_leaf": "dd67034e7e76ace4c4ab3424e2d9f9b491e59cb04c83a9bbeed994e709a3ec37",
           "sector_count": 1,
@@ -1249,10 +1426,8 @@
           "tag": 2
         },
         {
-          "block_index": 2,
-          "data_offset": 7832,
-          "data_size": 365,
           "decompressed_sha256": "9f63a61d812ee2a9046f369624bd735df0d5141b03132f7f598494ec28a215aa",
+          "empty": false,
           "index": 39,
           "lhas_leaf": "2162447b31bc23649aee5c457575c43bce7b32b976be4e25d90b0f885bd17a65",
           "sector_count": 1,
@@ -1262,10 +1437,8 @@
           "tag": 1
         },
         {
-          "block_index": 2,
-          "data_offset": 8197,
-          "data_size": 1605,
           "decompressed_sha256": "2138645e10c224a4ec603bc0d5d8cc8df2c08534264efb5a2486e8c4523d381d",
+          "empty": false,
           "index": 40,
           "lhas_leaf": "b3a7ed474be5dcdc46dfeba60854b72722f1450ae50af8738b8460d7daa3937c",
           "sector_count": 1,
@@ -1275,10 +1448,8 @@
           "tag": 2
         },
         {
-          "block_index": 2,
-          "data_offset": 9802,
-          "data_size": 364,
           "decompressed_sha256": "ce488bf148026699a838f60ebb1ce5863611d2c6421cccfc068835216ff1499f",
+          "empty": false,
           "index": 41,
           "lhas_leaf": "cad5fc856ebcd4ac952f80548d9efe45d59a63759c9bf18b5a34965129ca960b",
           "sector_count": 1,
@@ -1288,10 +1459,8 @@
           "tag": 1
         },
         {
-          "block_index": 2,
-          "data_offset": 10166,
-          "data_size": 1604,
           "decompressed_sha256": "470bb76867ff53b31f38be1c37f1f087e4b6ed48b489ee463bebdbae63f27f0b",
+          "empty": false,
           "index": 42,
           "lhas_leaf": "f5772bf3ae2845001a4267a9e9d98144883d24294858faea53bd15325457d973",
           "sector_count": 1,
@@ -1301,10 +1470,8 @@
           "tag": 2
         },
         {
-          "block_index": 2,
-          "data_offset": 11770,
-          "data_size": 363,
           "decompressed_sha256": "87deeef941870bde397591c69818bbc21eddb3e55307a16dd6fef02e91d817ec",
+          "empty": false,
           "index": 43,
           "lhas_leaf": "8233944280c59a0bcb0288b7a5a1ddf99764d9114766debb970823ca88833687",
           "sector_count": 1,
@@ -1314,10 +1481,8 @@
           "tag": 1
         },
         {
-          "block_index": 2,
-          "data_offset": 12133,
-          "data_size": 1645,
           "decompressed_sha256": "e83aea0885eec59a374c284845da7e490f4c83b0f47ea38f4fe0a479fe415e32",
+          "empty": false,
           "index": 44,
           "lhas_leaf": "95c1ea1fafd0c8ef167e41f0a247576a533c6a86ee506cee42a84dcb720da200",
           "sector_count": 1,
@@ -1327,10 +1492,8 @@
           "tag": 2
         },
         {
-          "block_index": 2,
-          "data_offset": 13778,
-          "data_size": 364,
           "decompressed_sha256": "55a6a883965d04725de48dd2093cbab31cc9cc9d5defd932c44eaecf2c5864fd",
+          "empty": false,
           "index": 45,
           "lhas_leaf": "a825bdc6f5b0295dea3b4d6060e4fc397bc0b9fc9202eb1b8580f7cb91738e5f",
           "sector_count": 1,
@@ -1340,10 +1503,8 @@
           "tag": 1
         },
         {
-          "block_index": 2,
-          "data_offset": 14142,
-          "data_size": 1685,
           "decompressed_sha256": "7ca34b79221e3c58497c8ec37777fa9183a39e01856e34f25fe7a9d749a4897a",
+          "empty": false,
           "index": 46,
           "lhas_leaf": "4365f3b42b83e9cba62743a3d99736f213a0c38103d112c1829cd34bd39b3cc6",
           "sector_count": 1,
@@ -1353,10 +1514,8 @@
           "tag": 2
         },
         {
-          "block_index": 2,
-          "data_offset": 15827,
-          "data_size": 364,
           "decompressed_sha256": "396dfce20d2934223e8f9d9dc0f61f9ec6020e16404a01a317e733527767a231",
+          "empty": false,
           "index": 47,
           "lhas_leaf": "6567e6304b1e8573f55805533c61bd0ddf3bfeb36983180e701e9d5f85e7dd68",
           "sector_count": 1,
@@ -1366,10 +1525,8 @@
           "tag": 1
         },
         {
-          "block_index": 3,
-          "data_offset": 0,
-          "data_size": 1684,
           "decompressed_sha256": "4165a2b02dd989275a150b11cb2a259afbe70ff18b7ab2c1d997b5d572a46b17",
+          "empty": false,
           "index": 48,
           "lhas_leaf": "582277e9bd449609ec6fda6756c81c76158b99b760eccebc238718d2fa85e0e9",
           "sector_count": 1,
@@ -1379,10 +1536,8 @@
           "tag": 2
         },
         {
-          "block_index": 3,
-          "data_offset": 1684,
-          "data_size": 364,
           "decompressed_sha256": "e547bc29f91163db403623a4e96f6691fe0e01e77f5b824062b12294028630d5",
+          "empty": false,
           "index": 49,
           "lhas_leaf": "45a156d7d9697ea24cf4f5282e1892acdca726fc06a63647a308b14ac7c174fe",
           "sector_count": 1,
@@ -1392,10 +1547,8 @@
           "tag": 1
         },
         {
-          "block_index": 3,
-          "data_offset": 2048,
-          "data_size": 1725,
           "decompressed_sha256": "cbf1574f20877fe413ac6ee90cb8dfcdba065d3612939afeb8bd97ae72fdd90b",
+          "empty": false,
           "index": 50,
           "lhas_leaf": "445f237f42bfa8184fed040effc81a76d63e4859e62f80264870d24afba2cf9f",
           "sector_count": 1,
@@ -1405,10 +1558,8 @@
           "tag": 2
         },
         {
-          "block_index": 3,
-          "data_offset": 3773,
-          "data_size": 365,
           "decompressed_sha256": "3af74c0bbda40fe0d29d25138995a6fd2ab2451d0a4e27db0e3a8f6e7095e5b7",
+          "empty": false,
           "index": 51,
           "lhas_leaf": "9a11df810bb5f12b3ca410dc159636ddab7820d19e9e80505d1da2472d05670c",
           "sector_count": 1,
@@ -1418,10 +1569,8 @@
           "tag": 1
         },
         {
-          "block_index": 3,
-          "data_offset": 4138,
-          "data_size": 1765,
           "decompressed_sha256": "6faaba2c1db111eac013fc8d74cdcd0d836e6a3be5e1c938769a8990950d0f5a",
+          "empty": false,
           "index": 52,
           "lhas_leaf": "336d92847b309f9bb6ccf34179647c99418737df84ff28078c75dab18e30f0fc",
           "sector_count": 1,
@@ -1431,10 +1580,8 @@
           "tag": 2
         },
         {
-          "block_index": 3,
-          "data_offset": 5903,
-          "data_size": 364,
           "decompressed_sha256": "198adfe407b478ef8e1affbbd9d9900bf9adb534079107179f94a1402ea493a9",
+          "empty": false,
           "index": 53,
           "lhas_leaf": "369f564e7d364d1f988e1f6ae2a26805158afef20915f1dcb405830eea3ab7c9",
           "sector_count": 1,
@@ -1444,10 +1591,8 @@
           "tag": 1
         },
         {
-          "block_index": 3,
-          "data_offset": 6267,
-          "data_size": 1764,
           "decompressed_sha256": "234f0da93e96848c5f444c94970237e0aa3d2b65408cca0dbeae98b942d04a09",
+          "empty": false,
           "index": 54,
           "lhas_leaf": "88a6e242a5c03266ead737825954095cb594ac522c6a5636b4f10a6f5ede6a61",
           "sector_count": 1,
@@ -1457,10 +1602,8 @@
           "tag": 2
         },
         {
-          "block_index": 3,
-          "data_offset": 8031,
-          "data_size": 364,
           "decompressed_sha256": "2a54379e99f7bbbc40d54a9df449d20d1d3d94520c95f328798397e31fae995d",
+          "empty": false,
           "index": 55,
           "lhas_leaf": "8837fbbbc5f8eda94c1c046ab639dae26bf59d94ceb6c28ce517cda488b5eca2",
           "sector_count": 1,
@@ -1470,10 +1613,8 @@
           "tag": 1
         },
         {
-          "block_index": 3,
-          "data_offset": 8395,
-          "data_size": 1805,
           "decompressed_sha256": "bb080f7cd75f82354a540ca3578c145b275da59c936404331b975692356dfee3",
+          "empty": false,
           "index": 56,
           "lhas_leaf": "bd8026738da1a01df986bf962b23a7077ca0eca08f64fbd837dadd50f55417e2",
           "sector_count": 1,
@@ -1483,10 +1624,8 @@
           "tag": 2
         },
         {
-          "block_index": 3,
-          "data_offset": 10200,
-          "data_size": 364,
           "decompressed_sha256": "a7084067411f1f29633c4ae266d51eb3e113adba14c89daadbebe93899cecde3",
+          "empty": false,
           "index": 57,
           "lhas_leaf": "1af28c2942f6f8545f2a42db44e49b10eb5563a8ba23a4538e0c9f60c1f1f911",
           "sector_count": 1,
@@ -1496,10 +1635,8 @@
           "tag": 1
         },
         {
-          "block_index": 3,
-          "data_offset": 10564,
-          "data_size": 1845,
           "decompressed_sha256": "7dfe7c3e2fa47fec35d0dfa3470b50b17f34c541cb518debbe49fb656b638543",
+          "empty": false,
           "index": 58,
           "lhas_leaf": "2c705f154e39c3653da0d275c479c5402a8c4424ccc15a12cd442d9fcfc592f9",
           "sector_count": 1,
@@ -1509,10 +1646,8 @@
           "tag": 2
         },
         {
-          "block_index": 3,
-          "data_offset": 12409,
-          "data_size": 365,
           "decompressed_sha256": "d30ac05d0f26d9625100012c6f9ee93b59ea38423b65b00acd64cbed24240374",
+          "empty": false,
           "index": 59,
           "lhas_leaf": "e8139098735ac9df091909aed5f54c92e615e9380d6996ab2a16d3d580c6e34f",
           "sector_count": 1,
@@ -1522,10 +1657,8 @@
           "tag": 1
         },
         {
-          "block_index": 3,
-          "data_offset": 12774,
-          "data_size": 1844,
           "decompressed_sha256": "963859256d74ad3fc66550668f03abad3a9685fd217055f8a104651887c9f1e0",
+          "empty": false,
           "index": 60,
           "lhas_leaf": "58972fd9438c718ee46975bbe3a9749bbe5b94af49ad6a97b49d85298588af8f",
           "sector_count": 1,
@@ -1535,10 +1668,8 @@
           "tag": 2
         },
         {
-          "block_index": 3,
-          "data_offset": 14618,
-          "data_size": 364,
           "decompressed_sha256": "97c8f6f12d03fc0917cdd52d42527d36b732117642203b0a8a5054fa9b59719f",
+          "empty": false,
           "index": 61,
           "lhas_leaf": "a36a71dfa3bc35cb15a00b0f4033080978d8bd89e34436fe8155af843fe300a0",
           "sector_count": 1,
@@ -1548,10 +1679,8 @@
           "tag": 1
         },
         {
-          "block_index": 3,
-          "data_offset": 14982,
-          "data_size": 1805,
           "decompressed_sha256": "9e462507d068aff5c76317f78c0af8f05bc6a0de4f9ecb2e6442037950aeec97",
+          "empty": false,
           "index": 62,
           "lhas_leaf": "c5ba5e0dd33a0979909b883a31a57b0647eab88eb82fbf95450d584a445ebb7c",
           "sector_count": 1,
@@ -1561,10 +1690,8 @@
           "tag": 2
         },
         {
-          "block_index": 3,
-          "data_offset": 16787,
-          "data_size": 364,
           "decompressed_sha256": "eedcdbb0fa34cf1f0aad07d4e23ab24da0a7cfe66ca4777bdf1f3f68bb349948",
+          "empty": false,
           "index": 63,
           "lhas_leaf": "5f5bb8ca950012ef41449a7f90602c0e4099e6ea264b01cf17da678dbf00ab55",
           "sector_count": 1,
@@ -1572,6 +1699,699 @@
             1
           ],
           "tag": 1
+        }
+      ],
+      "layers_per_chunk": 16,
+      "layr_chunks": [
+        {
+          "content_size": 16589,
+          "dict_id": 59649903,
+          "first_layer": 0,
+          "frame_size": 3942,
+          "index": 5,
+          "layer_count": 16,
+          "sealed": false,
+          "sector_id": 0,
+          "stored_len": 3946,
+          "version": 1
+        },
+        {
+          "content_size": 17512,
+          "dict_id": 59649903,
+          "first_layer": 16,
+          "frame_size": 3936,
+          "index": 6,
+          "layer_count": 16,
+          "sealed": false,
+          "sector_id": 0,
+          "stored_len": 3940,
+          "version": 1
+        },
+        {
+          "content_size": 16191,
+          "dict_id": 59649903,
+          "first_layer": 32,
+          "frame_size": 3981,
+          "index": 7,
+          "layer_count": 16,
+          "sealed": false,
+          "sector_id": 0,
+          "stored_len": 3985,
+          "version": 1
+        },
+        {
+          "content_size": 17151,
+          "dict_id": 59649903,
+          "first_layer": 48,
+          "frame_size": 3958,
+          "index": 8,
+          "layer_count": 16,
+          "sealed": false,
+          "sector_id": 0,
+          "stored_len": 3962,
+          "version": 1
+        }
+      ],
+      "ltbl": [
+        {
+          "additional_sector_count": 0,
+          "data_offset": 0,
+          "data_size": 1604,
+          "entry_index": 0,
+          "first_layr": 5,
+          "first_lrov": 0,
+          "layer": 0,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 1604,
+          "data_size": 364,
+          "entry_index": 1,
+          "first_layr": 5,
+          "first_lrov": 0,
+          "layer": 1,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 1968,
+          "data_size": 1645,
+          "entry_index": 2,
+          "first_layr": 5,
+          "first_lrov": 0,
+          "layer": 2,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 3613,
+          "data_size": 364,
+          "entry_index": 3,
+          "first_layr": 5,
+          "first_lrov": 0,
+          "layer": 3,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 3977,
+          "data_size": 1685,
+          "entry_index": 4,
+          "first_layr": 5,
+          "first_lrov": 0,
+          "layer": 4,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 5662,
+          "data_size": 364,
+          "entry_index": 5,
+          "first_layr": 5,
+          "first_lrov": 0,
+          "layer": 5,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 6026,
+          "data_size": 1684,
+          "entry_index": 6,
+          "first_layr": 5,
+          "first_lrov": 0,
+          "layer": 6,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 7710,
+          "data_size": 364,
+          "entry_index": 7,
+          "first_layr": 5,
+          "first_lrov": 0,
+          "layer": 7,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 8074,
+          "data_size": 1725,
+          "entry_index": 8,
+          "first_layr": 5,
+          "first_lrov": 0,
+          "layer": 8,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 9799,
+          "data_size": 364,
+          "entry_index": 9,
+          "first_layr": 5,
+          "first_lrov": 0,
+          "layer": 9,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 10163,
+          "data_size": 1765,
+          "entry_index": 10,
+          "first_layr": 5,
+          "first_lrov": 0,
+          "layer": 10,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 11928,
+          "data_size": 364,
+          "entry_index": 11,
+          "first_layr": 5,
+          "first_lrov": 0,
+          "layer": 11,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 12292,
+          "data_size": 1764,
+          "entry_index": 12,
+          "first_layr": 5,
+          "first_lrov": 0,
+          "layer": 12,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 14056,
+          "data_size": 364,
+          "entry_index": 13,
+          "first_layr": 5,
+          "first_lrov": 0,
+          "layer": 13,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 14420,
+          "data_size": 1805,
+          "entry_index": 14,
+          "first_layr": 5,
+          "first_lrov": 0,
+          "layer": 14,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 16225,
+          "data_size": 364,
+          "entry_index": 15,
+          "first_layr": 5,
+          "first_lrov": 0,
+          "layer": 15,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 0,
+          "data_size": 1845,
+          "entry_index": 16,
+          "first_layr": 6,
+          "first_lrov": 0,
+          "layer": 16,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 1845,
+          "data_size": 365,
+          "entry_index": 17,
+          "first_layr": 6,
+          "first_lrov": 0,
+          "layer": 17,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 2210,
+          "data_size": 1844,
+          "entry_index": 18,
+          "first_layr": 6,
+          "first_lrov": 0,
+          "layer": 18,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 4054,
+          "data_size": 364,
+          "entry_index": 19,
+          "first_layr": 6,
+          "first_lrov": 0,
+          "layer": 19,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 4418,
+          "data_size": 1885,
+          "entry_index": 20,
+          "first_layr": 6,
+          "first_lrov": 0,
+          "layer": 20,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 6303,
+          "data_size": 364,
+          "entry_index": 21,
+          "first_layr": 6,
+          "first_lrov": 0,
+          "layer": 21,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 6667,
+          "data_size": 1845,
+          "entry_index": 22,
+          "first_layr": 6,
+          "first_lrov": 0,
+          "layer": 22,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 8512,
+          "data_size": 364,
+          "entry_index": 23,
+          "first_layr": 6,
+          "first_lrov": 0,
+          "layer": 23,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 8876,
+          "data_size": 1844,
+          "entry_index": 24,
+          "first_layr": 6,
+          "first_lrov": 0,
+          "layer": 24,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 10720,
+          "data_size": 365,
+          "entry_index": 25,
+          "first_layr": 6,
+          "first_lrov": 0,
+          "layer": 25,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 11085,
+          "data_size": 1805,
+          "entry_index": 26,
+          "first_layr": 6,
+          "first_lrov": 0,
+          "layer": 26,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 12890,
+          "data_size": 364,
+          "entry_index": 27,
+          "first_layr": 6,
+          "first_lrov": 0,
+          "layer": 27,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 13254,
+          "data_size": 1765,
+          "entry_index": 28,
+          "first_layr": 6,
+          "first_lrov": 0,
+          "layer": 28,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 15019,
+          "data_size": 364,
+          "entry_index": 29,
+          "first_layr": 6,
+          "first_lrov": 0,
+          "layer": 29,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 15383,
+          "data_size": 1764,
+          "entry_index": 30,
+          "first_layr": 6,
+          "first_lrov": 0,
+          "layer": 30,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 17147,
+          "data_size": 365,
+          "entry_index": 31,
+          "first_layr": 6,
+          "first_lrov": 0,
+          "layer": 31,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 0,
+          "data_size": 1725,
+          "entry_index": 32,
+          "first_layr": 7,
+          "first_lrov": 0,
+          "layer": 32,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 1725,
+          "data_size": 365,
+          "entry_index": 33,
+          "first_layr": 7,
+          "first_lrov": 0,
+          "layer": 33,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 2090,
+          "data_size": 1685,
+          "entry_index": 34,
+          "first_layr": 7,
+          "first_lrov": 0,
+          "layer": 34,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 3775,
+          "data_size": 364,
+          "entry_index": 35,
+          "first_layr": 7,
+          "first_lrov": 0,
+          "layer": 35,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 4139,
+          "data_size": 1684,
+          "entry_index": 36,
+          "first_layr": 7,
+          "first_lrov": 0,
+          "layer": 36,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 5823,
+          "data_size": 364,
+          "entry_index": 37,
+          "first_layr": 7,
+          "first_lrov": 0,
+          "layer": 37,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 6187,
+          "data_size": 1645,
+          "entry_index": 38,
+          "first_layr": 7,
+          "first_lrov": 0,
+          "layer": 38,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 7832,
+          "data_size": 365,
+          "entry_index": 39,
+          "first_layr": 7,
+          "first_lrov": 0,
+          "layer": 39,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 8197,
+          "data_size": 1605,
+          "entry_index": 40,
+          "first_layr": 7,
+          "first_lrov": 0,
+          "layer": 40,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 9802,
+          "data_size": 364,
+          "entry_index": 41,
+          "first_layr": 7,
+          "first_lrov": 0,
+          "layer": 41,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 10166,
+          "data_size": 1604,
+          "entry_index": 42,
+          "first_layr": 7,
+          "first_lrov": 0,
+          "layer": 42,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 11770,
+          "data_size": 363,
+          "entry_index": 43,
+          "first_layr": 7,
+          "first_lrov": 0,
+          "layer": 43,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 12133,
+          "data_size": 1645,
+          "entry_index": 44,
+          "first_layr": 7,
+          "first_lrov": 0,
+          "layer": 44,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 13778,
+          "data_size": 364,
+          "entry_index": 45,
+          "first_layr": 7,
+          "first_lrov": 0,
+          "layer": 45,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 14142,
+          "data_size": 1685,
+          "entry_index": 46,
+          "first_layr": 7,
+          "first_lrov": 0,
+          "layer": 46,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 15827,
+          "data_size": 364,
+          "entry_index": 47,
+          "first_layr": 7,
+          "first_lrov": 0,
+          "layer": 47,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 0,
+          "data_size": 1684,
+          "entry_index": 48,
+          "first_layr": 8,
+          "first_lrov": 0,
+          "layer": 48,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 1684,
+          "data_size": 364,
+          "entry_index": 49,
+          "first_layr": 8,
+          "first_lrov": 0,
+          "layer": 49,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 2048,
+          "data_size": 1725,
+          "entry_index": 50,
+          "first_layr": 8,
+          "first_lrov": 0,
+          "layer": 50,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 3773,
+          "data_size": 365,
+          "entry_index": 51,
+          "first_layr": 8,
+          "first_lrov": 0,
+          "layer": 51,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 4138,
+          "data_size": 1765,
+          "entry_index": 52,
+          "first_layr": 8,
+          "first_lrov": 0,
+          "layer": 52,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 5903,
+          "data_size": 364,
+          "entry_index": 53,
+          "first_layr": 8,
+          "first_lrov": 0,
+          "layer": 53,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 6267,
+          "data_size": 1764,
+          "entry_index": 54,
+          "first_layr": 8,
+          "first_lrov": 0,
+          "layer": 54,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 8031,
+          "data_size": 364,
+          "entry_index": 55,
+          "first_layr": 8,
+          "first_lrov": 0,
+          "layer": 55,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 8395,
+          "data_size": 1805,
+          "entry_index": 56,
+          "first_layr": 8,
+          "first_lrov": 0,
+          "layer": 56,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 10200,
+          "data_size": 364,
+          "entry_index": 57,
+          "first_layr": 8,
+          "first_lrov": 0,
+          "layer": 57,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 10564,
+          "data_size": 1845,
+          "entry_index": 58,
+          "first_layr": 8,
+          "first_lrov": 0,
+          "layer": 58,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 12409,
+          "data_size": 365,
+          "entry_index": 59,
+          "first_layr": 8,
+          "first_lrov": 0,
+          "layer": 59,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 12774,
+          "data_size": 1844,
+          "entry_index": 60,
+          "first_layr": 8,
+          "first_lrov": 0,
+          "layer": 60,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 14618,
+          "data_size": 364,
+          "entry_index": 61,
+          "first_layr": 8,
+          "first_lrov": 0,
+          "layer": 61,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 14982,
+          "data_size": 1805,
+          "entry_index": 62,
+          "first_layr": 8,
+          "first_lrov": 0,
+          "layer": 62,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 16787,
+          "data_size": 364,
+          "entry_index": 63,
+          "first_layr": 8,
+          "first_lrov": 0,
+          "layer": 63,
+          "sector_id": 0
         }
       ],
       "merkle_root": "f628215d289fdeff37d927f6417abb8f64017560f7146f8f15df79e6acc944d2",
@@ -1670,99 +2490,200 @@
         }
       ],
       "total_layers": 64,
-      "total_uncompressed_size": 20729,
-      "trailer_crc32c": "0xB91BCCC6"
+      "total_uncompressed_size": 21153,
+      "trailer_crc32c": "0x36598E4E"
     },
     {
-      "block_size_layers": 2,
-      "blocks": [
-        {
-          "frame_offset": 0,
-          "frame_size": 31,
-          "uncompressed_size": 22
-        },
-        {
-          "frame_offset": 31,
-          "frame_size": 26,
-          "uncompressed_size": 17
-        }
-      ],
-      "chunk_count": 6,
-      "description": "Four layers with two non-overlapping sectors, exercising the multi-sector varint framing and the sector partition invariant.",
+      "chunk_count": 10,
+      "chunk_payload_sha256": {
+        "LROV": [
+          "2b4bc84ae7d49daab6da5603193bce5a0ccdd144552ff846ea848dcef058d9e4",
+          "14a1af6bc9bee0c5f5d92b358695be8f8354a2d4186b0e5d861b2294dc8bf069"
+        ]
+      },
+      "description": "Four layers with two non-overlapping sectors, the second defined by META.sectors: layer 2 carries no data at all and is the empty layer, its single sector-0 entry holding a zero length, and two LROV chunks override one layer of one sector each - sector 1 of layer 0 and sector 0 of layer 1 - so the timing of a point is the timing of that point and not of its layer.",
       "dict": {
         "dict_id": 0,
         "dict_size": 0,
         "present": false
       },
-      "dir_offset": 869,
+      "dir_offset": 987,
       "display_height_px": 48,
       "display_width_px": 64,
       "features": [
         "multi-sector",
-        "sector-framing",
+        "sector-chunks",
         "empty-layer",
-        "binary-ree"
+        "binary-ree",
+        "sector-scoped-override"
       ],
       "file": "valid/multi-sector.lumen",
-      "file_sha256": "4bbacf1457b3ea3a6143b7926ee35178e74cfa7831b675741e7b99acaa6a1c48",
-      "file_size": 1069,
+      "file_sha256": "2b1d485729e8a29902730ce56e966610f0598b9b67d777af3e0627eb544472fa",
+      "file_size": 1315,
       "header_flags": 2,
       "layer_height_um": 50,
       "layers": [
         {
-          "block_index": 0,
-          "data_offset": 0,
-          "data_size": 15,
-          "decompressed_sha256": "74b7c16695df412942b913583b2a0bbff04bf3909d84f9d35715ebde39fd4181",
+          "decompressed_sha256": "14028eb6cc8281c70c471ff5255de1ac57f11d2521f2c08c10c3d57c5356a5b2",
+          "empty": false,
           "index": 0,
-          "lhas_leaf": "8cc6f60f7792eff314594f6aaf85a1c4f7f84bcdd8b94f9f10502f07ec743bb1",
+          "lhas_leaf": "205f63934863a2b73284e1ee21eae9eb9baca8cd4ba1e9902021176bba706b81",
           "sector_count": 2,
           "sector_tags": [
             0,
             0
           ],
-          "tag": null
+          "tag": 0
         },
         {
-          "block_index": 0,
-          "data_offset": 15,
-          "data_size": 7,
-          "decompressed_sha256": "a1123094b593c1c400154415f0958737a924ad20a609eb298e53e38b0f2ed0c0",
+          "decompressed_sha256": "0bb15dbbdd2bd982717f2e89621cc661c20c0d8d78d53be21268edc64173d181",
+          "empty": false,
           "index": 1,
-          "lhas_leaf": "82a92b6abc4fe8be91532fbcaae7ca4f4eca8676e0992965ff6b054b77f5c897",
+          "lhas_leaf": "2e4455cc8e43452224b41f0936106e92e603282b82cf23ef2c5f3f6a9a4cef14",
           "sector_count": 1,
           "sector_tags": [
             0
           ],
-          "tag": null
+          "tag": 0
         },
         {
-          "block_index": 1,
-          "data_offset": 0,
-          "data_size": 0,
           "decompressed_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "empty": true,
           "index": 2,
           "lhas_leaf": "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d",
-          "sector_count": 0,
-          "sector_tags": [],
+          "sector_count": 1,
+          "sector_tags": [
+            null
+          ],
           "tag": null
         },
         {
-          "block_index": 1,
-          "data_offset": 0,
-          "data_size": 17,
-          "decompressed_sha256": "5e0e4f9b411719bbc4f319a1347ece47615f2d33d89a560cecc23f2af14221e2",
+          "decompressed_sha256": "2f0dcc641a072acf6cf21b94b43b938e9d30671e738ea8c29d6fc6e39256a018",
+          "empty": false,
           "index": 3,
-          "lhas_leaf": "2b8b3434515c4472be075104dfa6aaf63330f2c80645ba083e96d70c54119efa",
+          "lhas_leaf": "dcecc0dafbd05c42336506a5e86b62b671eada890ee763b947c08dae96fa8812",
           "sector_count": 2,
           "sector_tags": [
             0,
             0
           ],
-          "tag": null
+          "tag": 0
         }
       ],
-      "merkle_root": "1e84ef60b05ed292faf60cfc9b1226f8703f233d919673c1af0a119671721eb2",
+      "layers_per_chunk": 2,
+      "layr_chunks": [
+        {
+          "content_size": 10,
+          "dict_id": 0,
+          "first_layer": 0,
+          "frame_size": 19,
+          "index": 6,
+          "layer_count": 2,
+          "sealed": false,
+          "sector_id": 0,
+          "stored_len": 23,
+          "version": 1
+        },
+        {
+          "content_size": 6,
+          "dict_id": 0,
+          "first_layer": 2,
+          "frame_size": 15,
+          "index": 7,
+          "layer_count": 2,
+          "sealed": false,
+          "sector_id": 0,
+          "stored_len": 19,
+          "version": 1
+        },
+        {
+          "content_size": 5,
+          "dict_id": 0,
+          "first_layer": 0,
+          "frame_size": 14,
+          "index": 8,
+          "layer_count": 2,
+          "sealed": false,
+          "sector_id": 1,
+          "stored_len": 18,
+          "version": 1
+        },
+        {
+          "content_size": 6,
+          "dict_id": 0,
+          "first_layer": 2,
+          "frame_size": 15,
+          "index": 9,
+          "layer_count": 2,
+          "sealed": false,
+          "sector_id": 1,
+          "stored_len": 19,
+          "version": 1
+        }
+      ],
+      "ltbl": [
+        {
+          "additional_sector_count": 1,
+          "data_offset": 0,
+          "data_size": 6,
+          "entry_index": 0,
+          "first_layr": 6,
+          "first_lrov": 0,
+          "layer": 0,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 0,
+          "data_size": 5,
+          "entry_index": 1,
+          "first_layr": 8,
+          "first_lrov": 2,
+          "layer": 0,
+          "sector_id": 1
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 6,
+          "data_size": 4,
+          "entry_index": 2,
+          "first_layr": 6,
+          "first_lrov": 3,
+          "layer": 1,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 0,
+          "data_size": 0,
+          "entry_index": 3,
+          "first_layr": 7,
+          "first_lrov": 0,
+          "layer": 2,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 1,
+          "data_offset": 0,
+          "data_size": 6,
+          "entry_index": 4,
+          "first_layr": 7,
+          "first_lrov": 0,
+          "layer": 3,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 0,
+          "data_size": 6,
+          "entry_index": 5,
+          "first_layr": 9,
+          "first_lrov": 0,
+          "layer": 3,
+          "sector_id": 1
+        }
+      ],
+      "merkle_root": "9e7c5633168f111674f8bdde627eb33a10231145866c3798bf4323352dc3db75",
       "multi_sector": true,
       "name": "multi-sector",
       "resolved_timing": [
@@ -1785,7 +2706,7 @@
           "wait_time_before_cure_ms": 0
         },
         {
-          "exposure_ms": 30000,
+          "exposure_ms": 2800,
           "layer": 0,
           "layer_height_um": 50,
           "lift_fast_distance_um": 0,
@@ -1808,7 +2729,7 @@
           "layer_height_um": 50,
           "lift_fast_distance_um": 0,
           "lift_fast_speed_um_min": 0,
-          "lift_slow_distance_um": 5000,
+          "lift_slow_distance_um": 6000,
           "lift_slow_speed_um_min": 65000,
           "light_pwm": 255,
           "retract_fast_distance_um": 5000,
@@ -1912,188 +2833,408 @@
         }
       ],
       "total_layers": 4,
-      "total_uncompressed_size": 1090,
-      "trailer_crc32c": "0xCD267F3B"
+      "total_uncompressed_size": 1256,
+      "trailer_crc32c": "0xEDACC004"
     },
     {
-      "block_size_layers": 5,
-      "blocks": [
-        {
-          "frame_offset": 0,
-          "frame_size": 55,
-          "uncompressed_size": 85
-        },
-        {
-          "frame_offset": 55,
-          "frame_size": 56,
-          "uncompressed_size": 85
-        }
-      ],
-      "chunk_count": 6,
-      "description": "Ten layers over two sectors whose SECT definition carries bottom_layer_count 5 and no transition_layer_count, so sector 1 is blended over a bottom range of its own and inherits META's transition count; layer 4 is the layer where the two readings part, fully normal at 2500 ms for sector 0 and still a bottom layer at 30000 ms for sector 1, and their transition steps fall on layers 2 and 5 rather than together.",
+      "chunk_count": 8,
+      "description": "Ten layers over two sectors whose META.sectors entry for sector 1 carries bottom_layer_count 5 and no transition_layer_count, so sector 1 is blended over a bottom range of its own and inherits META's transition count; layer 4 is the layer where the two readings part, fully normal at 2500 ms for sector 0 and still a bottom layer at 30000 ms for sector 1, and their transition steps fall on layers 2 and 5 rather than together.",
       "dict": {
         "dict_id": 0,
         "dict_size": 0,
         "present": false
       },
-      "dir_offset": 1251,
+      "dir_offset": 1553,
       "display_height_px": 48,
       "display_width_px": 64,
       "features": [
         "multi-sector",
-        "sector-framing",
+        "sector-chunks",
         "sector-layer-count",
         "per-sector-bottom-range",
         "binary-ree"
       ],
       "file": "valid/sector-blend-ranges.lumen",
-      "file_sha256": "62bf695beedec7b0c2a687101d7f3045c07ae3060cba0a1871b451183d5e7ec6",
-      "file_size": 1451,
+      "file_sha256": "d196de0b5d690606fc1ef1d86fb7effb679b3aa5338afa4efaf4c53280fd70b8",
+      "file_size": 1817,
       "header_flags": 2,
       "layer_height_um": 50,
       "layers": [
         {
-          "block_index": 0,
-          "data_offset": 0,
-          "data_size": 17,
-          "decompressed_sha256": "3d1bf570c4abb5361a36df210eb638239df6936a7113e6c256f1487091aa7a45",
+          "decompressed_sha256": "914f325c5bf6c52b9b843d0d7de02e0c23d098a87667c2eec3b0ed35d89a1657",
+          "empty": false,
           "index": 0,
-          "lhas_leaf": "2055a6738b4ff92e9c3d37a576ad061111fdcd6c4a4c6e4ea5bfcbd378c28d68",
+          "lhas_leaf": "7a3c92a9b6a63f9067724deb9d74933d0abb5c96c5ae1ea26169cd127077f55b",
           "sector_count": 2,
           "sector_tags": [
             0,
             0
           ],
-          "tag": null
+          "tag": 0
         },
         {
-          "block_index": 0,
-          "data_offset": 17,
-          "data_size": 17,
-          "decompressed_sha256": "2703fcb174aa3c43848b99550f2491ba65c8c46e3b46622969053ec732793b26",
+          "decompressed_sha256": "0aae4858a109880749d4e43b99e9a75ba082163e0ae9fda1b29de6db656e1bb0",
+          "empty": false,
           "index": 1,
-          "lhas_leaf": "ef60f77b0cebd701073779d49a5ae05c8ec41018c5deb3fc15d421c10c7234f9",
+          "lhas_leaf": "1a8da295d4f179fc8938ceb9f4390f95945ae68ef3c323e4f85dad37238aa0d6",
           "sector_count": 2,
           "sector_tags": [
             0,
             0
           ],
-          "tag": null
+          "tag": 0
         },
         {
-          "block_index": 0,
-          "data_offset": 34,
-          "data_size": 17,
-          "decompressed_sha256": "9401fccae6eaf3bc549b9e713306c4df1a01f7d9f719cd4edae7fad07a9fae8e",
+          "decompressed_sha256": "3559e3ccb03f4dcd44e6858edf197348146ce41d1299cd09be9d6560d129ee1b",
+          "empty": false,
           "index": 2,
-          "lhas_leaf": "fa292b5adac610bbaba7f71c884ae92df12a85f443d8e12ec3e864b95b807ec3",
+          "lhas_leaf": "617904775310153019e5152dc6c6463d232fb49517e69d936bb13e7fcf65d9f5",
           "sector_count": 2,
           "sector_tags": [
             0,
             0
           ],
-          "tag": null
+          "tag": 0
         },
         {
-          "block_index": 0,
-          "data_offset": 51,
-          "data_size": 17,
-          "decompressed_sha256": "bfeca1cf64823322c9c6eaa19474ab6259f2d0532e12331071a6b6051a7954ae",
+          "decompressed_sha256": "e85c35c21e0fba61c3f5442dd8f8296609a8ec0cf985eeaab2ec9930371a53a8",
+          "empty": false,
           "index": 3,
-          "lhas_leaf": "42d0fbfba15344494e5756c82b4699c532e356a403ae8d21631824be8572ad89",
+          "lhas_leaf": "83a746d585a6eabd3095a6cc685662b9f65419d6e7014a49de91928e15a3a83e",
           "sector_count": 2,
           "sector_tags": [
             0,
             0
           ],
-          "tag": null
+          "tag": 0
         },
         {
-          "block_index": 0,
-          "data_offset": 68,
-          "data_size": 17,
-          "decompressed_sha256": "f108e84acf9943b67221861adf229290b3253eafd23567593fc18a0b486dd579",
+          "decompressed_sha256": "77b0f88626aa469f458c6acd75190066f17a8d229c7acf20a925528327e0c2b5",
+          "empty": false,
           "index": 4,
-          "lhas_leaf": "17dbfd6db93f998c5639fa5bcb183567c46e613f7a3b13b9fc5ce3ae98d6eb7d",
+          "lhas_leaf": "dc96a6b26ed34421fd8bb0e1e480262a2b8c1a3fa5a70205f0a49e81e40e9916",
           "sector_count": 2,
           "sector_tags": [
             0,
             0
           ],
-          "tag": null
+          "tag": 0
         },
         {
-          "block_index": 1,
-          "data_offset": 0,
-          "data_size": 17,
-          "decompressed_sha256": "c54f305f200256821a8903a7d820c01236cbe5cc5752955366c172461fe38828",
+          "decompressed_sha256": "519eb680f1f6491e72fd739f026e0323c83313bb69b6a1cc41055e76e7fce009",
+          "empty": false,
           "index": 5,
-          "lhas_leaf": "a2223900dd15f5832c7fb926d52377c7a47988a7b86574e64ecdbe4a15f1f4f4",
+          "lhas_leaf": "f5ba29e00d9f3eec628b5370dbc3419fefad45f78ad6731ccf8a61e7c6aa0651",
           "sector_count": 2,
           "sector_tags": [
             0,
             0
           ],
-          "tag": null
+          "tag": 0
         },
         {
-          "block_index": 1,
-          "data_offset": 17,
-          "data_size": 17,
-          "decompressed_sha256": "96e808e6577b72bfa7857e3915f13ca28c6fad0095d45756cfb3df01770a2dcc",
+          "decompressed_sha256": "5bcb5e4adb7ac065ddb6dcf975dca1d4e69e891b0e8a96d6f74a06e22625d4ff",
+          "empty": false,
           "index": 6,
-          "lhas_leaf": "321b1ae7173de269e9bd4cc8e7eaf4129fe6289b227581262eb007911b5ee0ab",
+          "lhas_leaf": "d622cb5b41f964c66f765c1a2bf035d729f1634dfb4534f7aa9229af8558fe67",
           "sector_count": 2,
           "sector_tags": [
             0,
             0
           ],
-          "tag": null
+          "tag": 0
         },
         {
-          "block_index": 1,
-          "data_offset": 34,
-          "data_size": 17,
-          "decompressed_sha256": "3689cc60fa682d7d5194284f3d38168bb4cf19ad2df1a35ceb1dc17a21586d43",
+          "decompressed_sha256": "0ca5d5ec285c8133b7ce415ef6565acf052a2826bedcbf892ea0849bcbf2f99a",
+          "empty": false,
           "index": 7,
-          "lhas_leaf": "597a1473bdd969135d3ad47fd075f48896fae7d9cf5f12a26a270357de5706bb",
+          "lhas_leaf": "6981c6d2a7a8feb6ec4e47bf7fd3ef5e6a76b127a41a0ce33d00a3a436df032b",
           "sector_count": 2,
           "sector_tags": [
             0,
             0
           ],
-          "tag": null
+          "tag": 0
         },
         {
-          "block_index": 1,
-          "data_offset": 51,
-          "data_size": 17,
-          "decompressed_sha256": "b2bf85b0fcbcc93ec94697082a295b38996032d063383511e95ad4e0a4b6f2c5",
+          "decompressed_sha256": "46571faf44dd80d3935c2c64b247610309926c80082dd361986a26d73aa1c5dd",
+          "empty": false,
           "index": 8,
-          "lhas_leaf": "e633bc74b586852ebf15521dfa33999445502c063acb90a0054f5c77d9c4583f",
+          "lhas_leaf": "d60d1c4deda5ebe2f075f23856c0a2293bbb0ceb2bb8a41391d72285e0f76e64",
           "sector_count": 2,
           "sector_tags": [
             0,
             0
           ],
-          "tag": null
+          "tag": 0
         },
         {
-          "block_index": 1,
-          "data_offset": 68,
-          "data_size": 17,
-          "decompressed_sha256": "dcf1e0c46238d9ec2293c7d935a32c0d90aac446cb1bef5c65c8c6b5b334c1b6",
+          "decompressed_sha256": "ef8a3300b13f67cb260e4a23d5ea3d6788f4b6f27bad2452cb15ab31cc64d94a",
+          "empty": false,
           "index": 9,
-          "lhas_leaf": "6f07c8211a295b1d9ffcc3301802d2ce5e81a8c24cb3f6fbd5734a5663a36e01",
+          "lhas_leaf": "1b901417bdf6a1cc7c73596e8282f7f52e3a16ebb754014d6d543f6f6fa2f149",
           "sector_count": 2,
           "sector_tags": [
             0,
             0
           ],
-          "tag": null
+          "tag": 0
         }
       ],
-      "merkle_root": "f97d97727de533e18fe4fa36232f029ccdc0922acf04be8edd8476c415dd80ab",
+      "layers_per_chunk": 5,
+      "layr_chunks": [
+        {
+          "content_size": 25,
+          "dict_id": 0,
+          "first_layer": 0,
+          "frame_size": 34,
+          "index": 4,
+          "layer_count": 5,
+          "sealed": false,
+          "sector_id": 0,
+          "stored_len": 38,
+          "version": 1
+        },
+        {
+          "content_size": 25,
+          "dict_id": 0,
+          "first_layer": 5,
+          "frame_size": 34,
+          "index": 5,
+          "layer_count": 5,
+          "sealed": false,
+          "sector_id": 0,
+          "stored_len": 38,
+          "version": 1
+        },
+        {
+          "content_size": 35,
+          "dict_id": 0,
+          "first_layer": 0,
+          "frame_size": 35,
+          "index": 6,
+          "layer_count": 5,
+          "sealed": false,
+          "sector_id": 1,
+          "stored_len": 39,
+          "version": 1
+        },
+        {
+          "content_size": 35,
+          "dict_id": 0,
+          "first_layer": 5,
+          "frame_size": 37,
+          "index": 7,
+          "layer_count": 5,
+          "sealed": false,
+          "sector_id": 1,
+          "stored_len": 41,
+          "version": 1
+        }
+      ],
+      "ltbl": [
+        {
+          "additional_sector_count": 1,
+          "data_offset": 0,
+          "data_size": 5,
+          "entry_index": 0,
+          "first_layr": 4,
+          "first_lrov": 0,
+          "layer": 0,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 0,
+          "data_size": 7,
+          "entry_index": 1,
+          "first_layr": 6,
+          "first_lrov": 0,
+          "layer": 0,
+          "sector_id": 1
+        },
+        {
+          "additional_sector_count": 1,
+          "data_offset": 5,
+          "data_size": 5,
+          "entry_index": 2,
+          "first_layr": 4,
+          "first_lrov": 0,
+          "layer": 1,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 7,
+          "data_size": 7,
+          "entry_index": 3,
+          "first_layr": 6,
+          "first_lrov": 0,
+          "layer": 1,
+          "sector_id": 1
+        },
+        {
+          "additional_sector_count": 1,
+          "data_offset": 10,
+          "data_size": 5,
+          "entry_index": 4,
+          "first_layr": 4,
+          "first_lrov": 0,
+          "layer": 2,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 14,
+          "data_size": 7,
+          "entry_index": 5,
+          "first_layr": 6,
+          "first_lrov": 0,
+          "layer": 2,
+          "sector_id": 1
+        },
+        {
+          "additional_sector_count": 1,
+          "data_offset": 15,
+          "data_size": 5,
+          "entry_index": 6,
+          "first_layr": 4,
+          "first_lrov": 0,
+          "layer": 3,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 21,
+          "data_size": 7,
+          "entry_index": 7,
+          "first_layr": 6,
+          "first_lrov": 0,
+          "layer": 3,
+          "sector_id": 1
+        },
+        {
+          "additional_sector_count": 1,
+          "data_offset": 20,
+          "data_size": 5,
+          "entry_index": 8,
+          "first_layr": 4,
+          "first_lrov": 0,
+          "layer": 4,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 28,
+          "data_size": 7,
+          "entry_index": 9,
+          "first_layr": 6,
+          "first_lrov": 0,
+          "layer": 4,
+          "sector_id": 1
+        },
+        {
+          "additional_sector_count": 1,
+          "data_offset": 0,
+          "data_size": 5,
+          "entry_index": 10,
+          "first_layr": 5,
+          "first_lrov": 0,
+          "layer": 5,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 0,
+          "data_size": 7,
+          "entry_index": 11,
+          "first_layr": 7,
+          "first_lrov": 0,
+          "layer": 5,
+          "sector_id": 1
+        },
+        {
+          "additional_sector_count": 1,
+          "data_offset": 5,
+          "data_size": 5,
+          "entry_index": 12,
+          "first_layr": 5,
+          "first_lrov": 0,
+          "layer": 6,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 7,
+          "data_size": 7,
+          "entry_index": 13,
+          "first_layr": 7,
+          "first_lrov": 0,
+          "layer": 6,
+          "sector_id": 1
+        },
+        {
+          "additional_sector_count": 1,
+          "data_offset": 10,
+          "data_size": 5,
+          "entry_index": 14,
+          "first_layr": 5,
+          "first_lrov": 0,
+          "layer": 7,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 14,
+          "data_size": 7,
+          "entry_index": 15,
+          "first_layr": 7,
+          "first_lrov": 0,
+          "layer": 7,
+          "sector_id": 1
+        },
+        {
+          "additional_sector_count": 1,
+          "data_offset": 15,
+          "data_size": 5,
+          "entry_index": 16,
+          "first_layr": 5,
+          "first_lrov": 0,
+          "layer": 8,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 21,
+          "data_size": 7,
+          "entry_index": 17,
+          "first_layr": 7,
+          "first_lrov": 0,
+          "layer": 8,
+          "sector_id": 1
+        },
+        {
+          "additional_sector_count": 1,
+          "data_offset": 20,
+          "data_size": 5,
+          "entry_index": 18,
+          "first_layr": 5,
+          "first_lrov": 0,
+          "layer": 9,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 28,
+          "data_size": 7,
+          "entry_index": 19,
+          "first_layr": 7,
+          "first_lrov": 0,
+          "layer": 9,
+          "sector_id": 1
+        }
+      ],
+      "merkle_root": "e276f7c5f50b45ce34fc8fd99e49a36f8105f6c3391cb759b6f87126206f834f",
       "multi_sector": true,
       "name": "sector-blend-ranges",
       "resolved_timing": [
@@ -2297,24 +3438,11 @@
         }
       ],
       "total_layers": 10,
-      "total_uncompressed_size": 1483,
-      "trailer_crc32c": "0x36688837"
+      "total_uncompressed_size": 1881,
+      "trailer_crc32c": "0xB3BA2BD0"
     },
     {
-      "block_size_layers": 16,
-      "blocks": [
-        {
-          "frame_offset": 0,
-          "frame_size": 3878,
-          "uncompressed_size": 16589
-        },
-        {
-          "frame_offset": 3878,
-          "frame_size": 3873,
-          "uncompressed_size": 17512
-        }
-      ],
-      "chunk_count": 7,
+      "chunk_count": 8,
       "crypto": {
         "argon2": {
           "iterations": 1,
@@ -2330,13 +3458,13 @@
         ],
         "password_utf8": "lumen-test-vector"
       },
-      "description": "Password-mode AES-256-GCM: an Argon2id-wrapped session key, a sealed dictionary and metadata, and two blocks of sealed layer frames.",
+      "description": "Password-mode AES-256-GCM: an Argon2id-wrapped session key, a sealed dictionary and metadata, and two LAYR chunks whose frames are sealed one by one under the directory index of the chunk that carries each.",
       "dict": {
         "dict_id": 1697213845,
         "dict_size": 1024,
         "present": true
       },
-      "dir_offset": 10995,
+      "dir_offset": 11205,
       "display_height_px": 192,
       "display_width_px": 256,
       "features": [
@@ -2345,20 +3473,18 @@
         "aes-256-gcm",
         "argon2id",
         "dictionary",
-        "sealed-blocks",
-        "multi-block"
+        "sealed-frames",
+        "multi-chunk"
       ],
       "file": "valid/encrypted-password.lumen",
-      "file_sha256": "3b3eafeaf00f7887f920e0ddea585b4720abac9405c685d13117ec8a88d2dcfb",
-      "file_size": 11227,
+      "file_sha256": "327d89c2bc76aaf124ff42db55f78f953d9660c22651b05c6d341846433e45db",
+      "file_size": 11469,
       "header_flags": 8,
       "layer_height_um": 50,
       "layers": [
         {
-          "block_index": 0,
-          "data_offset": 0,
-          "data_size": 1604,
           "decompressed_sha256": "cfdced78e46ac0ab7c34cfe90c7925efea485c0c680a90a6b6e17bae9d549107",
+          "empty": false,
           "index": 0,
           "lhas_leaf": "aa72f59f714ede88f636733c655e1681b299736335d3185c0b2ea7f4631648e8",
           "sector_count": 1,
@@ -2368,10 +3494,8 @@
           "tag": 2
         },
         {
-          "block_index": 0,
-          "data_offset": 1604,
-          "data_size": 364,
           "decompressed_sha256": "d416e7df52b71cc8e2c60a0fd0bbf2403bb50132c05a1fec26b8ccb2e08d8c2e",
+          "empty": false,
           "index": 1,
           "lhas_leaf": "7e5abf0f39fd2f2d60fc9e8b8421ca827181a8fcd68cfeccbb874523e086a29c",
           "sector_count": 1,
@@ -2381,10 +3505,8 @@
           "tag": 1
         },
         {
-          "block_index": 0,
-          "data_offset": 1968,
-          "data_size": 1645,
           "decompressed_sha256": "2434f8ff44d596bf37b04c2d5e6b68e1bba7c388aa8fa94efffeee3ac82210ed",
+          "empty": false,
           "index": 2,
           "lhas_leaf": "c98d3dbc2f97d20197d4a889e73a95c6e514e97825ceabc5ec7af1c0771d0e29",
           "sector_count": 1,
@@ -2394,10 +3516,8 @@
           "tag": 2
         },
         {
-          "block_index": 0,
-          "data_offset": 3613,
-          "data_size": 364,
           "decompressed_sha256": "43023798b3ec3f10f573b060f7e9b47eca06e801f4750d1ec4402bd6020413bd",
+          "empty": false,
           "index": 3,
           "lhas_leaf": "caaf561924b8f8a1e3140fc3618f8710c727865dd09a044359c307ef8bcbfcdf",
           "sector_count": 1,
@@ -2407,10 +3527,8 @@
           "tag": 1
         },
         {
-          "block_index": 0,
-          "data_offset": 3977,
-          "data_size": 1685,
           "decompressed_sha256": "6ae19e1387553ce3d0d6309feac500125798d83d7a6d9c807dac7693e6012fab",
+          "empty": false,
           "index": 4,
           "lhas_leaf": "03bf010e070b6e6d2fbbdf62ed90652a38cd23275d9f617c8a86b6dbdc01c442",
           "sector_count": 1,
@@ -2420,10 +3538,8 @@
           "tag": 2
         },
         {
-          "block_index": 0,
-          "data_offset": 5662,
-          "data_size": 364,
           "decompressed_sha256": "178b3c9f2d8539d7841b9136ff6597cb3e0d32e749024b6b01921035377152d4",
+          "empty": false,
           "index": 5,
           "lhas_leaf": "87476cffea8526efa44565aa2382e20c2b4db5faf050ccc1fbcc51c05dafbbca",
           "sector_count": 1,
@@ -2433,10 +3549,8 @@
           "tag": 1
         },
         {
-          "block_index": 0,
-          "data_offset": 6026,
-          "data_size": 1684,
           "decompressed_sha256": "d863cb17429884ee266e4aa6bef95d5596a97239e6e50a1a5084dfb0eeabd730",
+          "empty": false,
           "index": 6,
           "lhas_leaf": "a2bf9c17f4ebb77bb55dd504d011bb9a723c10e0292fa609bdc0530b12cf11b9",
           "sector_count": 1,
@@ -2446,10 +3560,8 @@
           "tag": 2
         },
         {
-          "block_index": 0,
-          "data_offset": 7710,
-          "data_size": 364,
           "decompressed_sha256": "3f37dde9d6136372f5ee5f723c591f75f9256474fc686dd8a430337a3f3b9e99",
+          "empty": false,
           "index": 7,
           "lhas_leaf": "07faf135b603cd2e58776fb02694e7b122a4f22fb2fe90c966da1c7e0e9aecef",
           "sector_count": 1,
@@ -2459,10 +3571,8 @@
           "tag": 1
         },
         {
-          "block_index": 0,
-          "data_offset": 8074,
-          "data_size": 1725,
           "decompressed_sha256": "73dcd3c15f108fcf218e4c84f28875ff93a06ec220ad8cdaf27301054d8f92bc",
+          "empty": false,
           "index": 8,
           "lhas_leaf": "37aa55f86cc685f5691828dab3c880c3aaec5e3d57cc8055c1aa37bc8ffc7edd",
           "sector_count": 1,
@@ -2472,10 +3582,8 @@
           "tag": 2
         },
         {
-          "block_index": 0,
-          "data_offset": 9799,
-          "data_size": 364,
           "decompressed_sha256": "4c11eea73f3c21a0c8c0c8af0e82834139ea82123b12e79ecb3395e1e6353483",
+          "empty": false,
           "index": 9,
           "lhas_leaf": "765b8e16ae8097ebbf392dd047707e9c22b6698ff642d999eeaf3f8085d09d25",
           "sector_count": 1,
@@ -2485,10 +3593,8 @@
           "tag": 1
         },
         {
-          "block_index": 0,
-          "data_offset": 10163,
-          "data_size": 1765,
           "decompressed_sha256": "d461c126ab7597cc523d70ebf0a0f09fcc1c8ddd8c9d9aae05aed85e8b664440",
+          "empty": false,
           "index": 10,
           "lhas_leaf": "2218ca88fbb48dc1455afd010ba000f4a1398b0ad2399f5f58b16b3512cb59ba",
           "sector_count": 1,
@@ -2498,10 +3604,8 @@
           "tag": 2
         },
         {
-          "block_index": 0,
-          "data_offset": 11928,
-          "data_size": 364,
           "decompressed_sha256": "6757d7c1334570f1d1159319b7c16d446f1fddd019e228995342a71946a03ee0",
+          "empty": false,
           "index": 11,
           "lhas_leaf": "9740facbd632e436d2d8ee1a43aecdb9352ddf63aedd6368d05ca742e06cef7e",
           "sector_count": 1,
@@ -2511,10 +3615,8 @@
           "tag": 1
         },
         {
-          "block_index": 0,
-          "data_offset": 12292,
-          "data_size": 1764,
           "decompressed_sha256": "d705e4dddcc06bb2f7cc7fad033ef6a900c6fc2d56fabffe8ca0b30b16581cc9",
+          "empty": false,
           "index": 12,
           "lhas_leaf": "53ce09a361ea9258a85d4a5bfa7808247cb0c86b46f005021a070ec1a1667480",
           "sector_count": 1,
@@ -2524,10 +3626,8 @@
           "tag": 2
         },
         {
-          "block_index": 0,
-          "data_offset": 14056,
-          "data_size": 364,
           "decompressed_sha256": "5e594d1ee6d059fdcf942323a452061435f039955dae80046a86960501cfeea4",
+          "empty": false,
           "index": 13,
           "lhas_leaf": "0e6bb0892d30247da81ebc9787e2b79212fb39ab155a4d73d87767bfb98b7a56",
           "sector_count": 1,
@@ -2537,10 +3637,8 @@
           "tag": 1
         },
         {
-          "block_index": 0,
-          "data_offset": 14420,
-          "data_size": 1805,
           "decompressed_sha256": "057bbe0fcacf92199bfdfb20b5a34840791001505deb73e8d821dc3812b69c4c",
+          "empty": false,
           "index": 14,
           "lhas_leaf": "c359470372128f2a8ba7096811bb25b9698a9256d5a12e5bf914519e5f5d6755",
           "sector_count": 1,
@@ -2550,10 +3648,8 @@
           "tag": 2
         },
         {
-          "block_index": 0,
-          "data_offset": 16225,
-          "data_size": 364,
           "decompressed_sha256": "be5d18d505350881c2cd4b958204d4ffc5ca5ddbb725b4a4686791d00fe2aade",
+          "empty": false,
           "index": 15,
           "lhas_leaf": "34abcd8a6b42a5491084f28520e3ec9063c45726e20954ee332d4b785c922511",
           "sector_count": 1,
@@ -2563,10 +3659,8 @@
           "tag": 1
         },
         {
-          "block_index": 1,
-          "data_offset": 0,
-          "data_size": 1845,
           "decompressed_sha256": "13c11af7780567973e1b444eece8602f19142e1748dc7860d079df7639cc66b9",
+          "empty": false,
           "index": 16,
           "lhas_leaf": "4e381c4386dd73453eb8e08b62f042ca8db93046dd67a7f0d0c4839b9a9f5ef9",
           "sector_count": 1,
@@ -2576,10 +3670,8 @@
           "tag": 2
         },
         {
-          "block_index": 1,
-          "data_offset": 1845,
-          "data_size": 365,
           "decompressed_sha256": "317d7a1a07342b9fe162afa899b6a8bbe762c4b53b7a428c987209f88c90db28",
+          "empty": false,
           "index": 17,
           "lhas_leaf": "6d688633998ef671594d6dea75a5a73f618c1891ae3d9e83d7f4f0f8be9d3a77",
           "sector_count": 1,
@@ -2589,10 +3681,8 @@
           "tag": 1
         },
         {
-          "block_index": 1,
-          "data_offset": 2210,
-          "data_size": 1844,
           "decompressed_sha256": "64c15583db798d1dd573bc590cc970772396e4b1564949f120be8182e330293c",
+          "empty": false,
           "index": 18,
           "lhas_leaf": "7741dc3429f841c6d457d16a2f320ab3bb3c395b89f7c4af2accd4ede68eb581",
           "sector_count": 1,
@@ -2602,10 +3692,8 @@
           "tag": 2
         },
         {
-          "block_index": 1,
-          "data_offset": 4054,
-          "data_size": 364,
           "decompressed_sha256": "da6cac9ab01a65aacd50f6cac868ff636264f11fe0aacb670dd9b04b01150f63",
+          "empty": false,
           "index": 19,
           "lhas_leaf": "dc5bdf5d696417060417ae6c7a63cc571a9eb94f475fe6d96acbba9239dfd1bb",
           "sector_count": 1,
@@ -2615,10 +3703,8 @@
           "tag": 1
         },
         {
-          "block_index": 1,
-          "data_offset": 4418,
-          "data_size": 1885,
           "decompressed_sha256": "c41f4e6119e312c3692e4844bb84cb0e25c13b8ffea2efa21235ad2ca082d156",
+          "empty": false,
           "index": 20,
           "lhas_leaf": "27b37cec7da40176ad076abe5225343a4c649dce3fdbf572e51f617c6e91aa54",
           "sector_count": 1,
@@ -2628,10 +3714,8 @@
           "tag": 2
         },
         {
-          "block_index": 1,
-          "data_offset": 6303,
-          "data_size": 364,
           "decompressed_sha256": "759b0108708ef6fe4783ece16304556423ca9ed688c6e474462d68edeb83bd4c",
+          "empty": false,
           "index": 21,
           "lhas_leaf": "bba6608d2cdd4b29a75a5a49700b52bedec7a7aee1c64b35125627fa12b5bce8",
           "sector_count": 1,
@@ -2641,10 +3725,8 @@
           "tag": 1
         },
         {
-          "block_index": 1,
-          "data_offset": 6667,
-          "data_size": 1845,
           "decompressed_sha256": "3b914b9a4ce89682e5e970b2dd3d645d74ebaa7dfc3413a6333d4181486fb697",
+          "empty": false,
           "index": 22,
           "lhas_leaf": "544e86f626a06ecd29674b7e25bb8906e2fc876a4fe679d2cf65f2290db5c998",
           "sector_count": 1,
@@ -2654,10 +3736,8 @@
           "tag": 2
         },
         {
-          "block_index": 1,
-          "data_offset": 8512,
-          "data_size": 364,
           "decompressed_sha256": "0119b13aabbafb9428275d884cd78acf5e5d8ac1ec488d44158dd0bec8c04801",
+          "empty": false,
           "index": 23,
           "lhas_leaf": "983182a8b63d3c2599f2b8bd292fa24d6c1e082e5441ecdb59c65dc554fe1a09",
           "sector_count": 1,
@@ -2667,10 +3747,8 @@
           "tag": 1
         },
         {
-          "block_index": 1,
-          "data_offset": 8876,
-          "data_size": 1844,
           "decompressed_sha256": "eb09315fcdd6bed30cae9b2d2db3a978f99d07db170a10361e62bc7c1839a200",
+          "empty": false,
           "index": 24,
           "lhas_leaf": "462b2760720abd0c378c38ff3f47226fb4e38f35784d29e446faff108648cde2",
           "sector_count": 1,
@@ -2680,10 +3758,8 @@
           "tag": 2
         },
         {
-          "block_index": 1,
-          "data_offset": 10720,
-          "data_size": 365,
           "decompressed_sha256": "cf287346adb384d4618b09bfaae48689211117f7f621491e2a7a026ddee2344a",
+          "empty": false,
           "index": 25,
           "lhas_leaf": "3217b14b14aee6562c594bdf0691cd324959ca2e4148ef5d196faee108a23fab",
           "sector_count": 1,
@@ -2693,10 +3769,8 @@
           "tag": 1
         },
         {
-          "block_index": 1,
-          "data_offset": 11085,
-          "data_size": 1805,
           "decompressed_sha256": "7613dfe569fcc6a51c3118ada807b154be0879fc86575ca974fc1a1cb3e1fceb",
+          "empty": false,
           "index": 26,
           "lhas_leaf": "fb2d1364706ba1a1c42994b356b3f3c76b9259cdfbe9498ea18f4d3040e27a8a",
           "sector_count": 1,
@@ -2706,10 +3780,8 @@
           "tag": 2
         },
         {
-          "block_index": 1,
-          "data_offset": 12890,
-          "data_size": 364,
           "decompressed_sha256": "15f0e3ea34523e654925591d3771bea4ebbbd1283d729708bf37ce2263a3542c",
+          "empty": false,
           "index": 27,
           "lhas_leaf": "580e35317eeb5286921198e4aca6a8317b6b74fac17001f3ad95d6cc6aee7669",
           "sector_count": 1,
@@ -2719,10 +3791,8 @@
           "tag": 1
         },
         {
-          "block_index": 1,
-          "data_offset": 13254,
-          "data_size": 1765,
           "decompressed_sha256": "64846b8fe8f9e2af714847af14dc57abab46af9d26c3a2bd0bda7103757bcb84",
+          "empty": false,
           "index": 28,
           "lhas_leaf": "d33e01e43acb1ffd5bd2b01405eeb3eef403a6a838e511192d13df1a0a262054",
           "sector_count": 1,
@@ -2732,10 +3802,8 @@
           "tag": 2
         },
         {
-          "block_index": 1,
-          "data_offset": 15019,
-          "data_size": 364,
           "decompressed_sha256": "8a879445cfa373984dd7c584f54e2d2ba875cb8ef46db557e0cf47209e888616",
+          "empty": false,
           "index": 29,
           "lhas_leaf": "a42b9baed73b25c1607f3c07ecd410dd424758a656d7bc8e1127ac1d5cf8ae07",
           "sector_count": 1,
@@ -2745,10 +3813,8 @@
           "tag": 1
         },
         {
-          "block_index": 1,
-          "data_offset": 15383,
-          "data_size": 1764,
           "decompressed_sha256": "a7f375aa7b1ee4aa93884fea41f40ec582f79349fb367d2c14fb9d28b090d8aa",
+          "empty": false,
           "index": 30,
           "lhas_leaf": "9c509891691c655e43a898094c88a57029161ed55a061a5de53947494eb135a0",
           "sector_count": 1,
@@ -2758,10 +3824,8 @@
           "tag": 2
         },
         {
-          "block_index": 1,
-          "data_offset": 17147,
-          "data_size": 365,
           "decompressed_sha256": "94c6dc827fc6b94fcb0f2d044e11c3fbca516c26ab8fecb2a6ae378fca5e18da",
+          "empty": false,
           "index": 31,
           "lhas_leaf": "43105e2a8f7265abb7d853424613e9cde60580714cbdf7ccf8d4b316c3e16316",
           "sector_count": 1,
@@ -2769,6 +3833,355 @@
             1
           ],
           "tag": 1
+        }
+      ],
+      "layers_per_chunk": 16,
+      "layr_chunks": [
+        {
+          "content_size": 16589,
+          "dict_id": 1697213845,
+          "first_layer": 0,
+          "frame_size": 3878,
+          "index": 6,
+          "layer_count": 16,
+          "sealed": true,
+          "sector_id": 0,
+          "stored_len": 3882,
+          "version": 1
+        },
+        {
+          "content_size": 17512,
+          "dict_id": 1697213845,
+          "first_layer": 16,
+          "frame_size": 3873,
+          "index": 7,
+          "layer_count": 16,
+          "sealed": true,
+          "sector_id": 0,
+          "stored_len": 3877,
+          "version": 1
+        }
+      ],
+      "ltbl": [
+        {
+          "additional_sector_count": 0,
+          "data_offset": 0,
+          "data_size": 1604,
+          "entry_index": 0,
+          "first_layr": 6,
+          "first_lrov": 0,
+          "layer": 0,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 1604,
+          "data_size": 364,
+          "entry_index": 1,
+          "first_layr": 6,
+          "first_lrov": 0,
+          "layer": 1,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 1968,
+          "data_size": 1645,
+          "entry_index": 2,
+          "first_layr": 6,
+          "first_lrov": 0,
+          "layer": 2,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 3613,
+          "data_size": 364,
+          "entry_index": 3,
+          "first_layr": 6,
+          "first_lrov": 0,
+          "layer": 3,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 3977,
+          "data_size": 1685,
+          "entry_index": 4,
+          "first_layr": 6,
+          "first_lrov": 0,
+          "layer": 4,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 5662,
+          "data_size": 364,
+          "entry_index": 5,
+          "first_layr": 6,
+          "first_lrov": 0,
+          "layer": 5,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 6026,
+          "data_size": 1684,
+          "entry_index": 6,
+          "first_layr": 6,
+          "first_lrov": 0,
+          "layer": 6,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 7710,
+          "data_size": 364,
+          "entry_index": 7,
+          "first_layr": 6,
+          "first_lrov": 0,
+          "layer": 7,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 8074,
+          "data_size": 1725,
+          "entry_index": 8,
+          "first_layr": 6,
+          "first_lrov": 0,
+          "layer": 8,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 9799,
+          "data_size": 364,
+          "entry_index": 9,
+          "first_layr": 6,
+          "first_lrov": 0,
+          "layer": 9,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 10163,
+          "data_size": 1765,
+          "entry_index": 10,
+          "first_layr": 6,
+          "first_lrov": 0,
+          "layer": 10,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 11928,
+          "data_size": 364,
+          "entry_index": 11,
+          "first_layr": 6,
+          "first_lrov": 0,
+          "layer": 11,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 12292,
+          "data_size": 1764,
+          "entry_index": 12,
+          "first_layr": 6,
+          "first_lrov": 0,
+          "layer": 12,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 14056,
+          "data_size": 364,
+          "entry_index": 13,
+          "first_layr": 6,
+          "first_lrov": 0,
+          "layer": 13,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 14420,
+          "data_size": 1805,
+          "entry_index": 14,
+          "first_layr": 6,
+          "first_lrov": 0,
+          "layer": 14,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 16225,
+          "data_size": 364,
+          "entry_index": 15,
+          "first_layr": 6,
+          "first_lrov": 0,
+          "layer": 15,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 0,
+          "data_size": 1845,
+          "entry_index": 16,
+          "first_layr": 7,
+          "first_lrov": 0,
+          "layer": 16,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 1845,
+          "data_size": 365,
+          "entry_index": 17,
+          "first_layr": 7,
+          "first_lrov": 0,
+          "layer": 17,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 2210,
+          "data_size": 1844,
+          "entry_index": 18,
+          "first_layr": 7,
+          "first_lrov": 0,
+          "layer": 18,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 4054,
+          "data_size": 364,
+          "entry_index": 19,
+          "first_layr": 7,
+          "first_lrov": 0,
+          "layer": 19,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 4418,
+          "data_size": 1885,
+          "entry_index": 20,
+          "first_layr": 7,
+          "first_lrov": 0,
+          "layer": 20,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 6303,
+          "data_size": 364,
+          "entry_index": 21,
+          "first_layr": 7,
+          "first_lrov": 0,
+          "layer": 21,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 6667,
+          "data_size": 1845,
+          "entry_index": 22,
+          "first_layr": 7,
+          "first_lrov": 0,
+          "layer": 22,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 8512,
+          "data_size": 364,
+          "entry_index": 23,
+          "first_layr": 7,
+          "first_lrov": 0,
+          "layer": 23,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 8876,
+          "data_size": 1844,
+          "entry_index": 24,
+          "first_layr": 7,
+          "first_lrov": 0,
+          "layer": 24,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 10720,
+          "data_size": 365,
+          "entry_index": 25,
+          "first_layr": 7,
+          "first_lrov": 0,
+          "layer": 25,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 11085,
+          "data_size": 1805,
+          "entry_index": 26,
+          "first_layr": 7,
+          "first_lrov": 0,
+          "layer": 26,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 12890,
+          "data_size": 364,
+          "entry_index": 27,
+          "first_layr": 7,
+          "first_lrov": 0,
+          "layer": 27,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 13254,
+          "data_size": 1765,
+          "entry_index": 28,
+          "first_layr": 7,
+          "first_lrov": 0,
+          "layer": 28,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 15019,
+          "data_size": 364,
+          "entry_index": 29,
+          "first_layr": 7,
+          "first_lrov": 0,
+          "layer": 29,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 15383,
+          "data_size": 1764,
+          "entry_index": 30,
+          "first_layr": 7,
+          "first_lrov": 0,
+          "layer": 30,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 17147,
+          "data_size": 365,
+          "entry_index": 31,
+          "first_layr": 7,
+          "first_lrov": 0,
+          "layer": 31,
+          "sector_id": 0
         }
       ],
       "merkle_root": "d1da9acf17a2ab403e2406ff00ab824c727bdacbde35c068d8c1bb156eba6310",
@@ -2867,18 +4280,10 @@
         }
       ],
       "total_layers": 32,
-      "total_uncompressed_size": 11036,
-      "trailer_crc32c": "0xFE025E87"
+      "total_uncompressed_size": 11244,
+      "trailer_crc32c": "0x7F59E322"
     },
     {
-      "block_size_layers": 4,
-      "blocks": [
-        {
-          "frame_offset": 0,
-          "frame_size": 71,
-          "uncompressed_size": 420
-        }
-      ],
       "chunk_count": 6,
       "crypto": {
         "auth_version": 1,
@@ -2909,16 +4314,14 @@
         "low-order-point"
       ],
       "file": "valid/encrypted-machine.lumen",
-      "file_sha256": "3fba0e95692f8e7d4c5ccbe72657adb88d6abbf3d75011f9b1b0269e44a9c03a",
+      "file_sha256": "9134428908a25d4126599d4be71691a335d57f520ef187e12864d945c7850457",
       "file_size": 1219,
       "header_flags": 8,
       "layer_height_um": 50,
       "layers": [
         {
-          "block_index": 0,
-          "data_offset": 0,
-          "data_size": 4,
           "decompressed_sha256": "4d12a0f5a07f2cd96d02b12d79ea5caf29be94d0d3b490b8d30307eabb53d9c3",
+          "empty": false,
           "index": 0,
           "lhas_leaf": "dd46bcb27ef22666cb83357cb60720ef517fb471cd5fc12c4cc45fd312904d14",
           "sector_count": 1,
@@ -2928,10 +4331,8 @@
           "tag": 0
         },
         {
-          "block_index": 0,
-          "data_offset": 4,
-          "data_size": 410,
           "decompressed_sha256": "c8dac22a0200176d29e58ef21b8db00b4c547b1aadaa16e7cdf67ecc124224d0",
+          "empty": false,
           "index": 1,
           "lhas_leaf": "f22e4ad1daddd2d0c572d0c3e22250487a5afc74d2f6f0e4df0557cb8f4a2202",
           "sector_count": 1,
@@ -2941,21 +4342,19 @@
           "tag": 2
         },
         {
-          "block_index": 0,
-          "data_offset": 414,
-          "data_size": 0,
           "decompressed_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "empty": true,
           "index": 2,
           "lhas_leaf": "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d",
-          "sector_count": 0,
-          "sector_tags": [],
+          "sector_count": 1,
+          "sector_tags": [
+            null
+          ],
           "tag": null
         },
         {
-          "block_index": 0,
-          "data_offset": 414,
-          "data_size": 6,
           "decompressed_sha256": "9235ff44e859da26e0c2d96a34c8a64e58cdb1a7abc1d7b10d0f5ca62b47d770",
+          "empty": false,
           "index": 3,
           "lhas_leaf": "efb9d3803055b5015e587a335ec06c0a677d2712fb6fb59378b373225df4b7b3",
           "sector_count": 1,
@@ -2963,6 +4362,63 @@
             0
           ],
           "tag": 0
+        }
+      ],
+      "layers_per_chunk": 4,
+      "layr_chunks": [
+        {
+          "content_size": 420,
+          "dict_id": 0,
+          "first_layer": 0,
+          "frame_size": 71,
+          "index": 5,
+          "layer_count": 4,
+          "sealed": true,
+          "sector_id": 0,
+          "stored_len": 75,
+          "version": 1
+        }
+      ],
+      "ltbl": [
+        {
+          "additional_sector_count": 0,
+          "data_offset": 0,
+          "data_size": 4,
+          "entry_index": 0,
+          "first_layr": 5,
+          "first_lrov": 0,
+          "layer": 0,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 4,
+          "data_size": 410,
+          "entry_index": 1,
+          "first_layr": 5,
+          "first_lrov": 0,
+          "layer": 1,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 414,
+          "data_size": 0,
+          "entry_index": 2,
+          "first_layr": 5,
+          "first_lrov": 0,
+          "layer": 2,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 414,
+          "data_size": 6,
+          "entry_index": 3,
+          "first_layr": 5,
+          "first_lrov": 0,
+          "layer": 3,
+          "sector_id": 0
         }
       ],
       "merkle_root": "0002b9bc25a70d86970ff0d0fc67adab5a854a83254e8e96cb6388515e57e5b0",
@@ -3043,29 +4499,11 @@
         }
       ],
       "total_layers": 4,
-      "total_uncompressed_size": 1087,
-      "trailer_crc32c": "0x06D11CC8"
+      "total_uncompressed_size": 1091,
+      "trailer_crc32c": "0xAFA4748C"
     },
     {
-      "block_size_layers": 2,
-      "blocks": [
-        {
-          "frame_offset": 0,
-          "frame_size": 59,
-          "uncompressed_size": 22
-        },
-        {
-          "frame_offset": 59,
-          "frame_size": 54,
-          "uncompressed_size": 17
-        },
-        {
-          "frame_offset": 113,
-          "frame_size": 67,
-          "uncompressed_size": 59
-        }
-      ],
-      "chunk_count": 7,
+      "chunk_count": 11,
       "crypto": {
         "argon2": {
           "iterations": 1,
@@ -3084,13 +4522,13 @@
         ],
         "password_utf8": "lumen-test-vector"
       },
-      "description": "Both wrapping modes set in one AUTH chunk, with multi-sector layer content sealed under a single session key.",
+      "description": "Both wrapping modes set in one AUTH chunk, with two sectors whose frames are sealed one by one, each under the directory index of the chunk that carries it.",
       "dict": {
         "dict_id": 0,
         "dict_size": 0,
         "present": false
       },
-      "dir_offset": 1368,
+      "dir_offset": 1449,
       "display_height_px": 48,
       "display_width_px": 64,
       "features": [
@@ -3098,95 +4536,242 @@
         "password-mode",
         "machine-binding",
         "multi-sector",
-        "sealed-sectors",
+        "sealed-frames",
         "aes-256-gcm"
       ],
       "file": "valid/encrypted-both.lumen",
-      "file_sha256": "2c0f87f130701698a63e09025f93346501595f555401bbfb98cfe7970bf4e603",
-      "file_size": 1600,
+      "file_sha256": "f9b1cfab73e867bf99c73cccd81e48640c47b158eb85d606e1aa486d858d7f93",
+      "file_size": 1809,
       "header_flags": 10,
       "layer_height_um": 50,
       "layers": [
         {
-          "block_index": 0,
-          "data_offset": 0,
-          "data_size": 15,
-          "decompressed_sha256": "74b7c16695df412942b913583b2a0bbff04bf3909d84f9d35715ebde39fd4181",
+          "decompressed_sha256": "22d923cdff960fb12e2c235b087b3ecd906cdd4a10811e147a7087a3c3ca1ea9",
+          "empty": false,
           "index": 0,
-          "lhas_leaf": "8cc6f60f7792eff314594f6aaf85a1c4f7f84bcdd8b94f9f10502f07ec743bb1",
+          "lhas_leaf": "296ccd70319e9434240a51ad27a7130084acd79c1e64df639acbebb6a941d5b1",
           "sector_count": 2,
           "sector_tags": [
             0,
             0
           ],
-          "tag": null
+          "tag": 0
         },
         {
-          "block_index": 0,
-          "data_offset": 15,
-          "data_size": 7,
-          "decompressed_sha256": "a1123094b593c1c400154415f0958737a924ad20a609eb298e53e38b0f2ed0c0",
+          "decompressed_sha256": "0bb15dbbdd2bd982717f2e89621cc661c20c0d8d78d53be21268edc64173d181",
+          "empty": false,
           "index": 1,
-          "lhas_leaf": "82a92b6abc4fe8be91532fbcaae7ca4f4eca8676e0992965ff6b054b77f5c897",
+          "lhas_leaf": "2e4455cc8e43452224b41f0936106e92e603282b82cf23ef2c5f3f6a9a4cef14",
           "sector_count": 1,
           "sector_tags": [
             0
           ],
-          "tag": null
+          "tag": 0
         },
         {
-          "block_index": 1,
-          "data_offset": 0,
-          "data_size": 0,
           "decompressed_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "empty": true,
           "index": 2,
           "lhas_leaf": "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d",
-          "sector_count": 0,
-          "sector_tags": [],
+          "sector_count": 1,
+          "sector_tags": [
+            null
+          ],
           "tag": null
         },
         {
-          "block_index": 1,
-          "data_offset": 0,
-          "data_size": 17,
-          "decompressed_sha256": "5e0e4f9b411719bbc4f319a1347ece47615f2d33d89a560cecc23f2af14221e2",
+          "decompressed_sha256": "d55006629b05dac90c0b0bb4cf59e7b076fab9862f098ce15229726fb6a02397",
+          "empty": false,
           "index": 3,
-          "lhas_leaf": "2b8b3434515c4472be075104dfa6aaf63330f2c80645ba083e96d70c54119efa",
+          "lhas_leaf": "a59ab3d51131112eb5b2a8b647cf60c4537edf1c0ad5588944a551c794ca0b5b",
           "sector_count": 2,
           "sector_tags": [
             0,
             0
           ],
-          "tag": null
+          "tag": 0
         },
         {
-          "block_index": 2,
-          "data_offset": 0,
-          "data_size": 8,
-          "decompressed_sha256": "eb8cdc6ac2f59e37948dba4f68d7f3219aff8c89dedf1ad5183919ffad16664f",
+          "decompressed_sha256": "b2efca93aac0c428219998b137ad8ad4be0c7d1858c85196af54cddd73e59dc0",
+          "empty": false,
           "index": 4,
-          "lhas_leaf": "61f5a3f3455d0341836628fcfd457ea3c239c46d600dfe081e8101eab0e7ab87",
+          "lhas_leaf": "1f494069313c95198a083a9ccc8ad22f12d62eb16ec04cdcac07dfeaa7690d22",
           "sector_count": 1,
           "sector_tags": [
             0
           ],
-          "tag": null
+          "tag": 0
         },
         {
-          "block_index": 2,
-          "data_offset": 8,
-          "data_size": 51,
-          "decompressed_sha256": "5b53c147ef08dd7db217fd06278e81790dfa7490b95c2221227e6868e03b53c0",
+          "decompressed_sha256": "d557577b951af10c08f45d242ea860bb5eed9e86e2ed529e7493ff51ce6fed5c",
+          "empty": false,
           "index": 5,
-          "lhas_leaf": "422a128a43751192a7f29441dc3497c1dd58ec124924feb525f9ffecfbee13ae",
+          "lhas_leaf": "a24a1f626f8cb4c80118a543c0cc32977f75d638df87286f8c1b5796ee8d3123",
           "sector_count": 1,
           "sector_tags": [
             2
           ],
-          "tag": null
+          "tag": 2
         }
       ],
-      "merkle_root": "fe8aef7c327fcc09bde63e75671115305ac8508f6943ee0e842b61e8d54cd46f",
+      "layers_per_chunk": 2,
+      "layr_chunks": [
+        {
+          "content_size": 8,
+          "dict_id": 0,
+          "first_layer": 0,
+          "frame_size": 45,
+          "index": 5,
+          "layer_count": 2,
+          "sealed": true,
+          "sector_id": 0,
+          "stored_len": 49,
+          "version": 1
+        },
+        {
+          "content_size": 6,
+          "dict_id": 0,
+          "first_layer": 2,
+          "frame_size": 43,
+          "index": 6,
+          "layer_count": 2,
+          "sealed": true,
+          "sector_id": 0,
+          "stored_len": 47,
+          "version": 1
+        },
+        {
+          "content_size": 53,
+          "dict_id": 0,
+          "first_layer": 4,
+          "frame_size": 61,
+          "index": 7,
+          "layer_count": 2,
+          "sealed": true,
+          "sector_id": 0,
+          "stored_len": 65,
+          "version": 1
+        },
+        {
+          "content_size": 6,
+          "dict_id": 0,
+          "first_layer": 0,
+          "frame_size": 43,
+          "index": 8,
+          "layer_count": 2,
+          "sealed": true,
+          "sector_id": 1,
+          "stored_len": 47,
+          "version": 1
+        },
+        {
+          "content_size": 6,
+          "dict_id": 0,
+          "first_layer": 2,
+          "frame_size": 43,
+          "index": 9,
+          "layer_count": 2,
+          "sealed": true,
+          "sector_id": 1,
+          "stored_len": 47,
+          "version": 1
+        },
+        {
+          "content_size": 0,
+          "dict_id": 0,
+          "first_layer": 4,
+          "frame_size": 37,
+          "index": 10,
+          "layer_count": 2,
+          "sealed": true,
+          "sector_id": 1,
+          "stored_len": 41,
+          "version": 1
+        }
+      ],
+      "ltbl": [
+        {
+          "additional_sector_count": 1,
+          "data_offset": 0,
+          "data_size": 4,
+          "entry_index": 0,
+          "first_layr": 5,
+          "first_lrov": 0,
+          "layer": 0,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 0,
+          "data_size": 6,
+          "entry_index": 1,
+          "first_layr": 8,
+          "first_lrov": 0,
+          "layer": 0,
+          "sector_id": 1
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 4,
+          "data_size": 4,
+          "entry_index": 2,
+          "first_layr": 5,
+          "first_lrov": 0,
+          "layer": 1,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 0,
+          "data_size": 0,
+          "entry_index": 3,
+          "first_layr": 6,
+          "first_lrov": 0,
+          "layer": 2,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 1,
+          "data_offset": 0,
+          "data_size": 6,
+          "entry_index": 4,
+          "first_layr": 6,
+          "first_lrov": 0,
+          "layer": 3,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 0,
+          "data_size": 6,
+          "entry_index": 5,
+          "first_layr": 9,
+          "first_lrov": 0,
+          "layer": 3,
+          "sector_id": 1
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 0,
+          "data_size": 5,
+          "entry_index": 6,
+          "first_layr": 7,
+          "first_lrov": 0,
+          "layer": 4,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 5,
+          "data_size": 48,
+          "entry_index": 7,
+          "first_layr": 7,
+          "first_lrov": 0,
+          "layer": 5,
+          "sector_id": 0
+        }
+      ],
+      "merkle_root": "12042d4add834d23563c6134f9bd8a5832daacbe812943d36e7fe8ff12e5241d",
       "multi_sector": true,
       "name": "encrypted-both",
       "resolved_timing": [
@@ -3372,24 +4957,11 @@
         }
       ],
       "total_layers": 6,
-      "total_uncompressed_size": 1530,
-      "trailer_crc32c": "0xE477DB45"
+      "total_uncompressed_size": 1715,
+      "trailer_crc32c": "0x9F68EF65"
     },
     {
-      "block_size_layers": 2,
-      "blocks": [
-        {
-          "frame_offset": 0,
-          "frame_size": 47,
-          "uncompressed_size": 10
-        },
-        {
-          "frame_offset": 47,
-          "frame_size": 47,
-          "uncompressed_size": 10
-        }
-      ],
-      "chunk_count": 7,
+      "chunk_count": 8,
       "chunk_payload_sha256": {
         "PROF": "bc4c67f7d2752c834ea87d26b56227583fd8279bb4a31ca6687dea86176757b1"
       },
@@ -3414,7 +4986,7 @@
         "dict_size": 0,
         "present": false
       },
-      "dir_offset": 1466,
+      "dir_offset": 1451,
       "display_height_px": 48,
       "display_width_px": 64,
       "features": [
@@ -3428,16 +5000,14 @@
         "aes-256-gcm"
       ],
       "file": "valid/print-profile.lumen",
-      "file_sha256": "c723d01be5147a7d4c1c12a6f71225bef7ff501008afc692738f055de266d679",
-      "file_size": 1698,
+      "file_sha256": "d24277e8f60564fa7d334d503f8701813368c6e3bd33446a358f4deb95c697d0",
+      "file_size": 1715,
       "header_flags": 8,
       "layer_height_um": 50,
       "layers": [
         {
-          "block_index": 0,
-          "data_offset": 0,
-          "data_size": 5,
           "decompressed_sha256": "3209a7a0e0c3579af4037f900c386720b1beac7aab5131ac869214af2625295c",
+          "empty": false,
           "index": 0,
           "lhas_leaf": "ac7452d38a5af3163a9f4d20623f14930090b2cfa8d37cee6b5ef127f1aa62c1",
           "sector_count": 1,
@@ -3447,10 +5017,8 @@
           "tag": 0
         },
         {
-          "block_index": 0,
-          "data_offset": 5,
-          "data_size": 5,
           "decompressed_sha256": "3209a7a0e0c3579af4037f900c386720b1beac7aab5131ac869214af2625295c",
+          "empty": false,
           "index": 1,
           "lhas_leaf": "ac7452d38a5af3163a9f4d20623f14930090b2cfa8d37cee6b5ef127f1aa62c1",
           "sector_count": 1,
@@ -3460,10 +5028,8 @@
           "tag": 0
         },
         {
-          "block_index": 1,
-          "data_offset": 0,
-          "data_size": 5,
           "decompressed_sha256": "3209a7a0e0c3579af4037f900c386720b1beac7aab5131ac869214af2625295c",
+          "empty": false,
           "index": 2,
           "lhas_leaf": "ac7452d38a5af3163a9f4d20623f14930090b2cfa8d37cee6b5ef127f1aa62c1",
           "sector_count": 1,
@@ -3473,10 +5039,8 @@
           "tag": 0
         },
         {
-          "block_index": 1,
-          "data_offset": 5,
-          "data_size": 5,
           "decompressed_sha256": "3209a7a0e0c3579af4037f900c386720b1beac7aab5131ac869214af2625295c",
+          "empty": false,
           "index": 3,
           "lhas_leaf": "ac7452d38a5af3163a9f4d20623f14930090b2cfa8d37cee6b5ef127f1aa62c1",
           "sector_count": 1,
@@ -3484,6 +5048,75 @@
             0
           ],
           "tag": 0
+        }
+      ],
+      "layers_per_chunk": 2,
+      "layr_chunks": [
+        {
+          "content_size": 10,
+          "dict_id": 0,
+          "first_layer": 0,
+          "frame_size": 47,
+          "index": 6,
+          "layer_count": 2,
+          "sealed": true,
+          "sector_id": 0,
+          "stored_len": 51,
+          "version": 1
+        },
+        {
+          "content_size": 10,
+          "dict_id": 0,
+          "first_layer": 2,
+          "frame_size": 47,
+          "index": 7,
+          "layer_count": 2,
+          "sealed": true,
+          "sector_id": 0,
+          "stored_len": 51,
+          "version": 1
+        }
+      ],
+      "ltbl": [
+        {
+          "additional_sector_count": 0,
+          "data_offset": 0,
+          "data_size": 5,
+          "entry_index": 0,
+          "first_layr": 6,
+          "first_lrov": 0,
+          "layer": 0,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 5,
+          "data_size": 5,
+          "entry_index": 1,
+          "first_layr": 6,
+          "first_lrov": 0,
+          "layer": 1,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 0,
+          "data_size": 5,
+          "entry_index": 2,
+          "first_layr": 7,
+          "first_lrov": 0,
+          "layer": 2,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 5,
+          "data_size": 5,
+          "entry_index": 3,
+          "first_layr": 7,
+          "first_lrov": 0,
+          "layer": 3,
+          "sector_id": 0
         }
       ],
       "merkle_root": "23cbc97a215f97290fa96339fa9f6c17bc320e826d27d46b6707bab7db2bedfb",
@@ -3564,34 +5197,29 @@
         }
       ],
       "total_layers": 4,
-      "total_uncompressed_size": 2384,
-      "trailer_crc32c": "0xB09E1A0A"
+      "total_uncompressed_size": 2368,
+      "trailer_crc32c": "0xF84B3937"
     },
     {
-      "block_size_layers": 5,
-      "blocks": [
-        {
-          "frame_offset": 0,
-          "frame_size": 19,
-          "uncompressed_size": 20
-        },
-        {
-          "frame_offset": 19,
-          "frame_size": 19,
-          "uncompressed_size": 20
-        }
-      ],
-      "chunk_count": 6,
+      "chunk_count": 13,
       "chunk_payload_sha256": {
-        "LROV": "e3742184b23ff327eeefdc43527968c3264bc6209d110db36f71348bf23274a3"
+        "LROV": [
+          "e8d774c20a147ca80200f0a3feea8f7c2f3b40ec8c63af562085b4214f2524f9",
+          "dc9fafbfc8aada08b3f5fddc88dcf28efb1d9df1737ce6219c7497962f36b773",
+          "b6c06e6f176fd73b09915bd38da0dc7ec30d2c7c1b1e692ca0e92591fa410d6b",
+          "dc9fafbfc8aada08b3f5fddc88dcf28efb1d9df1737ce6219c7497962f36b773",
+          "fd61f28b3e0a8a16ed07e1b9f7b629426144c48fc2edc3ae07d0f95572e0fbbc",
+          "fd61f28b3e0a8a16ed07e1b9f7b629426144c48fc2edc3ae07d0f95572e0fbbc",
+          "fd61f28b3e0a8a16ed07e1b9f7b629426144c48fc2edc3ae07d0f95572e0fbbc"
+        ]
       },
-      "description": "Ten layers with an LROV chunk whose four entries cover a single layer, an inclusive range scoped to sector 0, a range that applies to every sector, and a second entry on layer 4, which the range already matches. The two entries that match layer 4 fold field by field rather than the later one replacing the earlier, so that layer keeps the range's exposure and wait while taking the single-layer entry's wait after the lift.",
+      "description": "Ten layers of one sector with seven LROV chunks: a single layer, a range of three layers written as one chunk per layer, a second range, and layer 4, which the first range covers too. An override set belongs to exactly one (layer, sector) - the entry that names the chunk is the only thing that places it - so nothing folds: layer 4 resolves to the values of its own set, which keeps the range's exposure and wait while taking the single-layer chunk's wait after the lift.",
       "dict": {
         "dict_id": 0,
         "dict_size": 0,
         "present": false
       },
-      "dir_offset": 1170,
+      "dir_offset": 1463,
       "display_height_px": 48,
       "display_width_px": 64,
       "features": [
@@ -3601,16 +5229,14 @@
         "sector-scoped-override"
       ],
       "file": "valid/layer-overrides.lumen",
-      "file_sha256": "adfe1bbfeacdd5d87ef2db8abf903614ae5687cb8da18b34fe735578f17b7aa2",
-      "file_size": 1370,
+      "file_sha256": "cd34f75d83439275f2be250f411485dc03030f4b3ac06beb26c78772eb050901",
+      "file_size": 1887,
       "header_flags": 0,
       "layer_height_um": 50,
       "layers": [
         {
-          "block_index": 0,
-          "data_offset": 0,
-          "data_size": 4,
           "decompressed_sha256": "4d12a0f5a07f2cd96d02b12d79ea5caf29be94d0d3b490b8d30307eabb53d9c3",
+          "empty": false,
           "index": 0,
           "lhas_leaf": "dd46bcb27ef22666cb83357cb60720ef517fb471cd5fc12c4cc45fd312904d14",
           "sector_count": 1,
@@ -3620,10 +5246,8 @@
           "tag": 0
         },
         {
-          "block_index": 0,
-          "data_offset": 4,
-          "data_size": 4,
           "decompressed_sha256": "4d12a0f5a07f2cd96d02b12d79ea5caf29be94d0d3b490b8d30307eabb53d9c3",
+          "empty": false,
           "index": 1,
           "lhas_leaf": "dd46bcb27ef22666cb83357cb60720ef517fb471cd5fc12c4cc45fd312904d14",
           "sector_count": 1,
@@ -3633,10 +5257,8 @@
           "tag": 0
         },
         {
-          "block_index": 0,
-          "data_offset": 8,
-          "data_size": 4,
           "decompressed_sha256": "4d12a0f5a07f2cd96d02b12d79ea5caf29be94d0d3b490b8d30307eabb53d9c3",
+          "empty": false,
           "index": 2,
           "lhas_leaf": "dd46bcb27ef22666cb83357cb60720ef517fb471cd5fc12c4cc45fd312904d14",
           "sector_count": 1,
@@ -3646,10 +5268,8 @@
           "tag": 0
         },
         {
-          "block_index": 0,
-          "data_offset": 12,
-          "data_size": 4,
           "decompressed_sha256": "4d12a0f5a07f2cd96d02b12d79ea5caf29be94d0d3b490b8d30307eabb53d9c3",
+          "empty": false,
           "index": 3,
           "lhas_leaf": "dd46bcb27ef22666cb83357cb60720ef517fb471cd5fc12c4cc45fd312904d14",
           "sector_count": 1,
@@ -3659,10 +5279,8 @@
           "tag": 0
         },
         {
-          "block_index": 0,
-          "data_offset": 16,
-          "data_size": 4,
           "decompressed_sha256": "4d12a0f5a07f2cd96d02b12d79ea5caf29be94d0d3b490b8d30307eabb53d9c3",
+          "empty": false,
           "index": 4,
           "lhas_leaf": "dd46bcb27ef22666cb83357cb60720ef517fb471cd5fc12c4cc45fd312904d14",
           "sector_count": 1,
@@ -3672,10 +5290,8 @@
           "tag": 0
         },
         {
-          "block_index": 1,
-          "data_offset": 0,
-          "data_size": 4,
           "decompressed_sha256": "4d12a0f5a07f2cd96d02b12d79ea5caf29be94d0d3b490b8d30307eabb53d9c3",
+          "empty": false,
           "index": 5,
           "lhas_leaf": "dd46bcb27ef22666cb83357cb60720ef517fb471cd5fc12c4cc45fd312904d14",
           "sector_count": 1,
@@ -3685,10 +5301,8 @@
           "tag": 0
         },
         {
-          "block_index": 1,
-          "data_offset": 4,
-          "data_size": 4,
           "decompressed_sha256": "4d12a0f5a07f2cd96d02b12d79ea5caf29be94d0d3b490b8d30307eabb53d9c3",
+          "empty": false,
           "index": 6,
           "lhas_leaf": "dd46bcb27ef22666cb83357cb60720ef517fb471cd5fc12c4cc45fd312904d14",
           "sector_count": 1,
@@ -3698,10 +5312,8 @@
           "tag": 0
         },
         {
-          "block_index": 1,
-          "data_offset": 8,
-          "data_size": 4,
           "decompressed_sha256": "4d12a0f5a07f2cd96d02b12d79ea5caf29be94d0d3b490b8d30307eabb53d9c3",
+          "empty": false,
           "index": 7,
           "lhas_leaf": "dd46bcb27ef22666cb83357cb60720ef517fb471cd5fc12c4cc45fd312904d14",
           "sector_count": 1,
@@ -3711,10 +5323,8 @@
           "tag": 0
         },
         {
-          "block_index": 1,
-          "data_offset": 12,
-          "data_size": 4,
           "decompressed_sha256": "4d12a0f5a07f2cd96d02b12d79ea5caf29be94d0d3b490b8d30307eabb53d9c3",
+          "empty": false,
           "index": 8,
           "lhas_leaf": "dd46bcb27ef22666cb83357cb60720ef517fb471cd5fc12c4cc45fd312904d14",
           "sector_count": 1,
@@ -3724,10 +5334,8 @@
           "tag": 0
         },
         {
-          "block_index": 1,
-          "data_offset": 16,
-          "data_size": 4,
           "decompressed_sha256": "4d12a0f5a07f2cd96d02b12d79ea5caf29be94d0d3b490b8d30307eabb53d9c3",
+          "empty": false,
           "index": 9,
           "lhas_leaf": "dd46bcb27ef22666cb83357cb60720ef517fb471cd5fc12c4cc45fd312904d14",
           "sector_count": 1,
@@ -3735,6 +5343,135 @@
             0
           ],
           "tag": 0
+        }
+      ],
+      "layers_per_chunk": 5,
+      "layr_chunks": [
+        {
+          "content_size": 20,
+          "dict_id": 0,
+          "first_layer": 0,
+          "frame_size": 19,
+          "index": 11,
+          "layer_count": 5,
+          "sealed": false,
+          "sector_id": 0,
+          "stored_len": 23,
+          "version": 1
+        },
+        {
+          "content_size": 20,
+          "dict_id": 0,
+          "first_layer": 5,
+          "frame_size": 19,
+          "index": 12,
+          "layer_count": 5,
+          "sealed": false,
+          "sector_id": 0,
+          "stored_len": 23,
+          "version": 1
+        }
+      ],
+      "ltbl": [
+        {
+          "additional_sector_count": 0,
+          "data_offset": 0,
+          "data_size": 4,
+          "entry_index": 0,
+          "first_layr": 11,
+          "first_lrov": 0,
+          "layer": 0,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 4,
+          "data_size": 4,
+          "entry_index": 1,
+          "first_layr": 11,
+          "first_lrov": 0,
+          "layer": 1,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 8,
+          "data_size": 4,
+          "entry_index": 2,
+          "first_layr": 11,
+          "first_lrov": 2,
+          "layer": 2,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 12,
+          "data_size": 4,
+          "entry_index": 3,
+          "first_layr": 11,
+          "first_lrov": 3,
+          "layer": 3,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 16,
+          "data_size": 4,
+          "entry_index": 4,
+          "first_layr": 11,
+          "first_lrov": 4,
+          "layer": 4,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 0,
+          "data_size": 4,
+          "entry_index": 5,
+          "first_layr": 12,
+          "first_lrov": 5,
+          "layer": 5,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 4,
+          "data_size": 4,
+          "entry_index": 6,
+          "first_layr": 12,
+          "first_lrov": 6,
+          "layer": 6,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 8,
+          "data_size": 4,
+          "entry_index": 7,
+          "first_layr": 12,
+          "first_lrov": 7,
+          "layer": 7,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 12,
+          "data_size": 4,
+          "entry_index": 8,
+          "first_layr": 12,
+          "first_lrov": 8,
+          "layer": 8,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 16,
+          "data_size": 4,
+          "entry_index": 9,
+          "first_layr": 12,
+          "first_lrov": 0,
+          "layer": 9,
+          "sector_id": 0
         }
       ],
       "merkle_root": "572c541ea81e0af2439244ee8ee259fe67841b5a937783b8f9e9f3579e1d7944",
@@ -3923,24 +5660,11 @@
         }
       ],
       "total_layers": 10,
-      "total_uncompressed_size": 1514,
-      "trailer_crc32c": "0x7DF97F22"
+      "total_uncompressed_size": 1501,
+      "trailer_crc32c": "0xFFBA0681"
     },
     {
-      "block_size_layers": 2,
-      "blocks": [
-        {
-          "frame_offset": 0,
-          "frame_size": 45,
-          "uncompressed_size": 8
-        },
-        {
-          "frame_offset": 45,
-          "frame_size": 45,
-          "uncompressed_size": 8
-        }
-      ],
-      "chunk_count": 8,
+      "chunk_count": 9,
       "chunk_payload_sha256": {
         "PREV": [
           "1ae622d736a893ad07c7ee2eac234c9c9703a81a788f8ddf1f8360be5e71f497",
@@ -3968,7 +5692,7 @@
         "dict_size": 0,
         "present": false
       },
-      "dir_offset": 1742,
+      "dir_offset": 1729,
       "display_height_px": 48,
       "display_width_px": 64,
       "features": [
@@ -3981,16 +5705,14 @@
         "aes-256-gcm"
       ],
       "file": "valid/previews.lumen",
-      "file_sha256": "916c423d0839b3ec912f330a4b8fd8d47ace18c8ae0224ce90c2d0fb9685acca",
-      "file_size": 2006,
+      "file_sha256": "7dad876516ea17d5594ace31016b7adba3f430d4ca67637b7691b66a212d4af7",
+      "file_size": 2025,
       "header_flags": 8,
       "layer_height_um": 50,
       "layers": [
         {
-          "block_index": 0,
-          "data_offset": 0,
-          "data_size": 4,
           "decompressed_sha256": "a6a9d1e154b77f0eaec28a54fb183df6e3f0f603ffc4d4204e658244cd9eac1e",
+          "empty": false,
           "index": 0,
           "lhas_leaf": "ee32b081d3c5a51c86ce6ece0fc5c925ac6bb76ef8a12e196aeb97b50c121c39",
           "sector_count": 1,
@@ -4000,10 +5722,8 @@
           "tag": 0
         },
         {
-          "block_index": 0,
-          "data_offset": 4,
-          "data_size": 4,
           "decompressed_sha256": "a6a9d1e154b77f0eaec28a54fb183df6e3f0f603ffc4d4204e658244cd9eac1e",
+          "empty": false,
           "index": 1,
           "lhas_leaf": "ee32b081d3c5a51c86ce6ece0fc5c925ac6bb76ef8a12e196aeb97b50c121c39",
           "sector_count": 1,
@@ -4013,10 +5733,8 @@
           "tag": 0
         },
         {
-          "block_index": 1,
-          "data_offset": 0,
-          "data_size": 4,
           "decompressed_sha256": "a6a9d1e154b77f0eaec28a54fb183df6e3f0f603ffc4d4204e658244cd9eac1e",
+          "empty": false,
           "index": 2,
           "lhas_leaf": "ee32b081d3c5a51c86ce6ece0fc5c925ac6bb76ef8a12e196aeb97b50c121c39",
           "sector_count": 1,
@@ -4026,10 +5744,8 @@
           "tag": 0
         },
         {
-          "block_index": 1,
-          "data_offset": 4,
-          "data_size": 4,
           "decompressed_sha256": "a6a9d1e154b77f0eaec28a54fb183df6e3f0f603ffc4d4204e658244cd9eac1e",
+          "empty": false,
           "index": 3,
           "lhas_leaf": "ee32b081d3c5a51c86ce6ece0fc5c925ac6bb76ef8a12e196aeb97b50c121c39",
           "sector_count": 1,
@@ -4037,6 +5753,75 @@
             0
           ],
           "tag": 0
+        }
+      ],
+      "layers_per_chunk": 2,
+      "layr_chunks": [
+        {
+          "content_size": 8,
+          "dict_id": 0,
+          "first_layer": 0,
+          "frame_size": 45,
+          "index": 7,
+          "layer_count": 2,
+          "sealed": true,
+          "sector_id": 0,
+          "stored_len": 49,
+          "version": 1
+        },
+        {
+          "content_size": 8,
+          "dict_id": 0,
+          "first_layer": 2,
+          "frame_size": 45,
+          "index": 8,
+          "layer_count": 2,
+          "sealed": true,
+          "sector_id": 0,
+          "stored_len": 49,
+          "version": 1
+        }
+      ],
+      "ltbl": [
+        {
+          "additional_sector_count": 0,
+          "data_offset": 0,
+          "data_size": 4,
+          "entry_index": 0,
+          "first_layr": 7,
+          "first_lrov": 0,
+          "layer": 0,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 4,
+          "data_size": 4,
+          "entry_index": 1,
+          "first_layr": 7,
+          "first_lrov": 0,
+          "layer": 1,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 0,
+          "data_size": 4,
+          "entry_index": 2,
+          "first_layr": 8,
+          "first_lrov": 0,
+          "layer": 2,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 4,
+          "data_size": 4,
+          "entry_index": 3,
+          "first_layr": 8,
+          "first_lrov": 0,
+          "layer": 3,
+          "sector_id": 0
         }
       ],
       "merkle_root": "8496a8f29692e962cf7f3aa66145a8bead7408d3bcfb6d8b7153df060b1081cb",
@@ -4117,24 +5902,11 @@
         }
       ],
       "total_layers": 4,
-      "total_uncompressed_size": 1772,
-      "trailer_crc32c": "0x0584E135"
+      "total_uncompressed_size": 1756,
+      "trailer_crc32c": "0x8F58A973"
     },
     {
-      "block_size_layers": 2,
-      "blocks": [
-        {
-          "frame_offset": 0,
-          "frame_size": 45,
-          "uncompressed_size": 8
-        },
-        {
-          "frame_offset": 45,
-          "frame_size": 45,
-          "uncompressed_size": 8
-        }
-      ],
-      "chunk_count": 7,
+      "chunk_count": 8,
       "chunk_payload_sha256": {
         "VOXL": "e9271fbab32d3488ad308cf7cc1ace3ff0d2ab3730ebf5ced731145d5d327fb7"
       },
@@ -4159,7 +5931,7 @@
         "dict_size": 0,
         "present": false
       },
-      "dir_offset": 1006,
+      "dir_offset": 993,
       "display_height_px": 48,
       "display_width_px": 64,
       "features": [
@@ -4171,16 +5943,14 @@
         "aes-256-gcm"
       ],
       "file": "valid/embedded-scene.lumen",
-      "file_sha256": "bbf38c437286ae8d07595217d5650893bb66c56cbaedad53dfd2c02c261d2a3a",
-      "file_size": 1238,
+      "file_sha256": "6fa887fb0225428ddf687e95a6dd1631d3240bdfded2720aea463dc4fa926b58",
+      "file_size": 1257,
       "header_flags": 8,
       "layer_height_um": 50,
       "layers": [
         {
-          "block_index": 0,
-          "data_offset": 0,
-          "data_size": 4,
           "decompressed_sha256": "d2a2299911a921448af7d3b24815fd9e0f5b4415ac87bf7f7e3cc900992e8fc9",
+          "empty": false,
           "index": 0,
           "lhas_leaf": "ea19825ef49ec3ea17c5da0b4ca8b5614a81d0af0d3bd8cf91cbfbc51045240b",
           "sector_count": 1,
@@ -4190,10 +5960,8 @@
           "tag": 0
         },
         {
-          "block_index": 0,
-          "data_offset": 4,
-          "data_size": 4,
           "decompressed_sha256": "d2a2299911a921448af7d3b24815fd9e0f5b4415ac87bf7f7e3cc900992e8fc9",
+          "empty": false,
           "index": 1,
           "lhas_leaf": "ea19825ef49ec3ea17c5da0b4ca8b5614a81d0af0d3bd8cf91cbfbc51045240b",
           "sector_count": 1,
@@ -4203,10 +5971,8 @@
           "tag": 0
         },
         {
-          "block_index": 1,
-          "data_offset": 0,
-          "data_size": 4,
           "decompressed_sha256": "d2a2299911a921448af7d3b24815fd9e0f5b4415ac87bf7f7e3cc900992e8fc9",
+          "empty": false,
           "index": 2,
           "lhas_leaf": "ea19825ef49ec3ea17c5da0b4ca8b5614a81d0af0d3bd8cf91cbfbc51045240b",
           "sector_count": 1,
@@ -4216,10 +5982,8 @@
           "tag": 0
         },
         {
-          "block_index": 1,
-          "data_offset": 4,
-          "data_size": 4,
           "decompressed_sha256": "d2a2299911a921448af7d3b24815fd9e0f5b4415ac87bf7f7e3cc900992e8fc9",
+          "empty": false,
           "index": 3,
           "lhas_leaf": "ea19825ef49ec3ea17c5da0b4ca8b5614a81d0af0d3bd8cf91cbfbc51045240b",
           "sector_count": 1,
@@ -4227,6 +5991,75 @@
             0
           ],
           "tag": 0
+        }
+      ],
+      "layers_per_chunk": 2,
+      "layr_chunks": [
+        {
+          "content_size": 8,
+          "dict_id": 0,
+          "first_layer": 0,
+          "frame_size": 45,
+          "index": 6,
+          "layer_count": 2,
+          "sealed": true,
+          "sector_id": 0,
+          "stored_len": 49,
+          "version": 1
+        },
+        {
+          "content_size": 8,
+          "dict_id": 0,
+          "first_layer": 2,
+          "frame_size": 45,
+          "index": 7,
+          "layer_count": 2,
+          "sealed": true,
+          "sector_id": 0,
+          "stored_len": 49,
+          "version": 1
+        }
+      ],
+      "ltbl": [
+        {
+          "additional_sector_count": 0,
+          "data_offset": 0,
+          "data_size": 4,
+          "entry_index": 0,
+          "first_layr": 6,
+          "first_lrov": 0,
+          "layer": 0,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 4,
+          "data_size": 4,
+          "entry_index": 1,
+          "first_layr": 6,
+          "first_lrov": 0,
+          "layer": 1,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 0,
+          "data_size": 4,
+          "entry_index": 2,
+          "first_layr": 7,
+          "first_lrov": 0,
+          "layer": 2,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 4,
+          "data_size": 4,
+          "entry_index": 3,
+          "first_layr": 7,
+          "first_lrov": 0,
+          "layer": 3,
+          "sector_id": 0
         }
       ],
       "merkle_root": "52ca4e3ce9170e75e11fcc77f1edaccdf0a8f5fb7d7bf85a598fdbaa44cfa633",
@@ -4307,24 +6140,11 @@
         }
       ],
       "total_layers": 4,
-      "total_uncompressed_size": 1112,
-      "trailer_crc32c": "0x6751E786"
+      "total_uncompressed_size": 1096,
+      "trailer_crc32c": "0xDA6ACE43"
     },
     {
-      "block_size_layers": 2,
-      "blocks": [
-        {
-          "frame_offset": 0,
-          "frame_size": 17,
-          "uncompressed_size": 8
-        },
-        {
-          "frame_offset": 17,
-          "frame_size": 17,
-          "uncompressed_size": 8
-        }
-      ],
-      "chunk_count": 7,
+      "chunk_count": 8,
       "chunk_payload_sha256": {
         "EXTD": [
           "f6b65b8ce59523deb61b0b888b8264daa041c58761f99e34042766388de2eac8",
@@ -4337,7 +6157,7 @@
         "dict_size": 0,
         "present": false
       },
-      "dir_offset": 734,
+      "dir_offset": 717,
       "display_height_px": 48,
       "display_width_px": 64,
       "features": [
@@ -4348,16 +6168,14 @@
         "skippable-extension"
       ],
       "file": "valid/extensions.lumen",
-      "file_sha256": "732cebe3f709f445b99e0b9b014595baa2dbd57edcba5f66ccedb61483d44dff",
-      "file_size": 966,
+      "file_sha256": "527a41c2a23c04c3fef8165a3a6487d2bfb8963942d49af33e1b8337248799a4",
+      "file_size": 981,
       "header_flags": 0,
       "layer_height_um": 50,
       "layers": [
         {
-          "block_index": 0,
-          "data_offset": 0,
-          "data_size": 4,
           "decompressed_sha256": "e2ecef88fe015467de5bafb5859602d57beaf78ebdfc6606f990176dd223cf76",
+          "empty": false,
           "index": 0,
           "lhas_leaf": "b284bc6b28d3afb6ca28990e365070d6a56cd7d43f3a1fbd8d7792d9e43492df",
           "sector_count": 1,
@@ -4367,10 +6185,8 @@
           "tag": 0
         },
         {
-          "block_index": 0,
-          "data_offset": 4,
-          "data_size": 4,
           "decompressed_sha256": "e2ecef88fe015467de5bafb5859602d57beaf78ebdfc6606f990176dd223cf76",
+          "empty": false,
           "index": 1,
           "lhas_leaf": "b284bc6b28d3afb6ca28990e365070d6a56cd7d43f3a1fbd8d7792d9e43492df",
           "sector_count": 1,
@@ -4380,10 +6196,8 @@
           "tag": 0
         },
         {
-          "block_index": 1,
-          "data_offset": 0,
-          "data_size": 4,
           "decompressed_sha256": "e2ecef88fe015467de5bafb5859602d57beaf78ebdfc6606f990176dd223cf76",
+          "empty": false,
           "index": 2,
           "lhas_leaf": "b284bc6b28d3afb6ca28990e365070d6a56cd7d43f3a1fbd8d7792d9e43492df",
           "sector_count": 1,
@@ -4393,10 +6207,8 @@
           "tag": 0
         },
         {
-          "block_index": 1,
-          "data_offset": 4,
-          "data_size": 4,
           "decompressed_sha256": "e2ecef88fe015467de5bafb5859602d57beaf78ebdfc6606f990176dd223cf76",
+          "empty": false,
           "index": 3,
           "lhas_leaf": "b284bc6b28d3afb6ca28990e365070d6a56cd7d43f3a1fbd8d7792d9e43492df",
           "sector_count": 1,
@@ -4404,6 +6216,75 @@
             0
           ],
           "tag": 0
+        }
+      ],
+      "layers_per_chunk": 2,
+      "layr_chunks": [
+        {
+          "content_size": 8,
+          "dict_id": 0,
+          "first_layer": 0,
+          "frame_size": 17,
+          "index": 6,
+          "layer_count": 2,
+          "sealed": false,
+          "sector_id": 0,
+          "stored_len": 21,
+          "version": 1
+        },
+        {
+          "content_size": 8,
+          "dict_id": 0,
+          "first_layer": 2,
+          "frame_size": 17,
+          "index": 7,
+          "layer_count": 2,
+          "sealed": false,
+          "sector_id": 0,
+          "stored_len": 21,
+          "version": 1
+        }
+      ],
+      "ltbl": [
+        {
+          "additional_sector_count": 0,
+          "data_offset": 0,
+          "data_size": 4,
+          "entry_index": 0,
+          "first_layr": 6,
+          "first_lrov": 0,
+          "layer": 0,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 4,
+          "data_size": 4,
+          "entry_index": 1,
+          "first_layr": 6,
+          "first_lrov": 0,
+          "layer": 1,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 0,
+          "data_size": 4,
+          "entry_index": 2,
+          "first_layr": 7,
+          "first_lrov": 0,
+          "layer": 2,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 4,
+          "data_size": 4,
+          "entry_index": 3,
+          "first_layr": 7,
+          "first_lrov": 0,
+          "layer": 3,
+          "sector_id": 0
         }
       ],
       "merkle_root": "8602cdd0d6d8c7d7a190006144c908165719522ef152a52d91d979a344db27f0",
@@ -4484,8 +6365,8 @@
         }
       ],
       "total_layers": 4,
-      "total_uncompressed_size": 804,
-      "trailer_crc32c": "0xC862550F"
+      "total_uncompressed_size": 788,
+      "trailer_crc32c": "0xAF251D98"
     }
   ]
 }

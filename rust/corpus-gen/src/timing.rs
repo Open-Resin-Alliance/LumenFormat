@@ -1,12 +1,17 @@
 //! Section 8's per-layer settings pipeline, and the sample of points the
 //! manifest pins for it.
 //!
-//! The generator already writes each vector's META, `SECT` and `LROV` payloads;
-//! this module reads those same payloads the way a conforming reader must and
-//! resolves the timing of a `(layer, sector)` pair ([`spec/11-layer-timing.md`]
-//! section 8). `manifest.json` then records the result for the points
-//! [`Pipeline::manifest`] selects, so a third-party implementation has numbers to
-//! agree with and not just bytes to re-derive.
+//! The generator already writes each vector's META and `LROV` payloads; this
+//! module reads those same payloads the way a conforming reader must and resolves
+//! the timing of a `(layer, sector)` pair ([`spec/11-layer-timing.md`] section 8).
+//! `manifest.json` then records the result for the points [`Pipeline::manifest`]
+//! selects, so a third-party implementation has numbers to agree with and not
+//! just bytes to re-derive.
+//!
+//! A sector has no chunk of its own: it is defined by its entry in META's
+//! `sectors` array, which is also where its identity lives, so the pipeline
+//! reads META once and an `LROV` chunk per `(layer, sector)` that carries
+//! overrides.
 
 use std::collections::BTreeSet;
 
@@ -18,7 +23,7 @@ use crate::json;
 const DEFAULT_LIGHT_PWM: u32 = 255;
 
 /// One value a reader resolves per layer: the two names its normal and its
-/// bottom form go by in the META, `SECT` and `LROV` namespace, what an absent
+/// bottom form go by in the META, `sectors` and `LROV` namespace, what an absent
 /// field means, and whether the transition range blends the pair.
 struct Field {
     /// The key the manifest publishes the value under.
@@ -141,15 +146,28 @@ struct Resolved {
     values: [u32; FIELDS.len()],
 }
 
-/// The pipeline's inputs: a file's META object, its `SECT` definitions, its
-/// `LROV` entries in file order, and the header's layer count.
+/// One `LROV` chunk's contents: the timing deltas one `(layer, sector)` carries
+/// (spec 4.6). Which point it belongs to is not in the payload; the entry that
+/// names the chunk is what says so, and that is the point it is built with here.
+pub struct Override {
+    pub layer: u32,
+    pub sector: u32,
+    pub fields: Map<String, Value>,
+}
+
+/// The pipeline's inputs: a file's META object, the sectors its `LAYR` chunks
+/// carry, its `LROV` sets against the points they belong to, and the header's
+/// layer count.
 pub struct Pipeline<'a> {
-    /// META, whose values are the base for every field (spec 8 step 1).
+    /// META, whose values are the base for every field, and whose `sectors`
+    /// array is where a sector's own values live (spec 8 step 1).
     meta: &'a Map<String, Value>,
-    /// Each `SECT` definition, with the `sector_id` it speaks for.
+    /// Each `META.sectors` entry, with the `sector_id` it speaks for.
     sectors: Vec<(u32, &'a Map<String, Value>)>,
-    /// The `LROV` entries, in file order (spec 8 step 3).
-    overrides: &'a [Value],
+    /// The sectors the file's chunks carry, ascending.
+    present: &'a [u32],
+    /// The override sets, by point (spec 8 step 3).
+    overrides: &'a [Override],
     /// The header's `total_layers`, which bounds every point.
     total: u32,
 }
@@ -158,26 +176,33 @@ impl<'a> Pipeline<'a> {
     /// Read a file's timing inputs.
     pub fn new(
         meta: &'a Value,
-        sectors: &'a [Value],
-        overrides: &'a [Value],
+        present: &'a [u32],
+        overrides: &'a [Override],
         total_layers: u32,
     ) -> Self {
         let meta = meta.as_object().expect("META is a JSON object");
-        let sectors = sectors
-            .iter()
-            .map(|definition| {
-                let definition = definition
-                    .as_object()
-                    .expect("a SECT definition is a JSON object");
-                (
-                    int(definition, "sector_id").expect("a SECT definition names its sector"),
-                    definition,
-                )
+        let sectors = meta
+            .get("sectors")
+            .and_then(Value::as_array)
+            .map(|entries| {
+                entries
+                    .iter()
+                    .map(|definition| {
+                        let definition = definition
+                            .as_object()
+                            .expect("a META.sectors entry is a JSON object");
+                        (
+                            int(definition, "sector_id").expect("an entry names its sector"),
+                            definition,
+                        )
+                    })
+                    .collect()
             })
-            .collect();
+            .unwrap_or_default();
         Pipeline {
             meta,
             sectors,
+            present,
             overrides,
             total: total_layers,
         }
@@ -213,24 +238,22 @@ impl<'a> Pipeline<'a> {
 
     /// The timing of one `(layer, sector)` pair (spec 8 steps 1-5).
     fn resolve(&self, layer: u32, sector: u32) -> Resolved {
-        let sect = self.definition(sector);
-        let stage = self.stage(layer, sect);
+        let entry = self.definition(sector);
+        let stage = self.stage(layer, entry);
         let mut resolved = Resolved {
-            layer_height_um: self.merged(sect, "layer_height_um").unwrap_or(0),
-            values: FIELDS.map(|field| self.value(field, sect, stage)),
+            layer_height_um: self.merged(entry, "layer_height_um").unwrap_or(0),
+            values: FIELDS.map(|field| self.value(field, entry, stage)),
         };
 
-        // Every matching entry folds onto the resolved values in file order, so
-        // the last entry to carry a field wins it while a later entry that omits
-        // a field keeps what an earlier one set.
-        for entry in self.overrides {
-            let Some(entry) = entry.as_object() else {
-                continue;
-            };
-            if !matches_entry(entry, layer, sector) {
-                continue;
-            }
-            if let Some(value) = int(entry, "layer_height_um") {
+        // A point has exactly one override set or none, so there is nothing to
+        // fold: the entry that names the chunk is the only thing that places it
+        // (spec 4.6).
+        if let Some(over) = self
+            .overrides
+            .iter()
+            .find(|over| over.layer == layer && over.sector == sector)
+        {
+            if let Some(value) = int(&over.fields, "layer_height_um") {
                 resolved.layer_height_um = value;
             }
             for (value, field) in resolved.values.iter_mut().zip(FIELDS) {
@@ -238,7 +261,7 @@ impl<'a> Pipeline<'a> {
                 // it carries both, the normal one wins, because the override
                 // replaces the layer's single resolved value.
                 if let Some(overridden) =
-                    int(entry, field.normal).or_else(|| int(entry, field.bottom))
+                    int(&over.fields, field.normal).or_else(|| int(&over.fields, field.bottom))
                 {
                     *value = overridden;
                 }
@@ -250,11 +273,11 @@ impl<'a> Pipeline<'a> {
     /// One field at `stage`: the base value META and the sector definition
     /// give, blended when the layer is in the transition range (spec 8 steps
     /// 1-4).
-    fn value(&self, field: Field, sect: Option<&Map<String, Value>>, stage: Stage) -> u32 {
-        let normal = self.merged(sect, field.normal).unwrap_or(field.default);
+    fn value(&self, field: Field, entry: Option<&Map<String, Value>>, stage: Stage) -> u32 {
+        let normal = self.merged(entry, field.normal).unwrap_or(field.default);
         // A `bottom_*` field that is absent equals its normal counterpart, which
         // is what makes that field's interpolation a no-op.
-        let bottom = self.merged(sect, field.bottom).unwrap_or(normal);
+        let bottom = self.merged(entry, field.bottom).unwrap_or(normal);
         match stage {
             Stage::Bottom => bottom,
             Stage::Normal => normal,
@@ -265,19 +288,20 @@ impl<'a> Pipeline<'a> {
         }
     }
 
-    /// The value for `name`: the sector definition's when it carries one, META's
-    /// otherwise (spec 8 step 1).
-    fn merged(&self, sect: Option<&Map<String, Value>>, name: &str) -> Option<u32> {
-        sect.and_then(|timing| int(timing, name))
+    /// The value for `name`: the sector's entry in META when it carries one,
+    /// META's own otherwise (spec 8 step 1).
+    fn merged(&self, entry: Option<&Map<String, Value>>, name: &str) -> Option<u32> {
+        entry
+            .and_then(|timing| int(timing, name))
             .or_else(|| int(self.meta, name))
     }
 
-    /// The `SECT` definition that speaks for `sector`, when the file carries
+    /// The `META.sectors` entry that speaks for `sector`, when the file defines
     /// one.
     ///
-    /// Sector 0 is the implicit primary sector and a `SECT` definition names
-    /// `sector_id >= 1` (spec 4.5), so only a non-zero sector can have one, and
-    /// a definition speaks for the sector it names.
+    /// Sector 0 is the implicit primary sector and an entry names `sector_id >=
+    /// 1` (spec 4.2), so only a non-zero sector can have one, and an entry
+    /// speaks for the sector it names.
     fn definition(&self, sector: u32) -> Option<&'a Map<String, Value>> {
         self.sectors
             .iter()
@@ -285,23 +309,23 @@ impl<'a> Pipeline<'a> {
             .map(|(_, timing)| *timing)
     }
 
-    /// The layer counts `sector` resolves with: the definition's when it carries
-    /// them, META's otherwise, per field (spec 4.5, 8).
+    /// The layer counts `sector` resolves with: its entry's when it carries
+    /// them, META's otherwise, per field (spec 4.2, 8).
     ///
     /// A file that carries neither count has no bottom or transition range,
     /// which is what zero of each means. `u64` keeps the range's end,
-    /// `bottom + transition`, from wrapping on counts a malformed META or `SECT`
-    /// could carry.
-    fn counts(&self, sect: Option<&Map<String, Value>>) -> (u64, u64) {
+    /// `bottom + transition`, from wrapping on counts a malformed META could
+    /// carry.
+    fn counts(&self, entry: Option<&Map<String, Value>>) -> (u64, u64) {
         (
-            u64::from(self.merged(sect, "bottom_layer_count").unwrap_or(0)),
-            u64::from(self.merged(sect, "transition_layer_count").unwrap_or(0)),
+            u64::from(self.merged(entry, "bottom_layer_count").unwrap_or(0)),
+            u64::from(self.merged(entry, "transition_layer_count").unwrap_or(0)),
         )
     }
 
     /// Which range `layer` falls in for `sector` (spec 8 step 2).
-    fn stage(&self, layer: u32, sect: Option<&Map<String, Value>>) -> Stage {
-        let (bottom, transition) = self.counts(sect);
+    fn stage(&self, layer: u32, entry: Option<&Map<String, Value>>) -> Stage {
+        let (bottom, transition) = self.counts(entry);
         let index = u64::from(layer);
         if index < bottom {
             Stage::Bottom
@@ -318,21 +342,20 @@ impl<'a> Pipeline<'a> {
     /// The `(layer, sector)` pairs the manifest pins, sorted and deduplicated.
     ///
     /// Every sector is sampled on the layers its own pipeline branches at,
-    /// because a sector resolves the two counts per field for itself: a `SECT`
-    /// definition that carries `bottom_layer_count` or
+    /// because a sector resolves the two counts per field for itself: an entry in
+    /// META's `sectors` that carries `bottom_layer_count` or
     /// `transition_layer_count` is blended over its own ranges, so the layers
-    /// META's counts would put it at are not the ones it branches at (spec 4.5,
+    /// META's counts would put it at are not the ones it branches at (spec 4.2,
     /// 8). A reader MUST NOT resolve the ranges once from META and apply them to
     /// every sector.
     ///
-    /// The sectors are sector 0, every `sector_id` a `SECT` definition carries
-    /// and every `sector_id` an `LROV` entry names. A sector's layers are the
-    /// two ends of its bottom range, its first transition step, its first
+    /// The sectors are sector 0, every sector the file's chunks carry and every
+    /// `sector_id` an entry in META's `sectors` defines. A sector's layers are
+    /// the two ends of its bottom range, its first transition step, its first
     /// fully-normal layer and the last layer, each clamped into the file's
-    /// range, plus every layer an `LROV` entry that can match that sector - one
-    /// whose `sector_id` is absent or is the sector's - names, both ends of a
-    /// `layer_range`, and, for each of those, its neighbours. The pairs are the
-    /// union over the sectors of the sector's layers against the sector itself.
+    /// range, plus every layer an `LROV` set belonging to that sector overrides,
+    /// and, for each of those, its neighbours. The pairs are the union over the
+    /// sectors of the sector's layers against the sector itself.
     fn points(&self) -> Vec<(u32, u32)> {
         if self.total == 0 {
             return Vec::new();
@@ -341,20 +364,14 @@ impl<'a> Pipeline<'a> {
         let clamp = |layer: i64| layer.clamp(0, last) as u32;
 
         let mut sectors: BTreeSet<u32> = BTreeSet::from([0]);
+        sectors.extend(self.present.iter().copied());
         sectors.extend(self.sectors.iter().map(|(id, _)| *id));
-        for entry in self.overrides {
-            let Some(entry) = entry.as_object() else {
-                continue;
-            };
-            if let Some(sector) = int(entry, "sector_id") {
-                sectors.insert(sector);
-            }
-        }
+        sectors.extend(self.overrides.iter().map(|over| over.sector));
 
         let mut points: BTreeSet<(u32, u32)> = BTreeSet::new();
         for sector in sectors {
-            let sect = self.definition(sector);
-            let (bottom, transition) = self.counts(sect);
+            let entry = self.definition(sector);
+            let (bottom, transition) = self.counts(entry);
             let mut layers: BTreeSet<u32> = BTreeSet::new();
             for layer in [
                 0,
@@ -367,28 +384,18 @@ impl<'a> Pipeline<'a> {
                 layers.insert(clamp(layer));
             }
 
-            for entry in self.overrides {
-                let Some(entry) = entry.as_object() else {
-                    continue;
-                };
-                // An entry that names a sector other than this one cannot match
-                // it, and so names no layer of it (spec 4.6).
-                if int(entry, "sector_id").is_some_and(|target| target != sector) {
+            for over in self.overrides.iter().filter(|over| over.sector == sector) {
+                // A set naming a layer the file does not have names no point of
+                // it.
+                if over.layer >= self.total {
                     continue;
                 }
-                for layer in named_layers(entry) {
-                    // An entry naming a layer the file does not have names no
-                    // point of it.
-                    if layer >= self.total {
-                        continue;
-                    }
-                    layers.insert(layer);
-                    if layer > 0 {
-                        layers.insert(layer - 1);
-                    }
-                    if layer < self.total - 1 {
-                        layers.insert(layer + 1);
-                    }
+                layers.insert(over.layer);
+                if over.layer > 0 {
+                    layers.insert(over.layer - 1);
+                }
+                if over.layer < self.total - 1 {
+                    layers.insert(over.layer + 1);
                 }
             }
 
@@ -424,47 +431,6 @@ enum Stage {
 fn blend(normal: u32, bottom: u32, k: u64, n: u64) -> u32 {
     let numerator = u128::from(bottom) * u128::from(n - k) + u128::from(normal) * u128::from(k);
     ((2 * numerator + u128::from(n)) / (2 * u128::from(n))) as u32
-}
-
-/// Whether an `LROV` entry targets `(layer, sector)`: its `layer` equals the
-/// point's or its inclusive `layer_range` contains it, and its `sector_id` is
-/// absent or the point's (spec 4.6).
-fn matches_entry(entry: &Map<String, Value>, layer: u32, sector: u32) -> bool {
-    if int(entry, "sector_id").is_some_and(|target| target != sector) {
-        return false;
-    }
-    if int(entry, "layer") == Some(layer) {
-        return true;
-    }
-    let Some(range) = entry.get("layer_range").and_then(Value::as_array) else {
-        return false;
-    };
-    let (Some(start), Some(end)) = (
-        range.first().and_then(Value::as_u64),
-        range.get(1).and_then(Value::as_u64),
-    ) else {
-        return false;
-    };
-    start <= u64::from(layer) && u64::from(layer) <= end
-}
-
-/// The layers an `LROV` entry names: its `layer`, or both ends of its inclusive
-/// `layer_range`.
-fn named_layers(entry: &Map<String, Value>) -> Vec<u32> {
-    if let Some(layer) = int(entry, "layer") {
-        return vec![layer];
-    }
-    entry
-        .get("layer_range")
-        .and_then(Value::as_array)
-        .map(|range| {
-            range
-                .iter()
-                .filter_map(Value::as_u64)
-                .map(|layer| layer as u32)
-                .collect()
-        })
-        .unwrap_or_default()
 }
 
 /// An integer field of a JSON object, when it carries one.

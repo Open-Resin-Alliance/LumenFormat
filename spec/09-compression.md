@@ -11,7 +11,7 @@ large for storage, network transfer, and embedded-printer memory.
 
 LUMEN's compression strategy has two layers. First, the REE encoding ([§5](08-layer-encoding.md#5-layer-mask-encoding))
 reduces the per-layer information content well below that of raw pixels.
-Second, zstd compresses the layer data stream in blocks with a shared
+Second, zstd compresses each sector's layer data in frames with a shared
 trained dictionary, exploiting the fact that adjacent layers in a
 3D print are nearly identical - only the edges change. No existing resin print
 format does cross-layer compression; this alone is expected to yield a step
@@ -34,27 +34,38 @@ compression of REE data.
 
 ### 6.2 Dictionary Compression for LAYR
 
-1. Encode all layers to REE streams, in layer order.
-2. Split the layer sequence into contiguous blocks ([§4.10](06-layer-data.md#410-layr---layer-data-chunk)). Recommended: 32–64
-   layers per block.
+1. Encode every `(layer, sector)` slice to an REE stream, in layer order within each sector.
+2. Group each sector's layers into contiguous runs, and make one frame - one `LAYR` chunk -
+   per run ([§4.10](06-layer-data.md#410-layr---layer-data-chunk)). Recommended: 32–64
+   layers per frame.
 3. Sample the first `min(256, total_layers)` layers for a training set.
 4. Train a zstd dictionary with `ZDICT_trainFromBuffer()`.
 5. Store the dictionary in a `ZDIC` chunk ([§4.9](06-layer-data.md#49-zdic---zstd-dictionary-chunk)).
-6. Compress each block independently with `ZSTD_compress_usingDict()`.
+6. Compress each frame independently with `ZSTD_compress_usingDict()`.
 
 The dictionary captures statistical patterns in REE data. Because adjacent layers
 are highly similar (only the edges change between adjacent layers), a dictionary
 trained on the first 256 layers should generalize to the entire print. If dictionary
 training fails (degenerate geometry, very small prints), omit the `ZDIC` chunk and
-compress each block with standard zstd, without a dictionary.
+compress each frame with standard zstd, without a dictionary.
 
-**Why blocks instead of one frame.** A single frame compresses marginally better,
-but a zstd frame cannot be decompressed partially. That would make `LTBL` random
-access, per-layer `LHAS` verification, resume-after-power-loss, and parallel block
-decode all impossible, and would force a full-copy decompression buffer of hundreds
-of megabytes on embedded readers. Block frames make each of those operations real.
-The cost is one frame header per block and a small ratio loss, largely recovered by
-the shared dictionary.
+Because a sector's frames may be compressed independently, one dictionary trained once for
+the print serves them all: every frame in the file agrees with `ZDIC.dict_id`, whatever
+sector or layer group it carries.
+
+**Why frames instead of one frame per sector.** One frame over all of a sector's layers
+would compress marginally better, but a zstd frame cannot be decompressed partially. That
+would make `LTBL` random access, per-layer `LHAS` verification, resume-after-power-loss, and
+parallel frame decode all impossible, and would force a full-copy decompression buffer of
+hundreds of megabytes on embedded readers. One frame per `(sector, layer group)` makes each
+of those operations real. The cost is one frame header per group and a small ratio loss,
+largely recovered by the shared dictionary.
+
+**Sector boundaries are frame boundaries.** A frame carries one sector's data and never two,
+so a reader that prints a single sector decodes only that sector's chunks, and each sector's
+frames can be sized, laid out and compressed without reference to the others. Two sectors of
+one file need not share layer-group boundaries: they are encoded independently, and a layer
+group is per sector, not a file-wide partition.
 
 ### 6.3 Per-Chunk Compression Policy
 
@@ -67,12 +78,11 @@ reader whether a chunk payload carries a zstd frame. The levels are recommendati
 | AUTH | None | Tiny (~few hundred bytes); read before decompressor init. |
 | META | zstd level 3 | Small payload; speed matters. |
 | PROF | zstd level 3 | Reusable profile; small payload. |
-| SECT | zstd level 3 | Small payload. |
-| LROV | zstd level 3 | Small payload. |
+| LROV | zstd level 3 | Small payload; one chunk per overridden `(layer, sector)`. |
 | PREV | None | PNG is already compressed. |
-| LTBL | None | Needed for random access; 20 bytes/layer is acceptable. |
-| ZDIC | None | Raw dictionary bytes; read before any LAYR block decompression. |
-| LAYR | zstd level 3–6 per block, shared dictionary | Bulk of file; level 3 for interactive, level 6 for final export. |
+| LTBL | None | Needed for random access; 28 bytes per `(layer, sector)` entry is acceptable. |
+| ZDIC | None | Raw dictionary bytes; read before any LAYR frame decompression. |
+| LAYR | zstd level 3–6 per frame, shared dictionary | Bulk of file; level 3 for interactive, level 6 for final export. |
 | VOXL | zstd level 3 | VOXL V2 already uses zlib internally; zstd recompression yields additional reduction. |
 | LHAS | None | Needed for integrity checks before decompressor init. |
 | EXTD | Per-extension | Extension defines its own recommendation. |

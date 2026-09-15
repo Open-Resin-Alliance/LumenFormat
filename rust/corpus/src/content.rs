@@ -1,5 +1,5 @@
-//! The content predicates the `META`, `SECT`, `PROF` and `LROV` checks are
-//! built from (§4.2, §4.3, §4.7, §11.2).
+//! The content predicates the `META`, `PROF`, `LROV` and `PREV` checks are
+//! built from (§4.2, §4.3, §4.6, §4.7, §11.2).
 //!
 //! Each one answers a question the specification asks of a decoded chunk, so
 //! they are kept apart from the reader that walks the container: the checks
@@ -103,32 +103,124 @@ pub fn materials_shape_ok(mats: Option<&Value>) -> bool {
     }
 }
 
-/// §11.2: `layer`, and both `layer_range` bounds, in `[0, total_layers - 1]`.
-pub fn lrov_indices_ok(entry: &Value, total_layers: u32) -> bool {
-    let Some(fields) = entry.as_object() else {
+/// §4.2: absent, or an array of objects each carrying a `sector_id` that is an
+/// integer `>= 1` - sector 0 is primary and is carried implicitly - with no two
+/// entries naming the same sector.
+///
+/// The ids compare by value, as the old `SECT` ids did: `1` and `1.0` name one
+/// sector, and two entries that name it are a defect rather than a duplicate
+/// definition.
+pub fn sectors_shape_ok(sectors: Option<&Value>) -> bool {
+    let Some(sectors) = sectors else {
+        return true;
+    };
+    let Value::Array(items) = sectors else {
         return false;
     };
-    let highest = f64::from(total_layers) - 1.0;
-    let in_range =
-        |v: &Value| is_number(v) && v.as_f64().is_some_and(|n| (0.0..=highest).contains(&n));
-    if let Some(layer) = fields.get("layer") {
-        return in_range(layer);
+    let ids: Vec<&Value> = items
+        .iter()
+        .map(|sector| {
+            sector
+                .as_object()
+                .and_then(|fields| fields.get("sector_id"))
+        })
+        .collect::<Option<Vec<_>>>()
+        .into_iter()
+        .flatten()
+        .collect();
+    // Every entry carries an id, of the shape §4.2 gives it.
+    if ids.len() != items.len() || !ids.iter().all(|id| is_int(id) && number_at_least(id, 1.0)) {
+        return false;
     }
-    fields.get("layer_range").is_some_and(|rng| {
-        rng.as_array()
-            .is_some_and(|bounds| bounds.len() == 2 && bounds.iter().all(in_range))
+    (0..ids.len()).all(|i| (i + 1..ids.len()).all(|j| !scalar_eq(ids[i], ids[j])))
+}
+
+/// §4.2: every duration a sector definition carries is a JSON integer, so that
+/// `meta.time_integer` covers META's whole namespace - the durations `SECT` used
+/// to hold are META's now. A `sectors` field that is not an array has no
+/// durations to judge; its shape is a separate rule.
+pub fn sectors_time_integer(sectors: Option<&Value>) -> bool {
+    match sectors {
+        Some(Value::Array(items)) => items.iter().all(time_fields_integer),
+        _ => true,
+    }
+}
+
+/// §11.2: a sector definition's `material_index`, when it carries one, indexes
+/// the materials array - which must therefore exist.
+pub fn sector_material_index_ok(sectors: Option<&Value>, materials: Option<&Value>) -> bool {
+    let Some(Value::Array(items)) = sectors else {
+        return true;
+    };
+    items.iter().all(|sector| {
+        let Some(index) = sector
+            .as_object()
+            .and_then(|fields| fields.get("material_index"))
+        else {
+            return true;
+        };
+        materials
+            .and_then(container_len)
+            .is_some_and(|length| index_in_range(index, length))
     })
 }
 
-/// §11.2: `layer_range` is inclusive and `end >= start`.
-pub fn lrov_range_ordered(entry: &Value) -> bool {
-    let Some(rng) = entry.as_object().and_then(|o| o.get("layer_range")) else {
-        return true;
+/// Python's `len()`, for the containers that have one. A materials field that
+/// is not one of them cannot be indexed into at all.
+fn container_len(value: &Value) -> Option<usize> {
+    match value {
+        Value::Array(items) => Some(items.len()),
+        Value::String(text) => Some(text.chars().count()),
+        Value::Object(fields) => Some(fields.len()),
+        _ => None,
+    }
+}
+
+/// Python's `0 <= index < length`: a bool counts as the number it is, and
+/// anything else that is not a number is not an index.
+fn index_in_range(index: &Value, length: usize) -> bool {
+    let number = match index {
+        Value::Bool(true) => 1.0,
+        Value::Bool(false) => 0.0,
+        _ => match index.as_f64() {
+            Some(number) => number,
+            None => return false,
+        },
     };
-    rng.as_array()
-        .filter(|bounds| bounds.len() == 2)
-        .and_then(|bounds| Some(number_of(&bounds[0])? <= number_of(&bounds[1])?))
-        .unwrap_or(false)
+    number >= 0.0 && number < length as f64
+}
+
+/// A JSON number above zero, as opposed to a bool (which is an int in the
+/// Python).
+pub fn is_positive_number(value: &Value) -> bool {
+    is_number(value) && value.as_f64().is_some_and(|n| n > 0.0)
+}
+
+/// §4.2 / §11.2: a working curve, where one is carried, is usable - a
+/// penetration depth and a critical exposure above zero, and a base energy that
+/// is not negative. META and PROF carry the same object under the same rule.
+pub fn cure_curve_ok(curve: Option<&Value>) -> bool {
+    curve.is_none_or(|curve| {
+        curve.get("dp_um").is_some_and(is_positive_number)
+            && curve.get("ec_mj_cm2").is_some_and(is_positive_number)
+            && curve
+                .get("e0_mj_cm2")
+                .is_some_and(|e0| is_number(e0) && number_at_least(e0, 0.0))
+    })
+}
+
+/// §4.2 / §11.2: a temperature target META carries is inside the range a printer
+/// can be asked for. `null` is the printer's own default - unheated - rather
+/// than a temperature, so it is not range-checked.
+pub fn temperature_range_ok(meta: &Value) -> bool {
+    ["chamber_temperature_c", "vat_temperature_c"]
+        .iter()
+        .all(|key| match meta.get(key) {
+            None | Some(Value::Null) => true,
+            Some(value) => {
+                is_number(value) && value.as_f64().is_some_and(|t| (0.0..=120.0).contains(&t))
+            }
+        })
 }
 
 /// §4.7 / §11.2 (strict): PNG signature followed by a well-formed IHDR.

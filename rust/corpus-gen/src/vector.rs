@@ -19,7 +19,8 @@ const ENCODER_NAME: &str = "LumenFormat test vectors 1.0";
 /// One span of a sector: start, end (exclusive) and the value its pixels carry.
 pub type Span = ree::Span;
 
-/// One layer: its sectors, each a list of spans.
+/// One layer: its sectors, each a list of spans. A sector's position is its id,
+/// so sector 0 is primary and the rest are `sector_id >= 1`.
 pub type Layer = Vec<Vec<Span>>;
 
 /// `count` layers that all carry the same single sector.
@@ -27,16 +28,36 @@ pub fn repeated(count: usize, spans: &[Span]) -> Vec<Layer> {
     (0..count).map(|_| vec![spans.to_vec()]).collect()
 }
 
+/// One `(layer, sector)`'s encoded mask data.
+pub struct Slice {
+    pub sector_id: u32,
+    pub bytes: Vec<u8>,
+}
+
+/// One `LAYR` chunk's frame: the sector it carries, the layers it covers, and the
+/// frame itself (spec 4.10).
+pub struct Frame {
+    pub sector_id: u32,
+    pub first_layer: u32,
+    pub layer_count: u32,
+    pub bytes: Vec<u8>,
+    /// The frame's decompressed length, which its header declares.
+    pub uncompressed_size: usize,
+}
+
 /// Everything one vector's layer data is made of, before it is stored.
 pub struct Layers {
     pub multi_sector: bool,
+    /// Per layer: its slices, ascending `sector_id`.
+    pub slices: Vec<Vec<Slice>>,
+    /// Per layer: its slices concatenated in ascending `sector_id`, the bytes the
+    /// `LHAS` leaf covers.
     pub layer_bytes: Vec<Vec<u8>>,
-    pub sector_counts: Vec<u32>,
-    pub tags: Vec<Option<u8>>,
-    pub sector_tags: Vec<Vec<u8>>,
-    pub frames: Vec<Vec<u8>>,
-    pub uncompressed_sizes: Vec<usize>,
-    pub entries: Vec<LayerEntry>,
+    /// The sectors the file carries `LAYR` chunks for, ascending.
+    pub sectors: Vec<u32>,
+    /// The `LAYR` chunks' frames, in directory order: sector by sector, layer
+    /// group by layer group.
+    pub frames: Vec<Frame>,
     pub leaves: Vec<[u8; 32]>,
     pub use_dict: bool,
     pub dict_bytes: Vec<u8>,
@@ -45,75 +66,134 @@ pub struct Layers {
 
 /// The knobs [`encode_layers`] takes.
 pub struct LayerOptions<'a> {
-    pub block_size: usize,
+    pub layers_per_chunk: usize,
     pub use_dict: bool,
     pub dict_samples_bytes: usize,
     pub split_layers: &'a [usize],
     pub force_run_count_zero: &'a [usize],
+    /// Compress the frames without declaring their content size, which
+    /// `layr.content_size_present` refuses (spec 4.10).
+    pub omit_content_size: bool,
+    /// Train and publish a dictionary but compress the frames without it, so the
+    /// file carries a `ZDIC` chunk no frame uses (`presence.zdic`).
+    pub unused_zdic: bool,
+}
+
+/// A compressor that turns one group's concatenated layer data into one `LAYR`
+/// frame.
+enum Compressor {
+    /// The bulk compressor, which declares each frame's decompressed size in its
+    /// header, as a writer MUST (spec 4.10).
+    Declared(zstd::bulk::Compressor<'static>),
+    /// A raw context with the content size flag cleared, for the one vector that
+    /// pins what a reader does with a frame that declares nothing.
+    Undeclared(zstd::zstd_safe::CCtx<'static>),
+}
+
+impl Compressor {
+    fn new(level: i32, dict: &[u8], declared: bool) -> Self {
+        if declared {
+            return Compressor::Declared(
+                zstd::bulk::Compressor::with_dictionary(level, dict).expect("zstd compressor"),
+            );
+        }
+        let mut context = zstd::zstd_safe::CCtx::create();
+        context
+            .set_parameter(zstd::zstd_safe::CParameter::CompressionLevel(level))
+            .expect("compression level");
+        context
+            .set_parameter(zstd::zstd_safe::CParameter::ContentSizeFlag(false))
+            .expect("content size flag");
+        context.load_dictionary(dict).expect("dictionary");
+        Compressor::Undeclared(context)
+    }
+
+    fn frame(&mut self, payload: &[u8]) -> Vec<u8> {
+        match self {
+            Compressor::Declared(compressor) => compressor
+                .compress(payload)
+                .expect("layer frame compression"),
+            Compressor::Undeclared(context) => {
+                let mut out = Vec::with_capacity(zstd::zstd_safe::compress_bound(payload.len()));
+                context
+                    .compress2(&mut out, payload)
+                    .expect("layer frame compression");
+                out
+            }
+        }
+    }
 }
 
 /// Everything about one vector's layer data, before it is stored.
 ///
-/// Shared by the plaintext and encrypted builders: encryption changes how the block
-/// frames and content chunks are stored, never what they decode to.
+/// Shared by the plaintext and encrypted builders: encryption changes how the
+/// frames are stored, never what they decode to.
+///
+/// The layer data is grouped twice. A slice is one `(layer, sector)`'s bytes, and
+/// the `LTBL` entry indexes it; a frame is one sector's data for one group of
+/// layers, and the `LAYR` chunk carries it (spec 4.9, 4.10). Sector 0 is primary
+/// and implicitly present on every layer with data, so a layer that carries
+/// nothing anywhere still has one entry, for sector 0, with `data_size` 0.
 pub fn encode_layers(display: (usize, usize), layers: &[Layer], options: &LayerOptions) -> Layers {
     let total = display.0 * display.1;
-    let multi_sector = layers.iter().any(|sectors| sectors.len() > 1);
 
-    let mut layer_bytes: Vec<Vec<u8>> = Vec::with_capacity(layers.len());
-    let mut sector_counts: Vec<u32> = Vec::with_capacity(layers.len());
-    let mut tags: Vec<Option<u8>> = Vec::with_capacity(layers.len());
-    let mut sector_tags: Vec<Vec<u8>> = Vec::with_capacity(layers.len());
-
-    for (index, sectors) in layers.iter().enumerate() {
-        let prefer_split = options.split_layers.contains(&index);
-        let encoded: Vec<(usize, Vec<u8>)> = sectors
-            .iter()
-            .enumerate()
-            .filter_map(|(sector_id, spans)| {
-                ree::encode_sector(&ree::runs_from_spans(total, spans), prefer_split)
-                    .map(|body| (sector_id, body))
-            })
-            .collect();
-
-        if options.force_run_count_zero.contains(&index) {
+    let mut slices: Vec<Vec<Slice>> = Vec::with_capacity(layers.len());
+    for (layer, sectors) in layers.iter().enumerate() {
+        if options.force_run_count_zero.contains(&layer) {
             // Non-canonical all-black form: tag 0x00, first_value 0x00, run_count 0.
             let mut bytes = vec![ree::TAG_BINARY, 0x00];
             bytes.extend(ree::varint(0));
-            layer_bytes.push(bytes);
-            sector_counts.push(1);
-            tags.push(Some(ree::TAG_BINARY));
-            sector_tags.push(vec![ree::TAG_BINARY]);
+            slices.push(vec![Slice {
+                sector_id: 0,
+                bytes,
+            }]);
             continue;
         }
 
-        if encoded.is_empty() {
-            layer_bytes.push(Vec::new());
-            sector_counts.push(0);
-            tags.push(None);
-            sector_tags.push(Vec::new());
-            continue;
-        }
-
-        let data = if multi_sector {
-            // Every layer in a multi-sector file carries the sector_count varint,
-            // including layers with a single active sector.
-            let mut data = ree::varint(encoded.len() as u64);
-            for (sector_id, body) in &encoded {
-                data.extend(ree::varint(*sector_id as u64));
-                data.extend(ree::varint(body.len() as u64));
-                data.extend_from_slice(body);
-            }
-            data
-        } else {
-            encoded[0].1.clone()
-        };
-
-        tags.push(if multi_sector { None } else { Some(data[0]) });
-        sector_tags.push(encoded.iter().map(|(_, body)| body[0]).collect());
-        sector_counts.push(encoded.len() as u32);
-        layer_bytes.push(data);
+        let prefer_split = options.split_layers.contains(&layer);
+        let encoded: Vec<Slice> = sectors
+            .iter()
+            .enumerate()
+            .filter_map(|(sector_id, spans)| {
+                ree::encode_sector(&ree::runs_from_spans(total, spans), prefer_split).map(|bytes| {
+                    Slice {
+                        sector_id: sector_id as u32,
+                        bytes,
+                    }
+                })
+            })
+            .collect();
+        slices.push(encoded);
     }
+
+    // At least one layer carries more than one sector, which is what the header's
+    // MULTI_SECTOR flag says (spec 3.1, 7.1).
+    let multi_sector = slices.iter().any(|layer| layer.len() > 1);
+
+    let layer_bytes: Vec<Vec<u8>> = slices
+        .iter()
+        .map(|layer| {
+            layer
+                .iter()
+                .flat_map(|slice| slice.bytes.iter().copied())
+                .collect()
+        })
+        .collect();
+
+    // Sector 0 even in a file no layer carries anything in, so that every entry
+    // has a `LAYR` chunk to name.
+    let mut sectors: Vec<u32> = Vec::new();
+    for layer in &slices {
+        for slice in layer {
+            if !sectors.contains(&slice.sector_id) {
+                sectors.push(slice.sector_id);
+            }
+        }
+    }
+    if sectors.is_empty() {
+        sectors.push(0);
+    }
+    sectors.sort_unstable();
 
     let mut dict_bytes = Vec::new();
     let mut dict_id = 0;
@@ -131,39 +211,49 @@ pub fn encode_layers(display: (usize, usize), layers: &[Layer], options: &LayerO
         dict_bytes = dict;
     }
 
-    let mut compressor = if options.use_dict {
-        zstd::bulk::Compressor::with_dictionary(ZSTD_LAYER_LEVEL, &dict_bytes)
+    // A vector may publish a dictionary the frames do not use, so that the file
+    // carries a `ZDIC` chunk nothing refers to (`presence.zdic`).
+    let frame_dict: &[u8] = if options.unused_zdic {
+        &[]
     } else {
-        zstd::bulk::Compressor::new(ZSTD_LAYER_LEVEL)
-    }
-    .expect("zstd compressor");
+        &dict_bytes
+    };
+    let mut compressor = Compressor::new(ZSTD_LAYER_LEVEL, frame_dict, !options.omit_content_size);
 
     let mut frames = Vec::new();
-    let mut uncompressed_sizes = Vec::new();
-    let mut entries = Vec::with_capacity(layer_bytes.len());
-    for start in (0..layer_bytes.len()).step_by(options.block_size) {
-        let block_index = (start / options.block_size) as u32;
-        let group = start..(start + options.block_size).min(layer_bytes.len());
-        let payload: Vec<u8> = group
-            .clone()
-            .flat_map(|i| layer_bytes[i].iter().copied())
-            .collect();
-        let frame = compressor
-            .compress(&payload)
-            .expect("layer block compression");
-        frames.push(frame);
-        uncompressed_sizes.push(payload.len());
-
-        let mut offset = 0u64;
-        for i in group {
-            entries.push(LayerEntry {
-                block_index,
-                data_offset: offset,
-                data_size: layer_bytes[i].len() as u64,
-                sector_count: sector_counts[i],
+    for sector_id in &sectors {
+        for start in (0..slices.len()).step_by(options.layers_per_chunk) {
+            let group = start..(start + options.layers_per_chunk).min(slices.len());
+            let payload: Vec<u8> = group
+                .clone()
+                .flat_map(|layer| slice_bytes(&slices[layer], *sector_id))
+                .copied()
+                .collect();
+            frames.push(Frame {
+                sector_id: *sector_id,
+                first_layer: start as u32,
+                layer_count: (group.end - group.start) as u32,
+                uncompressed_size: payload.len(),
+                bytes: compressor.frame(&payload),
             });
-            offset += layer_bytes[i].len() as u64;
         }
+    }
+
+    // A writer MUST NOT suppress the dictionary id (spec 4.9), so each frame's
+    // header records what it was compressed with: check the vector's intent
+    // against the frames rather than trusting the knobs.
+    let wanted = if options.use_dict && !options.unused_zdic {
+        dict_id
+    } else {
+        0
+    };
+    for frame in &frames {
+        let declared =
+            zstd::zstd_safe::get_dict_id_from_frame(&frame.bytes).map_or(0, |id| id.get());
+        assert_eq!(
+            declared, wanted,
+            "a frame carries the dictionary id of the dictionary it was compressed with"
+        );
     }
 
     let leaves = layer_bytes
@@ -173,18 +263,23 @@ pub fn encode_layers(display: (usize, usize), layers: &[Layer], options: &LayerO
 
     Layers {
         multi_sector,
+        slices,
         layer_bytes,
-        sector_counts,
-        tags,
-        sector_tags,
+        sectors,
         frames,
-        uncompressed_sizes,
-        entries,
         leaves,
         use_dict: options.use_dict,
         dict_bytes,
         dict_id,
     }
+}
+
+/// The bytes `layer` carries for `sector`, empty when it carries none.
+fn slice_bytes(layer: &[Slice], sector: u32) -> &[u8] {
+    layer
+        .iter()
+        .find(|slice| slice.sector_id == sector)
+        .map_or(&[], |slice| slice.bytes.as_slice())
 }
 
 /// `count` layers of scattered runs, for vectors that need dictionary samples.
@@ -213,6 +308,24 @@ pub fn sparse_layers(count: usize, total: usize) -> Vec<Layer> {
     layers
 }
 
+/// One `LROV` chunk (spec 4.6): the timing deltas one `(layer, sector)` carries.
+///
+/// The deltas are META's names in META's units, and the point they apply to is
+/// not in the payload at all - the entry that names the chunk places it, so a
+/// range is written as one chunk per layer it covers.
+pub struct Override<'a> {
+    pub layer: u32,
+    pub sector_id: u32,
+    pub fields: Vec<(&'a str, Value)>,
+}
+
+impl Override<'_> {
+    /// The JSON object the chunk carries.
+    fn value(&self) -> Value {
+        json::obj(self.fields.clone())
+    }
+}
+
 /// Everything one vector needs, from its layers to the words the manifest uses.
 pub struct VectorSpec<'a> {
     pub name: &'a str,
@@ -221,52 +334,68 @@ pub struct VectorSpec<'a> {
     pub display: (usize, usize),
     pub layer_height_um: u32,
     pub layers: Vec<Layer>,
-    pub block_size: usize,
+    pub layers_per_chunk: usize,
     pub use_dict: bool,
     pub dict_samples_bytes: usize,
     pub split_layers: Vec<usize>,
     pub force_run_count_zero: Vec<usize>,
     pub meta_extra: Vec<(&'a str, Value)>,
-    /// Fields a vector adds to the corpus' one `SECT` definition, on top of the
-    /// support exposure [`sectors`](VectorSpec::sectors) sets.
-    pub sect_extra: Vec<(&'a str, Value)>,
+    /// Fields a vector adds to the corpus' support entry in `META.sectors`, on
+    /// top of the exposure [`sectors_value`](VectorSpec::sectors_value) starts
+    /// from. This is how a vector pins a sector that carries a layer count of its
+    /// own: a sector's entry resolves the bottom and transition ranges for that
+    /// sector, so a sector carrying `bottom_layer_count` is blended over a
+    /// different range than META's (spec 4.2, 8).
+    pub sector_extra: Vec<(&'a str, Value)>,
+    /// The whole `META.sectors` array, for the vectors that pin what a malformed
+    /// one does. `None` writes the corpus' support sector when the layer data is
+    /// multi-sector, and nothing otherwise.
+    pub sectors: Option<Value>,
     pub prof: Option<Vec<u8>>,
-    pub lrov: Option<Vec<Value>>,
+    pub overrides: Vec<Override<'a>>,
+    /// Write the frames with a dictionary but without the `ZDIC` chunk that
+    /// carries it, so a frame's dictionary id has nothing to agree with.
+    pub omit_zdic: bool,
+    /// Write the `ZDIC` chunk but compress the frames without it, so the file
+    /// carries a dictionary no frame uses.
+    pub unused_zdic: bool,
+    /// Compress the frames without declaring their decompressed size.
+    pub omit_content_size: bool,
     pub prevs: Vec<(Vec<u8>, u32, bool)>,
     pub voxl: Option<Vec<u8>>,
+    /// A raw `LROV` payload, for the vector that pins a malformed one.
+    pub lrov_raw: Option<Vec<u8>>,
+    /// An extra `LROV` chunk, after the ones an entry names, that no entry
+    /// references: a chunk whose overrides can never be attributed.
+    pub orphan_lrov: Option<Vec<(&'a str, Value)>>,
     pub extds: Vec<(Vec<u8>, u32)>,
 }
 
 impl VectorSpec<'_> {
     /// The `META` payload's object (spec 4.2), which the manifest's timing
     /// resolves from the way the file's own reader would.
-    pub fn meta_value(&self) -> Value {
-        payload::meta_value(&self.meta_extra)
-    }
-
-    /// The `SECT` definitions the file carries (spec 4.5), in chunk order.
     ///
-    /// The corpus has one support sector, and it is present exactly when the
-    /// layer data is multi-sector. `sect_extra` adds the fields a vector gives
-    /// that definition beyond the exposure it starts from, which is how a vector
-    /// pins a sector that carries a layer count of its own: a `SECT` definition
-    /// resolves the bottom and transition ranges for its sector, so a sector
-    /// that carries `bottom_layer_count` is blended over a different range than
-    /// META's (spec 4.5, 8).
-    pub fn sectors(&self, multi_sector: bool) -> Vec<Value> {
-        if multi_sector {
-            vec![json::merge(
-                payload::sect_value(1, "Support", 3000),
-                &self.sect_extra,
-            )]
-        } else {
-            Vec::new()
+    /// The sectors a file defines live here, next to the material library they
+    /// index, so a sector's identity and the timing it resolves with are never
+    /// stored twice.
+    pub fn meta_value(&self, multi_sector: bool) -> Value {
+        let meta = payload::meta_value(&self.meta_extra);
+        if let Some(sectors) = &self.sectors {
+            return json::merge(meta, &[("sectors", sectors.clone())]);
         }
+        if multi_sector {
+            let support = json::merge(
+                payload::sector_value(1, "Support", 3000),
+                &self.sector_extra,
+            );
+            return json::merge(meta, &[("sectors", Value::Array(vec![support]))]);
+        }
+        meta
     }
 
-    /// The `LROV` entries the file carries (spec 4.6), in file order.
-    pub fn overrides(&self) -> &[Value] {
-        self.lrov.as_deref().unwrap_or(&[])
+    /// The overrides the file carries, ascending by `(layer, sector)`.
+    pub fn overrides(&self) -> &[Override<'_>] {
+        &self.overrides
     }
 }
 
@@ -279,17 +408,23 @@ impl<'a> Default for VectorSpec<'a> {
             display: (0, 0),
             layer_height_um: 50,
             layers: Vec::new(),
-            block_size: 0,
+            layers_per_chunk: 0,
             use_dict: false,
             dict_samples_bytes: 2048,
             split_layers: Vec::new(),
             force_run_count_zero: Vec::new(),
             meta_extra: Vec::new(),
-            sect_extra: Vec::new(),
+            sector_extra: Vec::new(),
+            sectors: None,
             prof: None,
-            lrov: None,
+            overrides: Vec::new(),
+            omit_zdic: false,
+            unused_zdic: false,
+            omit_content_size: false,
             prevs: Vec::new(),
             voxl: None,
+            lrov_raw: None,
+            orphan_lrov: None,
             extds: Vec::new(),
         }
     }
@@ -302,8 +437,18 @@ pub struct Built {
     pub layout: Layout,
 }
 
+/// One file's content chunks and the layer table that indexes them.
+pub struct Content {
+    pub chunks: Vec<Chunk>,
+    pub entries: Vec<LayerEntry>,
+}
+
 /// The chunk list before any encryption, in the order section 3 recommends.
-pub fn content_chunks(spec: &VectorSpec, enc: &Layers) -> Vec<Chunk> {
+///
+/// `auth` is the one chunk encryption adds; it is placed here, ahead of the
+/// table, so that the directory indices the table and the sealed frames name are
+/// the indices the chunk finally lands on.
+pub fn content_chunks(spec: &VectorSpec, enc: &Layers, auth: Option<Chunk>) -> Content {
     let (w, h) = spec.display;
     let mut chunks = vec![
         Chunk::new(
@@ -317,18 +462,44 @@ pub fn content_chunks(spec: &VectorSpec, enc: &Layers) -> Vec<Chunk> {
                 ..Default::default()
             }),
         ),
-        Chunk::new(b"META", json::dumps(&spec.meta_value())).compressed(),
+        Chunk::new(b"META", json::dumps(&spec.meta_value(enc.multi_sector))).compressed(),
     ];
     if let Some(prof) = &spec.prof {
         chunks.push(Chunk::new(b"PROF", prof.clone()).compressed());
     }
-    for definition in spec.sectors(enc.multi_sector) {
-        chunks.push(Chunk::new(b"SECT", json::dumps(&definition)).compressed());
+    // Section 3 lists PROF before AUTH, and AUTH before the rest.
+    if let Some(auth) = auth {
+        chunks.push(auth);
     }
-    if let Some(lrov) = &spec.lrov {
-        chunks.push(Chunk::new(b"LROV", payload::lrov(lrov)).compressed());
+
+    // One LROV chunk per (layer, sector) that carries overrides, ascending, so an
+    // entry can name its own chunk by directory index (spec 4.6).
+    let mut points: Vec<(u32, u32, u32)> = Vec::with_capacity(spec.overrides().len());
+    for (index, over) in spec.overrides().iter().enumerate() {
+        let point = (over.layer, over.sector_id);
+        assert!(
+            over.layer < spec.layers.len() as u32,
+            "an override names a layer the file has"
+        );
+        assert!(
+            points
+                .last()
+                .is_none_or(|(layer, sector, _)| (*layer, *sector) < point),
+            "the overrides ascend by (layer, sector)"
+        );
+        points.push((point.0, point.1, chunks.len() as u32));
+        // The first chunk's payload stands in for the malformed one.
+        let bytes = match spec.lrov_raw.as_ref().filter(|_| index == 0) {
+            Some(raw) => raw.clone(),
+            None => payload::lrov(&over.fields),
+        };
+        chunks.push(Chunk::new(b"LROV", bytes).compressed());
     }
-    if enc.use_dict {
+    if let Some(fields) = &spec.orphan_lrov {
+        chunks.push(Chunk::new(b"LROV", payload::lrov(fields)).compressed());
+    }
+
+    if enc.use_dict && !spec.omit_zdic {
         chunks.push(Chunk::new(
             b"ZDIC",
             payload::zdic(&enc.dict_bytes, enc.dict_id),
@@ -351,74 +522,161 @@ pub fn content_chunks(spec: &VectorSpec, enc: &Layers) -> Vec<Chunk> {
                 .flags(*flags),
         );
     }
-    chunks.push(Chunk::new(b"LTBL", payload::ltbl(&enc.entries)));
-    chunks.push(Chunk::new(b"LHAS", payload::lhas(&enc.leaves)));
+
+    // LTBL and LHAS, then the frames, so the table can name the LAYR chunks by
+    // directory index.
+    let layr_start = chunks.len() + 2;
+    let entries = layer_entries(enc, layr_start, &points);
     chunks.push(Chunk::new(
-        b"LAYR",
-        payload::layr(&enc.frames, &enc.uncompressed_sizes),
+        b"LTBL",
+        payload::ltbl(&entries, spec.layers.len() as u32),
     ));
-    chunks
+    chunks.push(Chunk::new(b"LHAS", payload::lhas(&enc.leaves)));
+    for frame in &enc.frames {
+        chunks.push(Chunk::new(b"LAYR", payload::layr(&frame.bytes)));
+    }
+    Content { chunks, entries }
+}
+
+/// The layer table (spec 4.9): one 28-byte entry per `(layer, sector)`.
+///
+/// The entries of a layer are adjacent and ascending by `sector_id`, with the
+/// layer's first entry naming sector 0, which every layer with data carries.
+/// `points` maps a `(layer, sector)` to its `LROV` chunk's directory index.
+fn layer_entries(enc: &Layers, layr_start: usize, points: &[(u32, u32, u32)]) -> Vec<LayerEntry> {
+    let mut entries = Vec::with_capacity(enc.slices.len() + 2);
+    for (layer, slices) in enc.slices.iter().enumerate() {
+        let layer = layer as u32;
+        let mut ids: Vec<u32> = Vec::with_capacity(slices.len() + 1);
+        ids.push(0);
+        ids.extend(
+            slices
+                .iter()
+                .map(|slice| slice.sector_id)
+                .filter(|sector_id| *sector_id != 0),
+        );
+
+        for (position, sector_id) in ids.iter().enumerate() {
+            let bytes = slice_bytes(slices, *sector_id);
+            let group = enc
+                .frames
+                .iter()
+                .position(|frame| {
+                    frame.sector_id == *sector_id
+                        && frame.first_layer <= layer
+                        && layer < frame.first_layer + frame.layer_count
+                })
+                .expect("every sector the layer carries has a LAYR chunk");
+            let frame = &enc.frames[group];
+            let offset: u64 = (frame.first_layer..layer)
+                .map(|earlier| slice_bytes(&enc.slices[earlier as usize], *sector_id).len() as u64)
+                .sum();
+            entries.push(LayerEntry {
+                layer,
+                sector_id: *sector_id,
+                data_size: bytes.len() as u32,
+                first_lrov: points
+                    .iter()
+                    .find(|(point_layer, point_sector, _)| {
+                        (*point_layer, *point_sector) == (layer, *sector_id)
+                    })
+                    .map_or(0, |(_, _, index)| *index),
+                first_layr: (layr_start + group) as u32,
+                additional_sector_count: if position == 0 {
+                    (ids.len() - 1) as u32
+                } else {
+                    0
+                },
+                data_offset: offset,
+            });
+        }
+    }
+    entries
 }
 
 /// The manifest entry's golden data for one vector.
 ///
 /// The entry pins the bytes, and `resolved_timing` additionally pins what a
-/// conforming reader must resolve from the file's META, `SECT` and `LROV`
-/// payloads for a sample of `(layer, sector)` points ([`crate::timing`]), so a
+/// conforming reader must resolve from the file's META and its `LROV` payloads
+/// for a sample of `(layer, sector)` points ([`crate::timing`]), so a
 /// third-party implementation has numbers to agree with and not only bytes to
 /// re-derive. The sample is chosen to touch every branch of the pipeline rather
 /// than every layer, and it is a sample of each sector's own pipeline: a sector
 /// resolves `bottom_layer_count` and `transition_layer_count` per field for
-/// itself, a `SECT` definition's counts replacing META's, so the layers one
-/// sector branches at are not necessarily the layers another does. Each sector
-/// is sampled at the two ends of its bottom range and its first transition step,
-/// the first fully-normal layer and the last layer, each of them beside every
-/// layer an `LROV` entry that can match that sector names and that layer's
+/// itself, its `META.sectors` entry's counts replacing META's, so the layers one
+/// sector branches at are not necessarily the layers another does. Each sector is
+/// sampled at the two ends of its bottom range and its first transition step, the
+/// first fully-normal layer and the last layer, each of them beside every layer
+/// an `LROV` chunk that belongs to that sector overrides and that layer's
 /// neighbours - which is what puts an override boundary and the layers on either
-/// side of it in the same table - against sector 0, every sector a `SECT` chunk
-/// defines and every sector an override targets. Pinning every layer would add
-/// no branch the pipeline does not already show here: a reader that agrees at
-/// these points and disagrees between them has a boundary error, not a sampling
-/// gap.
+/// side of it in the same table - against sector 0, every sector the file carries
+/// and every sector `META.sectors` defines. Pinning every layer would add no
+/// branch the pipeline does not already show here: a reader that agrees at these
+/// points and disagrees between them has a boundary error, not a sampling gap.
 pub fn vector_meta(
     spec: &VectorSpec,
     enc: &Layers,
-    chunks: &[Chunk],
+    content: &Content,
     raw: &[u8],
     layout: &Layout,
     crypto_value: Option<Value>,
     chunk_hashes: Option<Value>,
 ) -> Value {
+    let entries = &content.entries;
+    let chunks = &content.chunks;
     let (w, h) = spec.display;
-    let layer_entries: Vec<Value> = (0..enc.layer_bytes.len())
-        .map(|i| {
+    let layer_records: Vec<Value> = enc
+        .slices
+        .iter()
+        .enumerate()
+        .map(|(index, slices)| {
+            let layer = entries
+                .iter()
+                .filter(|entry| entry.layer as usize == index)
+                .collect::<Vec<_>>();
+            let tags: Vec<Value> = layer
+                .iter()
+                .map(|entry| match slice_bytes(slices, entry.sector_id).first() {
+                    Some(tag) => Value::from(*tag),
+                    None => Value::Null,
+                })
+                .collect();
             obj![
-                "index" => i,
-                "block_index" => enc.entries[i].block_index,
-                "data_offset" => enc.entries[i].data_offset,
-                "data_size" => enc.entries[i].data_size,
-                "sector_count" => enc.sector_counts[i],
-                "tag" => enc.tags[i],
-                "sector_tags" => enc.sector_tags[i].clone(),
-                "decompressed_sha256" => hash::sha256_hex(&enc.layer_bytes[i]),
-                "lhas_leaf" => hash::hex(&enc.leaves[i]),
+                "index" => index,
+                "empty" => layer.iter().all(|entry| entry.data_size == 0),
+                "sector_count" => layer.len(),
+                "tag" => tags.first().cloned().unwrap_or(Value::Null),
+                "sector_tags" => Value::Array(tags),
+                "decompressed_sha256" => hash::sha256_hex(&enc.layer_bytes[index]),
+                "lhas_leaf" => hash::hex(&enc.leaves[index]),
             ]
         })
         .collect();
 
     let features: Vec<Value> = spec.features.iter().map(|f| Value::from(*f)).collect();
     // The timing pipeline reads the very payloads the chunks carry, not a second
-    // copy of them: META as `content_chunks` wrote it, the `SECT` definitions it
-    // wrote, and the LROV entries in file order.
-    let meta = spec.meta_value();
-    let sectors = spec.sectors(enc.multi_sector);
+    // copy of them: META as `content_chunks` wrote it, the sectors it defines,
+    // and the `LROV` payloads it wrote, each against the entry that places it.
+    let meta = spec.meta_value(enc.multi_sector);
+    let overrides: Vec<timing::Override> = spec
+        .overrides()
+        .iter()
+        .map(|over| timing::Override {
+            layer: over.layer,
+            sector: over.sector_id,
+            fields: match over.value() {
+                Value::Object(fields) => fields,
+                _ => unreachable!("an override is an object"),
+            },
+        })
+        .collect();
     let timing = timing::Pipeline::new(
         &meta,
-        &sectors,
-        spec.overrides(),
+        &enc.sectors,
+        &overrides,
         enc.layer_bytes.len() as u32,
     );
-    let mut entries: Vec<(&str, Value)> = vec![
+    let mut records: Vec<(&str, Value)> = vec![
         ("name", Value::from(spec.name)),
         ("description", Value::from(spec.description)),
         ("features", Value::from(features)),
@@ -426,7 +684,7 @@ pub fn vector_meta(
         ("display_height_px", Value::from(h)),
         ("total_layers", Value::from(enc.layer_bytes.len())),
         ("layer_height_um", Value::from(spec.layer_height_um)),
-        ("block_size_layers", Value::from(spec.block_size)),
+        ("layers_per_chunk", Value::from(spec.layers_per_chunk)),
         ("header_flags", Value::from(container::read_u32(raw, 20))),
         ("multi_sector", Value::from(enc.multi_sector)),
         ("chunk_count", Value::from(chunks.len())),
@@ -450,27 +708,83 @@ pub fn vector_meta(
             ],
         ),
         (
-            "blocks",
-            Value::Array(container::stored_block_table(raw, layout)),
+            "ltbl",
+            Value::Array(container::stored_layer_table(raw, layout)),
         ),
+        ("layr_chunks", Value::Array(layr_chunks(enc, raw, layout))),
         (
             "merkle_root",
             Value::from(hash::hex(&hash::merkle_root(&enc.leaves))),
         ),
-        ("layers", Value::Array(layer_entries)),
+        ("layers", Value::Array(layer_records)),
         ("resolved_timing", timing.manifest()),
     ];
     if let Some(crypto_value) = crypto_value {
-        entries.push(("crypto", crypto_value));
+        records.push(("crypto", crypto_value));
     }
     // Python's `if chunk_hashes:` is a truthiness test, so a file with none of
     // those chunks carries no such key at all.
     if let Some(chunk_hashes) = chunk_hashes {
         if chunk_hashes.as_object().is_some_and(|map| !map.is_empty()) {
-            entries.push(("chunk_payload_sha256", chunk_hashes));
+            records.push(("chunk_payload_sha256", chunk_hashes));
         }
     }
-    json::obj(entries)
+    json::obj(records)
+}
+
+/// The `LAYR` chunks exactly as stored (spec 4.10), in directory order.
+///
+/// The sizes come from the descriptor, so a sealed frame is described by the
+/// bytes that are actually there; the frame's own decompressed size and
+/// dictionary id come from the frame the vector built, which is the same frame a
+/// reader recovers after decrypting.
+fn layr_chunks(enc: &Layers, raw: &[u8], layout: &Layout) -> Vec<Value> {
+    let stored: Vec<(usize, &container::Entry)> = layout
+        .entries
+        .iter()
+        .enumerate()
+        .filter(|(_, entry)| entry.ctype == *b"LAYR")
+        .collect();
+    assert_eq!(stored.len(), enc.frames.len(), "one chunk per frame");
+    stored
+        .into_iter()
+        .zip(&enc.frames)
+        .map(|((index, entry), frame)| {
+            let version = container::read_u32(raw, entry.offset);
+            let sealed = entry.size_compressed != 0;
+            let container_len = if sealed {
+                entry.size_compressed
+            } else {
+                entry.size_uncompressed
+            };
+            assert_eq!(
+                entry.size_uncompressed, container_len,
+                "a sealed LAYR container's stored length is its uncompressed length"
+            );
+            let bytes = &raw[entry.offset + 4..entry.offset + container_len];
+            if !sealed {
+                // The writer's own check: what the file holds is the frame the
+                // vector built, content size included.
+                assert_eq!(bytes, frame.bytes.as_slice(), "the stored frame");
+            }
+            obj![
+                "index" => index,
+                "sector_id" => frame.sector_id,
+                "first_layer" => frame.first_layer,
+                "layer_count" => frame.layer_count,
+                "version" => version,
+                "dict_id" => zstd::zstd_safe::get_dict_id_from_frame(&frame.bytes)
+                    .map_or(0, |id| id.get()),
+                "content_size" => zstd::zstd_safe::get_frame_content_size(&frame.bytes)
+                    .ok()
+                    .flatten()
+                    .map_or(Value::Null, Value::from),
+                "frame_size" => container_len - 4,
+                "stored_len" => container_len,
+                "sealed" => sealed,
+            ]
+        })
+        .collect()
 }
 
 /// One plaintext vector.
@@ -479,28 +793,30 @@ pub fn build_vector(spec: &VectorSpec) -> Built {
         spec.display,
         &spec.layers,
         &LayerOptions {
-            block_size: spec.block_size,
+            layers_per_chunk: spec.layers_per_chunk,
             use_dict: spec.use_dict,
             dict_samples_bytes: spec.dict_samples_bytes,
             split_layers: &spec.split_layers,
             force_run_count_zero: &spec.force_run_count_zero,
+            omit_content_size: spec.omit_content_size,
+            unused_zdic: spec.unused_zdic,
         },
     );
-    let chunks = content_chunks(spec, &enc);
+    let content = content_chunks(spec, &enc, None);
     let header_flags = if enc.multi_sector {
         FLAG_MULTI_SECTOR
     } else {
         0
     };
-    let (raw, layout) = container::build_file(&chunks, header_flags);
+    let (raw, layout) = container::build_file(&content.chunks, header_flags);
     let meta = vector_meta(
         spec,
         &enc,
-        &chunks,
+        &content,
         &raw,
         &layout,
         None,
-        Some(payload::payload_hashes(&chunks)),
+        Some(payload::payload_hashes(&content.chunks)),
     );
     Built { raw, meta, layout }
 }
@@ -523,6 +839,9 @@ pub struct CryptoSpec<'a> {
     pub password_trim: usize,
     pub machine_roles: &'a [Role],
     pub session_key: Option<[u8; 32]>,
+    /// Seal every `LAYR` frame under unit index 0 instead of the directory index
+    /// of the chunk that carries it (spec 9.3).
+    pub bad_unit_index: bool,
 }
 
 impl<'a> Default for CryptoSpec<'a> {
@@ -534,6 +853,7 @@ impl<'a> Default for CryptoSpec<'a> {
             password_trim: 0,
             machine_roles: &[],
             session_key: None,
+            bad_unit_index: false,
         }
     }
 }
@@ -547,11 +867,13 @@ pub fn build_encrypted_vector(spec: &VectorSpec, crypto_spec: &CryptoSpec) -> Bu
         spec.display,
         &spec.layers,
         &LayerOptions {
-            block_size: spec.block_size,
+            layers_per_chunk: spec.layers_per_chunk,
             use_dict: spec.use_dict,
             dict_samples_bytes: spec.dict_samples_bytes,
             split_layers: &spec.split_layers,
             force_run_count_zero: &[],
+            omit_content_size: spec.omit_content_size,
+            unused_zdic: false,
         },
     );
 
@@ -626,14 +948,6 @@ pub fn build_encrypted_vector(spec: &VectorSpec, crypto_spec: &CryptoSpec) -> Bu
         }
     }
 
-    let chunks = content_chunks(spec, &enc);
-    let sealed = crypto::seal_content_chunks(
-        chunks.clone(),
-        &enc.frames,
-        &enc.uncompressed_sizes,
-        &session_key,
-        crypto_spec.cipher_id,
-    );
     let auth = Chunk::new(
         b"AUTH",
         crypto::auth_payload(
@@ -643,11 +957,11 @@ pub fn build_encrypted_vector(spec: &VectorSpec, crypto_spec: &CryptoSpec) -> Bu
             &machine_sec,
         ),
     );
+    let content = content_chunks(spec, &enc, Some(auth));
 
-    // Section 3 lists PROF before AUTH.
-    let after = if spec.prof.is_some() { 3 } else { 2 };
-    let mut ordered = sealed;
-    ordered.insert(after, auth);
+    // The chunks are sealed once the AUTH chunk is in place, because a sealed
+    // LAYR frame's AAD is its chunk's directory index (spec 9.3).
+    let ordered = crypto::seal_content_chunks(content.chunks.clone(), &session_key, crypto_spec);
 
     let header_flags = FLAG_ENCRYPTED
         | if enc.multi_sector {
@@ -693,11 +1007,11 @@ pub fn build_encrypted_vector(spec: &VectorSpec, crypto_spec: &CryptoSpec) -> Bu
     let meta = vector_meta(
         spec,
         &enc,
-        &ordered,
+        &content,
         &raw,
         &layout,
         Some(json::obj(crypto_entries)),
-        Some(payload::payload_hashes(&chunks)),
+        Some(payload::payload_hashes(&content.chunks)),
     );
     Built { raw, meta, layout }
 }

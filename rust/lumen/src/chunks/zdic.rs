@@ -1,4 +1,4 @@
-//! The `ZDIC` chunk: the zstd dictionary shared by every `LAYR` block frame
+//! The `ZDIC` chunk: the zstd dictionary shared by every `LAYR` frame
 //! ([`spec/06-layer-data.md`] section 4.9).
 
 use crate::check::Check;
@@ -15,7 +15,7 @@ pub const ZDIC_DICTSIZE_MAX: usize = 112_640;
 pub struct ZstdDictionary {
     /// Layout version. `1` for this specification.
     pub zdic_version: u32,
-    /// The dictionary ID, which every block frame must report.
+    /// The dictionary ID, which every `LAYR` frame must report.
     pub dict_id: u32,
     /// Raw dictionary bytes, exactly as `ZDICT_trainFromBuffer` produced them.
     pub dict_bytes: Vec<u8>,

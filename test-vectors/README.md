@@ -10,7 +10,7 @@ LUMEN v1.0 and are validated against it.
 |------|----------|
 | `valid/*.lumen` | Files a conforming reader must accept |
 | `invalid/*.lumen` | Files a conforming reader must reject, each failing the check its manifest entry names |
-| `manifest.json` | Golden data for every vector: sizes, offsets, block table, per-layer hashes, Merkle root, CRC-32C, the timing a conforming reader must resolve for a sample of `(layer, sector)` points, and the credentials and parameters for encrypted vectors |
+| `manifest.json` | Golden data for every vector: sizes, offsets, the layer table, each `LAYR` chunk's frame and version, per-layer hashes, Merkle root, CRC-32C, the timing a conforming reader must resolve for a sample of `(layer, sector)` points, and the credentials and parameters for encrypted vectors |
 | [`../rust/corpus-gen`](../rust/corpus-gen) | `make_vectors`: the reference encoder that regenerates the corpus from the specification |
 | [`../rust/corpus`](../rust/corpus) | `verify_vectors`: the independent reader and validator. `cross_check` points that same reader at files the reference crate wrote |
 
@@ -49,20 +49,22 @@ broken to parse is reported rather than crashed on.
 ## What is exact, and what is not
 
 The spec leaves two things to the encoder (section 5.6): the choice between
-grayscale REE and split REE for a layer, and the block size. It also mandates
-zstd, whose output bytes are not stable across versions, levels or builds.
+grayscale REE and split REE for a layer, and the number of layers a `LAYR` chunk
+covers. It also mandates zstd, whose output bytes are not stable across versions,
+levels or builds.
 
 So this corpus pins:
 
-- **Exactly** - the file header, `HDR`, `AUTH`, `LTBL`, the `LAYR` header and block
-  table, `LHAS`, every REE stream, the chunk directory and the trailer CRC-32C,
-  plus the decompressed bytes of every layer, the Merkle root over them, every
-  sealed unit (nonce, ciphertext and tag), and the plaintext payload bytes of every
-  `PROF`, `LROV`, `PREV`, `VOXL` and `EXTD` chunk (`chunk_payload_sha256` in the manifest;
-  `PREV` and `EXTD` are lists in file order).
+- **Exactly** - the file header, `HDR`, `AUTH`, the `LTBL` header and every 28-byte entry,
+  each `LAYR` chunk's version field, `LHAS`, every REE stream, the chunk directory and the
+  trailer CRC-32C, plus the decompressed bytes of every layer, the Merkle root over them,
+  every sealed unit (nonce, ciphertext and tag, whose associated data binds a `LAYR` frame to
+  the directory index of its chunk), and the plaintext payload bytes of every `PROF`, `LROV`,
+  `PREV`, `VOXL` and `EXTD` chunk (`chunk_payload_sha256` in the manifest; `LROV`, `PREV` and
+  `EXTD` are lists in file order).
 - **By property** - compressed payload bytes. The manifest records the
-  zstd version and level, the frame's dictionary ID and the decompressed
-  size; `verify_vectors` asserts those instead of byte equality.
+  zstd version and level, each frame's dictionary ID and declared content size;
+  `verify_vectors` asserts those instead of byte equality.
 
 Re-running `make_vectors` under a different zstd version may change
 `file_sha256`, the chunk sizes and the trailer CRC-32C. The uncompressed
@@ -72,135 +74,127 @@ nonce, salt and key is derived from a fixed seed (see *Test credentials*).
 
 ## Resolved timing
 
-Bytes are not the whole contract. §8 resolves one layer's settings from META, that sector's
-`SECT` definition, the bottom/transition blend and the `LROV` overrides, and §4.6 makes
-applying overrides mandatory for a reader: a printer that ignores them prints those layers at
-the wrong exposure, and nothing in the file says so afterwards. So every valid vector also
-carries `resolved_timing` in the manifest - for a sample of `(layer, sector)` points, the
-settings a conforming reader must resolve, field for field, as integers. Temperatures and the
-cure curve are not pinned: they pass through from META or a sector definition unblended, and
-this pins the pipeline that does the blending.
+Bytes are not the whole contract. §8 resolves one `(layer, sector)` pair's settings from META,
+that sector's `META.sectors` entry, the bottom/transition blend and the pair's own `LROV`
+chunk, and §4.6 makes applying overrides mandatory for a reader: a printer that ignores them
+prints those layers at the wrong exposure, and nothing in the file says so afterwards. So
+every valid vector also carries `resolved_timing` in the manifest - for a sample of
+`(layer, sector)` points, the settings a conforming reader must resolve, field for field, as
+integers. Temperatures and the cure curve are not pinned: they pass through from META or a
+sector's entry unblended, and this pins the pipeline that does the blending.
 
 The sample covers every branch rather than every layer, and each sector is sampled on the
-boundaries **it** resolves with: a `SECT` definition may carry its own
+boundaries **it** resolves with: a `META.sectors` entry may carry its own
 `bottom_layer_count`/`transition_layer_count`, and then that sector blends over a different
-range than META's ([§4.5](../spec/05-print-control.md#45-sect---sector-definition-chunk)). For
-each sector `s`, with `B_s` and `T_s` the counts that sector supplies or inherits and
-`N = total_layers`:
+range than META's ([§4.2](../spec/03-chunks.md#42-meta---metadata-chunk)). For each sector
+`s`, with `B_s` and `T_s` the counts that sector supplies or inherits and `N = total_layers`:
 
-- layers `{0, 1, B_s-1, B_s, B_s+T_s, N-1}`, each clamped into range, plus every layer an
-  `LROV` entry that can match `s` names or bounds and each of those layers' immediate
-  neighbours;
+- layers `{0, 1, B_s-1, B_s, B_s+T_s, N-1}`, each clamped into range, plus every layer that
+  has an `LROV` chunk for `s` and each of those layers' immediate neighbours;
 - the points for `s` are those layers at `s`, and the sample is the union over the sectors
-  `{0}`, every sector a `SECT` chunk defines, and every sector an `LROV` entry targets.
+  `{0}`, every sector `META.sectors` defines, and every sector an `LROV` chunk belongs to.
 
 So a vector's points include each sector's bottom range, first interpolation step, first
 fully-normal layer, last layer, and each override boundary next to the layer it does not
 reach.
 
-`layer-overrides` is the one to read first for the overrides: layer 2 carries an override, layers
-3 to 5 carry one scoped to sector 0 with a different pause, layers 6 to 8 carry one for every
-sector, and the neighbouring layers are left at META's values. `sector-blend-ranges` is the one
-for the ranges themselves, where META's bottom range ends at layer 2 and the sector 1 definition's
-ends at layer 5.
+`layer-overrides` is the one to read first for the overrides: seven `LROV` chunks cover layer
+2, a range of three layers written one chunk per layer, a second range and layer 4, which the
+first range covers as well - and because an override set belongs to the pair that names it,
+layer 4 keeps the range's exposure and gains only the single-layer chunk's wait.
+`sector-blend-ranges` is the one for the ranges themselves, where META's bottom range ends at
+layer 2 and sector 1's own ends at layer 5.
 
 ## Valid vectors
 
-| Vector | Layers | Blocks | Cipher / mode | Exercises |
+| Vector | Layers | Chunks | Cipher / mode | Exercises |
 |--------|--------|--------|---------------|-----------|
-| `binary-basic` | 6 | 3 | - | the empty-layer form, binary REE, grayscale REE, split REE, multi-block framing, single-sector layer data, and a bottom range whose motion, wait and PWM values differ from the normal ones: the bottom layers take the bottom-prefixed values verbatim, the transition layer blends them, and `light_pwm` switches to the normal value at the first non-bottom layer rather than blending |
-| `dict-multi-block` | 64 | 4 | - | `ZDIC`, dictionary-ID agreement across every block frame, four-block framing, split and grayscale REE at scale |
-| `multi-sector` | 4 | 2 | - | `MULTI_SECTOR`, the per-layer sector varint framing, per-layer sector tags, the partition invariant, a layer with a single active sector inside a multi-sector file, an empty layer |
-| `encrypted-password` | 32 | 2 | AES-256-GCM, password | the `AUTH` chunk and its fixed 65-byte password section, Argon2id and AES-256-KW unwrapping to the session key, a sealed dictionary, sealed metadata, two blocks of individually sealed layer frames with their per-block AAD, and dictionary-ID agreement across sealed frames |
-| `encrypted-machine` | 4 | 1 | ChaCha20-Poly1305, machine binding | three recipient entries, matching by `machine_fp` without contacting the other recipients, X25519 and HKDF-SHA-256 and AES-256-KW unwrapping, the low-order-point entry that must be rejected, the second cipher, a single sealed block |
-| `encrypted-both` | 6 | 3 | AES-256-GCM, both modes | mode bits 0 and 1 in one `AUTH`, one session key wrapped both ways, sealed `SECT` and sealed layer frames in a multi-sector file |
-| `print-profile` | 4 | 2 | AES-256-GCM, password | a sealed `PROF`: profile identity and UUID, a material library, and a `settings` block reusing META's field names, including the experimental cure curve and the exposure and wait times as integer milliseconds |
-| `layer-overrides` | 10 | 2 | - | `LROV` with four entries: a single layer, an inclusive `layer_range` scoped to sector 0, a range that applies to every sector, and a second entry on a layer the range already matches, so those two fold field by field rather than the later replacing the earlier. A conforming reader MUST apply them ([§4.6](../spec/05-print-control.md#46-lrov---layer-override-chunk)) |
-| `previews` | 4 | 2 | AES-256-GCM, password | two `PREV` chunks in one file - a large preview in the clear and a sealed icon - with the role in the descriptor's flags. Preview sealing is optional even when the file is encrypted |
-| `embedded-scene` | 4 | 2 | AES-256-GCM, password | a sealed `VOXL` chunk: an embedded scene is copied in and must come back out unchanged, while LUMEN itself never parses it |
-| `extensions` | 4 | 2 | - | two non-critical `EXTD` chunks - a reserved ORA type code and a vendor extension - pinning the frame, the `vendor_id` field and the `critical` bit, and the rule that readers skip extensions they do not implement |
-| `sector-blend-ranges` | 10 | 2 | - | per-sector blend ranges: a `SECT` definition carrying its own `bottom_layer_count` and inheriting META's transition count, so the two sectors sit in different stages on the same layer. Layer 4 is fully normal at 2500 ms for sector 0 and still in the bottom range at 30000 ms for sector 1, and their transition steps land on layers 2 and 5 rather than together ([§4.5](../spec/05-print-control.md#45-sect---sector-definition-chunk)) |
-
-The encrypted vectors also pin the two encryption flags that the spec assigns
-different bit numbers: the file header's bit 3 (`ENCRYPTED`, "an `AUTH` chunk is
-present") and the chunk descriptor's bit 4 ("this payload is sealed"). `HDR`,
-`AUTH`, `LTBL` and the LAYR header and block table carry neither.
+| `binary-basic` | 6 | 3 | - | Six layers over one sector covering the empty-layer form, binary REE, grayscale REE and split REE, in three LAYR chunks of two layers each with no dictionary, over a bottom range whose motion, wait and PWM values differ from the normal ones: the bottom layers take the bottom-prefixed values verbatim, the transition layer blends them, and light_pwm switches to the normal value at the first non-bottom layer instead of blending. |
+| `dict-multi-block` | 64 | 4 | - | 64 layers with a trained ZDIC dictionary, in four LAYR chunks of sixteen layers each, every frame carrying the dictionary's id. |
+| `multi-sector` | 4 | 4 | - | Four layers with two non-overlapping sectors, the second defined by META.sectors: layer 2 carries no data at all and is the empty layer, its single sector-0 entry holding a zero length, and two LROV chunks override one layer of one sector each - sector 1 of layer 0 and sector 0 of layer 1 - so the timing of a point is the timing of that point and not of its layer. |
+| `sector-blend-ranges` | 10 | 4 | - | Ten layers over two sectors whose META.sectors entry for sector 1 carries bottom_layer_count 5 and no transition_layer_count, so sector 1 is blended over a bottom range of its own and inherits META's transition count; layer 4 is the layer where the two readings part, fully normal at 2500 ms for sector 0 and still a bottom layer at 30000 ms for sector 1, and their transition steps fall on layers 2 and 5 rather than together. |
+| `encrypted-password` | 32 | 2 | AES-256-GCM, password | Password-mode AES-256-GCM: an Argon2id-wrapped session key, a sealed dictionary and metadata, and two LAYR chunks whose frames are sealed one by one under the directory index of the chunk that carries each. |
+| `encrypted-machine` | 4 | 1 | ChaCha20-Poly1305, machine binding | Machine-mode ChaCha20-Poly1305 with three recipient entries: a foreign machine, a decoy entry for our own fingerprint whose ephemeral key is the low-order point, and the real entry. A reader that unwraps the decoy without rejecting the all-zero shared secret recovers a different session key and cannot decrypt the file. |
+| `encrypted-both` | 6 | 6 | AES-256-GCM, password, machine binding | Both wrapping modes set in one AUTH chunk, with two sectors whose frames are sealed one by one, each under the directory index of the chunk that carries it. |
+| `print-profile` | 4 | 2 | AES-256-GCM, password | Password-mode AES-256-GCM with a sealed PROF chunk: profile identity, a material library, and a settings block reusing META's field names, including the experimental cure curve. |
+| `layer-overrides` | 10 | 2 | - | Ten layers of one sector with seven LROV chunks: a single layer, a range of three layers written as one chunk per layer, a second range, and layer 4, which the first range covers too. An override set belongs to exactly one (layer, sector) - the entry that names the chunk is the only thing that places it - so nothing folds: layer 4 resolves to the values of its own set, which keeps the range's exposure and wait while taking the single-layer chunk's wait after the lift. |
+| `previews` | 4 | 2 | AES-256-GCM, password | Password-mode AES-256-GCM with two PREV chunks: a large preview in the clear and a sealed icon. Preview sealing is optional even when the file is encrypted, so both forms are valid in the same file. |
+| `embedded-scene` | 4 | 2 | AES-256-GCM, password | Password-mode AES-256-GCM with a sealed VOXL chunk: the scene bytes are copied in and must come back out unchanged, while LUMEN itself never parses them. |
+| `extensions` | 4 | 2 | - | Two non-critical EXTD chunks - one reserved ORA type code and one vendor extension - exercising the frame, the vendor id and critical flag bit, and the rule that readers skip extensions they do not implement. |
 
 ## Invalid vectors
 
-`expected_failure` is the check name that must fail, and it must be the **first** check
-to fail. For almost every vector it is the only failure. Where a defect necessarily
-unsatisfies a dependent rule as well - an `EXTD` payload too short to hold an `ext_type`
-cannot satisfy the type rule either - the advertised check still has to come first, and
-`verify_vectors` enforces exactly that.
-
-Except for `trailer-crc-mismatch`, every file carries a deliberately introduced defect
-and a recomputed trailer CRC-32C, so a reader reaches the intended check rather than
-stopping at the file-completeness check first.
-
 | Vector | Defect | Expected failure |
 |--------|--------|------------------|
-| `empty-layer-with-bytes` | `LTBL` entry 0 has `sector_count == 0` but `data_size == 2` | `ltbl.empty_layer_no_bytes` |
-| `run-count-zero-all-black` | an all-black layer uses the non-canonical tag `0x00` / `run_count == 0` form | `ree.no_run_count_zero` *(strict)* |
-| `block-index-out-of-range` | `LTBL` entry 1 names block 99 of 3 | `ltbl.block_index_in_range` |
-| `block-table-gap` | a one-byte gap between block 0's frame end and block 1's `frame_offset` | `layr.block_table_contiguous` |
-| `merkle-root-mismatch` | one byte of `merkle_root` flipped | `lhas.root_recompute` |
-| `layer-hash-mismatch` | layer 0's stored leaf altered, `merkle_root` recomputed to match | `lhas.leaf_match` *(strict)* |
-| `layer-range-past-block` | `LTBL` entry 2 claims a `data_size` past its block's decompressed size | `ltbl.offsets_within_block` |
-| `trailer-crc-mismatch` | the trailer CRC-32C does not match the file bytes | `trailer.crc32c` |
-| `meta-exposure-fractional` | `META.normal_exposure_ms` is `2500.5` | `meta.time_integer` |
-| `encrypted-flag-without-auth` | the header sets `ENCRYPTED` and there is no `AUTH` chunk | `presence.auth` |
-| `auth-cipher-unknown` | `AUTH.cipher_id` is `XXXX` | `auth.cipher_known` |
-| `crypt-mode-empty` | `AUTH.mode` is 0, so neither wrapping method is declared | `crypt.mode_empty` |
-| `crypt-password-len-short` | a password section of 64 bytes, one short of the fixed size | `crypt.password_section_len` |
-| `crypt-machine-len-empty` | machine mode with an empty machine section | `crypt.machine_section_len` |
-| `crypt-argon2-budget` | a coherent password section declaring Argon2id `iterations = 99`, past the ceiling of 10 | `crypt.argon2_budget` |
-| `crypt-plaintext-content` | `ZDIC`'s descriptor does not set the encrypted flag although the file is encrypted | `crypt.chunk_flags` |
-| `sealed-without-auth` | `META`'s descriptor sets the encrypted flag although the file has no `AUTH` chunk, so no key exists | `crypt.chunk_flags` |
-| `crypt-tag-corrupt` | one ciphertext byte of LAYR block 0 flipped, which its tag must reject | `crypt.tag_verify` |
-| `prof-type-unknown` | `PROF.profile_type` is `"resin"` | `prof.profile_type` |
-| `prof-identity-empty` | `PROF.profile_name` is empty | `prof.profile_identity` |
-| `prof-settings-exposure` | `PROF` settings carry `normal_exposure_ms = 0` | `prof.settings_exposure` |
-| `prof-settings-layer-height` | `PROF` settings carry a zero layer height | `prof.settings_layer_height` |
-| `prof-cure-curve` | `PROF` cure curve has `dp_um = 0.0` | `prof.cure_curve` |
-| `prof-uuid-malformed` | `PROF.profile_uuid` is not a UUID | `prof.profile_uuid` |
-| `prof-materials-shape` | `PROF.materials` is an empty array | `prof.materials_shape` |
-| `lrov-entry-form-both` | an `LROV` entry carries both `layer` and `layer_range` | `lrov.entry_form` |
-| `lrov-layer-out-of-range` | an `LROV` entry overrides layer 40 of a ten-layer file | `lrov.layer_index_range` |
-| `lrov-range-reversed` | an `LROV` `layer_range` ends before it begins | `lrov.layer_range_order` |
-| `lrov-sector-undefined` | an `LROV` entry targets a sector no `SECT` defines | `lrov.sector_id_defined` |
-| `lrov-wait-fractional` | an `LROV` entry carries `wait_time_before_cure_ms = 500.5` | `lrov.time_integer` |
-| `prev-flags` | a `PREV` chunk sets reserved flag bit 5 alongside its role | `prev.flags` |
-| `prev-not-png` | a `PREV` payload does not begin with the PNG signature | `prev.png_signature` *(strict)* |
-| `voxl-not-voxl` | the embedded scene is a JSON array, so the payload begins with neither the V2 magic nor the V1 document marker | `voxl.signature` *(strict)* |
-| `extd-critical` | an `EXTD` chunk sets the `critical` bit on an extension no reader implements | `extd.critical` |
-| `extd-truncated` | an `EXTD` payload is four bytes, too short for `ext_version` and `ext_type` | `extd.frame` |
-| `extd-reserved-flags` | an `EXTD` chunk sets reserved flag bit 0 | `extd.flags` |
-| `extd-type-nonascii` | an `EXTD` `ext_type` is four non-ASCII bytes | `extd.ext_type` |
-
-Four vectors are marked *(strict)*: the defect is invisible to a loose-mode reader
-(section 11.5) and must only be caught by a strict-mode validator. The manifest
-records this as `strict_only`, and `verify_vectors` asserts that a loose-mode
-reader accepts them — so the corpus pins the loose/strict distinction itself, not
-just the checks.
-
-`crypt-argon2-budget` is the one invalid vector a reader *could* decrypt: its
-password section is coherent, and only the cost ceiling refuses it. A validator must
-not attempt a derivation it has already rejected, which is why the file also pins
-that the refusal happens before any crypto work.
+| `ltbl-entry-count` | LTBL's entry_count says seven while the table holds six entries, so the table does not end where the header says it does. | `ltbl.entry_count` |
+| `ltbl-entry-count-overrun` | The last entry claims one further entry for its layer, so the sum of 1 + additional_sector_count over the layers' first entries runs one past the table the header declares. | `ltbl.entry_count` |
+| `ltbl-sector-ids-descending` | Layer 0 carries sectors 0, 1 and 2, and its last two entries are written in the order 0, 2, 1: the ids descend where the table requires them to ascend. | `ltbl.sector_ids_ascending` |
+| `ltbl-sector-id-duplicate` | Layer 0's two entries both name sector 0, so the layer carries one sector twice instead of two sectors once. | `ltbl.sector_id_unique` |
+| `ltbl-first-entry-not-sector-zero` | Layer 1's only entry names sector 3. Sector 0 is primary and implicitly present on every layer with data, so a layer's first entry is sector 0's. | `ltbl.first_entry_is_sector_zero` |
+| `ltbl-first-layr-not-layr` | Entry 0 names directory index 2, which is the LTBL chunk itself, so the slice has no frame to be read out of. | `ltbl.first_layr_in_range` |
+| `ltbl-offset-past-frame` | Entry 1 claims 0x00FFFFFF bytes even though it is the last slice of the frame it names, so its end lies past the frame's decompressed output. | `ltbl.offset_within_chunk` |
+| `ltbl-slices-overlap` | Entries 2 and 3 are two slices of one frame and both now start at offset 0, so layers 2 and 3 would be read out of the same bytes. | `ltbl.slices_disjoint` |
+| `ltbl-first-lrov-zero` | Layer 2's entry names no LROV chunk although the file carries one for that point: first_lrov is 0 exactly when a (layer, sector) has no overrides. Because an LROV payload carries no identity, that chunk is now unreachable - this file violates lrov.orphan as well, and the check order decides which is reported. | `ltbl.first_lrov_null` |
+| `ltbl-first-lrov-not-lrov` | Entry 0 names directory index 2, which is the LTBL chunk, as the override set of its point, so the entry points at a chunk that carries no overrides. | `ltbl.first_lrov_in_range` |
+| `lrov-shared-chunk` | Entry 0 names the same LROV chunk as layer 2's entry, so one override set is claimed by two points at once. The payload carries no layer and no sector, so a reader cannot tell which of the two it belongs to - it would have to apply layer 2's override to layer 0 as well, or ignore one of them. | `lrov.orphan` |
+| `lrov-orphan-chunk` | The file carries an LROV chunk that no entry names. An LROV payload carries no layer and no sector - the entry that names the chunk is what places it - so these overrides can never be applied to anything, and a reader that silently ignores them prints the wrong timings. | `lrov.orphan` |
+| `lrov-not-json` | An LROV payload is truncated JSON, so the override set cannot be read at all. | `lrov.json` |
+| `lrov-wait-fractional` | An LROV payload carries wait_time_before_cure_ms = 500.5. A wait time is a whole number of milliseconds, so a fractional value is not a duration this format can express. | `lrov.time_integer` |
+| `run-count-zero-all-black` | Layer 0 stores all-black as tag 0x00 with run_count 0 instead of the empty-layer form. | `ree.no_run_count_zero` *(strict)* |
+| `layr-container-version` | A LAYR container declares version 2, which no reader implements; the frame behind it is well formed, so only the version refuses the file. | `layr.version` |
+| `layr-content-size-absent` | The LAYR frames are compressed without their content size. A writer MUST declare it (spec 4.10), because the descriptor's size_uncompressed is the container's length and the reader has nothing else to size the frame's output from. | `layr.content_size_present` |
+| `layr-frame-size-lie` | The first LAYR frame's header declares one byte more than the frame decompresses to, so its output cannot be allocated or checked against the declaration. | `layr.frame_decompressed_size` |
+| `layr-frame-corrupt` | The first block header of the first LAYR frame is rewritten to the reserved block type 3, so the frame cannot be decompressed. | `layr.frame_decompressed_size` |
+| `layr-dict-id-mismatch` | ZDIC.dict_id is rewritten while the frames keep the id of the dictionary they were compressed with, so every LAYR frame disagrees with the file's dictionary. | `layr.dict_id_match` |
+| `layr-dict-id-without-zdic` | The frames are compressed with a trained dictionary but the file carries no ZDIC chunk, so their dictionary ids name a dictionary no reader can find. | `layr.dict_id_absent` |
+| `crypt-unit-index-binding` | Every sealed LAYR frame is bound to unit index 0 instead of the directory index of the chunk that carries it. Each frame is intact, but a reader that authenticates it under the chunk's own index must refuse the file - which is what stops a ciphertext from being swapped between two LAYR chunks, since with one unit per chunk an all-zero index would authenticate in either place. | `crypt.unit_index_binding` |
+| `ltbl-layer-index-range` | Layer 1's entry claims one further entry, so the walk takes layer 1 and layer 2 for one layer and reaches layer 2 of a four-layer file; the entries no longer cover every layer the header declares. The merged layer also holds sector 0 twice, which is what the entries it swallowed carry. | `ltbl.layer_index_range` |
+| `layr-allocation-bound` | The file's only LAYR frame declares a decompressed size of 2147483647 bytes, some four thousand times what the slices pointing into it could hold, so a reader that sizes its buffer from the declaration allocates two gigabytes for a layer group of a 64 by 48 display. | `layr.allocation_bound` |
+| `presence-zdic-unused` | The file carries a ZDIC chunk while every LAYR frame declares no dictionary (dictionary id 0), so the dictionary is present but nothing in the file refers to it. | `presence.zdic` |
+| `meta-sectors-shape` | META.sectors has two entries with sector_id 1, so the sector's timing is defined twice over. | `meta.sectors_shape` |
+| `meta-sector-material-index` | META.sectors[0].material_index is 3 while META.materials holds one entry, so the sector names a material that is not there. | `meta.sector_material_index` |
+| `merkle-root-mismatch` | One byte of merkle_root is flipped, so recomputation from layer_hashes disagrees. | `lhas.root_recompute` |
+| `layer-hash-mismatch` | Layer 0's stored leaf hash is altered and merkle_root recomputed to match, so only hashing the actual bytes catches it. | `lhas.leaf_match` *(strict)* |
+| `multi-sector-flag-clear` | The file's layers carry two sectors but the header does not set MULTI_SECTOR, so a reader that trusts the flag prints one sector per layer and never notices the rest. | `hdr.multi_sector_flag` |
+| `multi-sector-flag-set` | No layer of the file carries more than one sector, but the header sets MULTI_SECTOR, so the flag promises a structure the file does not have. | `hdr.multi_sector_flag` |
+| `trailer-crc-mismatch` | The trailer CRC-32C does not match the file bytes. | `trailer.crc32c` |
+| `meta-exposure-fractional` | META carries normal_exposure_ms = 2500.5. Durations are exact whole milliseconds, so a fractional value is not a duration this format can express. | `meta.time_integer` |
+| `encrypted-flag-without-auth` | The file header sets ENCRYPTED but there is no AUTH chunk, so no session key can ever be derived. | `presence.auth` |
+| `auth-cipher-unknown` | AUTH.cipher_id is XXXX, which names no algorithm. | `auth.cipher_known` |
+| `crypt-mode-empty` | AUTH.mode is 0: neither a password nor a machine binding is declared, so the session key is unreachable. | `crypt.mode_empty` |
+| `crypt-argon2-budget` | The password section declares Argon2id iterations = 99, above the recommended ceiling of 10; it is otherwise coherent, so only the cost rule refuses it. | `crypt.argon2_budget` |
+| `crypt-password-len-short` | AUTH declares a 64-byte password section, one byte short of the fixed section size. | `crypt.password_section_len` |
+| `crypt-machine-len-empty` | AUTH.mode sets machine-binding but the machine section is empty: no recipient can ever unwrap the session key. | `crypt.machine_section_len` |
+| `crypt-plaintext-content` | ZDIC's descriptor does not set the encrypted flag although the file is encrypted; its bytes are sealed regardless, so the flag is the only disagreement. | `crypt.chunk_flags` |
+| `crypt-tag-corrupt` | One ciphertext byte of the first sealed LAYR frame is flipped, so its AEAD tag must fail; a reader must not decompress or parse a frame it cannot authenticate. | `crypt.tag_verify` |
+| `prof-type-unknown` | PROF.profile_type is "resin", which is not one of the three defined types. | `prof.profile_type` |
+| `prof-identity-empty` | PROF.profile_name is an empty string. | `prof.profile_identity` |
+| `prof-settings-exposure` | PROF settings carry a zero normal exposure. | `prof.settings_exposure` |
+| `prof-settings-layer-height` | PROF settings carry a zero layer height. | `prof.settings_layer_height` |
+| `prof-cure-curve` | PROF cure curve has dp_um = 0.0, which no resin can have. | `prof.cure_curve` |
+| `prof-uuid-malformed` | PROF.profile_uuid is not a UUID. | `prof.profile_uuid` |
+| `prof-materials-shape` | PROF.materials is an empty array, which the META.materials shape rules forbid. | `prof.materials_shape` |
+| `prev-flags` | A PREV chunk sets reserved flag bit 5 alongside role 1; only bits 0-3 carry the role. | `prev.flags` |
+| `prev-not-png` | A PREV payload does not begin with the PNG signature. A loose reader ignores previews and must still accept the file; a strict validator rejects it. | `prev.png_signature` *(strict)* |
+| `voxl-not-voxl` | The embedded scene is a JSON array rather than a VOXL document: the payload begins with neither the V2 magic nor the V1 document marker. A loose reader never looks inside the chunk and must still accept the file; a strict validator rejects it. | `voxl.signature` *(strict)* |
+| `extd-critical` | An extension sets the critical bit, so a reader that does not implement it must refuse the file rather than print an approximation. | `extd.critical` |
+| `extd-truncated` | An EXTD payload is four bytes, too short to carry ext_version and ext_type. | `extd.frame` |
+| `extd-reserved-flags` | An EXTD chunk sets reserved flag bit 0, which must be 0. | `extd.flags` |
+| `extd-type-nonascii` | An EXTD ext_type is four non-ASCII bytes, so no reader can name the extension. | `extd.ext_type` |
+| `sealed-without-auth` | META's descriptor sets the encrypted bit while the file header does not, so the file carries no AUTH chunk and no key could open it. | `crypt.chunk_flags` |
 
 ## Check names
 
 Checks are named `<group>.<rule>`, mirroring section 11:
-`trailer.*`, `header.*`, `dir.*`, `chunk.*`, `presence.*`, `hdr.*`, `auth.*`,
-`meta.*`, `sect.*`, `prof.*`, `lrov.*`, `prev.*`, `voxl.*`, `extd.*`, `ltbl.*`,
+`trailer.*`, `header.*`, `dir.*`, `presence.*`, `hdr.*`, `auth.*`,
+`meta.*`, `prof.*`, `lrov.*`, `prev.*`, `voxl.*`, `extd.*`, `ltbl.*`,
 `layr.*`, `zdic.*`, `lhas.*`, `ree.*`, `sector.*`, `crypt.*`.
 
-Every `*_ms` duration is checked by the chunk that carries it: `meta.time_integer`,
-`sect.time_integer`, `prof.settings_time_integer` and `lrov.time_integer`. A
-duration with a fractional part is a type violation rather than a precision
-problem, so none of the four is strict-only: a loose reader rejects it too
-(section 11.5).
+Every `*_ms` duration is checked by the chunk that carries it: `meta.time_integer`
+(which also covers the durations in `META.sectors`), `prof.settings_time_integer`
+and `lrov.time_integer`. A duration with a fractional part is a type violation
+rather than a precision problem, so none of them is strict-only: a loose reader
+rejects it too (section 11.5).
 
 Implementations are encouraged to use the same names when reporting which rule
 failed. Use them verbatim as `expected_failure` when adding vectors.
@@ -264,8 +258,9 @@ decrypt the file at all. Only entry 2 recovers the real key.
   `encrypted-password`, which use 256×192 (49 152 pixels) so that the zstd
   dictionary has enough sample data to train on. Display size is irrelevant to
   every rule the vectors exercise.
-- `LROV` entries carry exactly one of `layer` or `layer_range`; the corpus pins that
-  form. A `PREV` chunk carries its role in its descriptor's flag bits 0-3, with bits
+- An `LROV` chunk belongs to exactly one `(layer, sector)`: the layer table entry that names
+  it is what places it, and the payload carries no layer and no sector of its own. A `PREV`
+  chunk carries its role in its descriptor's flag bits 0-3, with bits
   5-31 reserved, and there may be several `PREV` chunks in a file.
 - `EXTD` is pinned at the frame level: `ext_version`, `ext_type`, the `vendor_id` field
   and the `critical` bit, plus the rule that a reader must refuse a critical extension it

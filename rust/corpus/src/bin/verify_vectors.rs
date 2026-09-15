@@ -65,7 +65,13 @@ fn main() -> ExitCode {
                 return ExitCode::from(1);
             }
         };
-        let comparison = check_manifest(vector, &path, checks.payloads(), checks.timing_inputs());
+        let comparison = check_manifest(
+            vector,
+            &path,
+            checks.payloads(),
+            checks.layers(),
+            checks.timing_inputs(),
+        );
         if verbose {
             checks.print_verbose();
             comparison.timing.print_verbose();

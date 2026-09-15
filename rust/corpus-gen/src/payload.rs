@@ -1,23 +1,35 @@
-//! Chunk payload builders: the bytes of HDR, META, SECT, PROF, LROV, LTBL, LHAS,
+//! Chunk payload builders: the bytes of HDR, META, PROF, LROV, LTBL, LHAS,
 //! ZDIC, LAYR, VOXL and EXTD before any of it is compressed or sealed.
 
 use std::collections::BTreeMap;
 
 use serde_json::Value;
 
-use crate::container::{Chunk, BLOCK_TABLE_ENTRY_SIZE, LTBL_ENTRY_SIZE};
+use crate::container::{Chunk, LAYR_VERSION, LTBL_ENTRY_SIZE};
 use crate::hash;
 use crate::json;
 use crate::obj;
 use crate::CREATED_UNIX_SEC;
 
-/// One entry of the layer table: where a layer's bytes live inside a block.
+/// One entry of the layer table (spec 4.9): one `(layer, sector)`'s slice.
 #[derive(Clone, Copy)]
 pub struct LayerEntry {
-    pub block_index: u32,
+    /// The layer this entry belongs to.
+    pub layer: u32,
+    /// The sector the slice belongs to; 0 is primary.
+    pub sector_id: u32,
+    /// The slice's length; 0 for a sector the layer carries no data for.
+    pub data_size: u32,
+    /// The directory index of the `(layer, sector)`'s `LROV` chunk, or 0 when it
+    /// has no overrides.
+    pub first_lrov: u32,
+    /// The directory index of the `LAYR` chunk whose frame holds the slice.
+    pub first_layr: u32,
+    /// Further entries for this layer after this one; non-zero only on a layer's
+    /// first entry.
+    pub additional_sector_count: u32,
+    /// The slice's offset inside `first_layr`'s decompressed frame.
     pub data_offset: u64,
-    pub data_size: u64,
-    pub sector_count: u32,
 }
 
 /// The file header's fields (spec 3.1).
@@ -100,8 +112,9 @@ pub fn meta_value(overrides: &[(&str, Value)]) -> Value {
     )
 }
 
-/// One `SECT` definition (spec 4.5), as the object its chunk carries.
-pub fn sect_value(sector_id: u32, name: &str, exposure_ms: u32) -> Value {
+/// One `META.sectors` entry (spec 4.2): a non-zero sector's identity and the
+/// timing it resolves with, both inherited per field from META.
+pub fn sector_value(sector_id: u32, name: &str, exposure_ms: u32) -> Value {
     obj![
         "sector_id" => sector_id,
         "name" => name,
@@ -110,17 +123,21 @@ pub fn sect_value(sector_id: u32, name: &str, exposure_ms: u32) -> Value {
     ]
 }
 
-/// LTBL (spec 4.9): one 20-byte entry per layer.
-pub fn ltbl(entries: &[LayerEntry]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(12 + entries.len() * LTBL_ENTRY_SIZE);
+/// LTBL (spec 4.9): the header, then one 28-byte entry per `(layer, sector)`, the
+/// entries of a layer adjacent and that layer's first entry naming sector 0.
+pub fn ltbl(entries: &[LayerEntry], layer_count: u32) -> Vec<u8> {
+    let mut out = Vec::with_capacity(16 + entries.len() * LTBL_ENTRY_SIZE);
     out.extend_from_slice(&1u32.to_le_bytes());
-    out.extend_from_slice(&(entries.len() as u32).to_le_bytes());
+    out.extend_from_slice(&layer_count.to_le_bytes());
     out.extend_from_slice(&(LTBL_ENTRY_SIZE as u32).to_le_bytes());
+    out.extend_from_slice(&(entries.len() as u32).to_le_bytes());
     for entry in entries {
+        out.extend_from_slice(&entry.data_size.to_le_bytes());
+        out.extend_from_slice(&entry.first_lrov.to_le_bytes());
+        out.extend_from_slice(&entry.first_layr.to_le_bytes());
+        out.extend_from_slice(&entry.additional_sector_count.to_le_bytes());
         out.extend_from_slice(&entry.data_offset.to_le_bytes());
-        out.extend_from_slice(&entry.block_index.to_le_bytes());
-        out.extend_from_slice(&(entry.data_size as u32).to_le_bytes());
-        out.extend_from_slice(&entry.sector_count.to_le_bytes());
+        out.extend_from_slice(&entry.sector_id.to_le_bytes());
     }
     out
 }
@@ -148,25 +165,15 @@ pub fn zdic(dict_bytes: &[u8], dict_id: u32) -> Vec<u8> {
     out
 }
 
-/// LAYR (spec 4.10): header, block table, then the frames back to back.
-pub fn layr(frames: &[Vec<u8>], uncompressed_sizes: &[usize]) -> Vec<u8> {
-    let mut table = Vec::with_capacity(frames.len() * BLOCK_TABLE_ENTRY_SIZE);
-    let mut offset = 0u64;
-    for (frame, &uncompressed) in frames.iter().zip(uncompressed_sizes) {
-        table.extend_from_slice(&offset.to_le_bytes());
-        table.extend_from_slice(&(frame.len() as u64).to_le_bytes());
-        table.extend_from_slice(&(uncompressed as u64).to_le_bytes());
-        offset += frame.len() as u64;
-    }
-
-    let mut out = Vec::with_capacity(12 + table.len() + offset as usize);
-    out.extend_from_slice(&1u32.to_le_bytes());
-    out.extend_from_slice(&(frames.len() as u32).to_le_bytes());
-    out.extend_from_slice(&(BLOCK_TABLE_ENTRY_SIZE as u32).to_le_bytes());
-    out.extend_from_slice(&table);
-    for frame in frames {
-        out.extend_from_slice(frame);
-    }
+/// LAYR (spec 4.10): the version field, then the chunk's single zstd frame.
+///
+/// One chunk carries one frame - the concatenation of a sector's layer data for
+/// one group of layers - so the container is the version field and the frame and
+/// nothing else.
+pub fn layr(frame: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(4 + frame.len());
+    out.extend_from_slice(&LAYR_VERSION.to_le_bytes());
+    out.extend_from_slice(frame);
     out
 }
 
@@ -279,10 +286,14 @@ pub fn prof(settings_extra: ProfSettings, overrides: ProfOverrides) -> Vec<u8> {
     json::dumps(&profile)
 }
 
-/// LROV (spec 4.6): the entries in file order, which is the order a reader
-/// folds them in.
-pub fn lrov(overrides: &[Value]) -> Vec<u8> {
-    json::dumps(&obj!["overrides" => Value::Array(overrides.to_vec())])
+/// LROV (spec 4.6): one `(layer, sector)`'s timing deltas, as the JSON object the
+/// chunk carries.
+///
+/// The point the chunk belongs to is not in the payload: the entry that names
+/// this chunk is what places it, so an override set can never disagree with the
+/// layer table about who it applies to.
+pub fn lrov(fields: &[(&str, Value)]) -> Vec<u8> {
+    json::dumps(&json::obj(fields.to_vec()))
 }
 
 /// VOXL (spec 4.12): a minimal V1 scene document.
@@ -341,14 +352,17 @@ pub fn extd(spec: Extd) -> (Vec<u8>, u32) {
 
 /// SHA-256 of each PROF/LROV/PREV/VOXL/EXTD plaintext payload, as the manifest
 /// records it: a digest for the singletons, a list for the repeatable ones.
+///
+/// `LROV` repeats - one chunk per `(layer, sector)` with overrides - so it is a
+/// list, in file order.
 pub fn payload_hashes(chunks: &[Chunk]) -> Value {
     let mut single: BTreeMap<&'static str, String> = BTreeMap::new();
     let mut lists: BTreeMap<&'static str, Vec<String>> = BTreeMap::new();
     for chunk in chunks {
         let digest = hash::sha256_hex(&chunk.payload);
         match chunk.name() {
-            "PREV" | "EXTD" => lists.entry(chunk.name()).or_default().push(digest),
-            "PROF" | "LROV" | "VOXL" => {
+            "PREV" | "EXTD" | "LROV" => lists.entry(chunk.name()).or_default().push(digest),
+            "PROF" | "VOXL" => {
                 single.insert(chunk.name(), digest);
             }
             _ => {}

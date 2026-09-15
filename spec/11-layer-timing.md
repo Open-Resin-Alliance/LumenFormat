@@ -4,9 +4,14 @@
 
 ## 8. Per-Layer Settings Model
 
-The layer timing pipeline resolves as follows for each layer index `i`:
+The pipeline below resolves the settings of one `(layer, sector)` pair. A file resolves it per
+pair, not per layer: two sectors of the same layer can differ in every field, and each is
+blended over the ranges its own sector supplies.
 
-1. **Base values** from META (and SECT, if multi-sector).
+1. **Base values** from META. For a sector `>= 1`, its `META.sectors` entry replaces META's
+   value for every field that entry carries, so the base is META resolved field by field for
+   that sector ([§4.2](03-chunks.md#42-meta---metadata-chunk)). A sector with no entry - sector
+   0 among them - takes META as it stands.
 2. **Bottom/transition blending:** Layers `0 .. bottom_layer_count-1` use the
    bottom-prefixed values verbatim. For a layer `i` in the transition range
    `bottom_layer_count .. bottom_layer_count+transition_layer_count-1`, let
@@ -21,15 +26,18 @@ The layer timing pipeline resolves as follows for each layer index `i`:
    arithmetic end to end and `round` rounds half away from zero: a remainder of exactly
    half a unit rounds up in magnitude. No floating-point step remains in the pipeline, and
    nothing is rounded twice. Every quantity is an integer - the layer counts, `k`, `N` and
-   each interpolatable value - so two implementations given the same META, SECT and LROV
-   inputs derive the same value for every field of every layer. The first fully-normal
-   layer is `bottom_layer_count + transition_layer_count`, where `k = N` and the formula
+   each interpolatable value - so two implementations given the same META (its `sectors`
+   entries included) and `LROV` inputs derive the same value for every field of every
+   `(layer, sector)` pair. The first fully-normal layer is
+   `bottom_layer_count + transition_layer_count`, where `k = N` and the formula
    collapses to `normal_value` exactly.
 
-   `bottom_layer_count` and `transition_layer_count` here are the ones the layer's sector
-   resolves with: a `SECT` definition that carries either count replaces META's for that
-   sector, so two sectors in one file can be in different stages on the same layer
-   ([§4.5](05-print-control.md#45-sect---sector-definition-chunk)). A reader MUST NOT resolve
+   `bottom_layer_count` and `transition_layer_count` here are the ones this pair's sector
+   resolves with. A `META.sectors` entry that carries either count replaces META's for that
+   sector, and the pair is then blended over **its own** bottom and transition ranges: its
+   bottom range can be longer than META's, its transition steps land on different layers, and
+   two sectors in one file can be in different stages on the same layer
+   ([§4.2](03-chunks.md#42-meta---metadata-chunk)). A reader MUST NOT resolve
    the ranges once from META and apply them to every sector.
 
    Interpolatable values are exposure times, lift/retract distances and speeds, and wait
@@ -37,12 +45,14 @@ The layer timing pipeline resolves as follows for each layer index `i`:
    that field's interpolation a no-op. The values that do **not** interpolate are PWM and
    the layer counts: `light_pwm`/`bottom_light_pwm` switch to the normal value at the
    first non-bottom layer, and `bottom_layer_count` and `transition_layer_count` are
-   taken verbatim from META.
-3. **LROV overrides:** Any matching `layer` or `layer_range` entry in LROV overrides
-   the interpolated value for the sectors it targets (`sector_id` absent = all
-   sectors). The last matching entry wins per `(layer, sector)` pair. A conforming reader
+   taken verbatim from the base the sector resolves - META's, or a `META.sectors` entry's
+   where it carries them.
+3. **LROV overrides:** the pair's layer table entry names its `LROV` chunk, or `0` for none
+   ([§4.8](06-layer-data.md#48-ltbl---layer-table-chunk)). The fields that chunk carries
+   replace the interpolated values, field by field; a field it omits keeps the value the
+   sector resolved, and no second chunk competes with it. A conforming reader
    MUST apply them: a printer that cannot honor overrides refuses the file rather than
    print these layers at the wrong exposure ([§4.6](05-print-control.md#46-lrov---layer-override-chunk)).
 
 This models the existing bottom/normal/transition behavior while allowing arbitrary
-per-layer overrides.
+per-pair overrides.

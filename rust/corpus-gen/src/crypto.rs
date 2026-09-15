@@ -13,7 +13,7 @@ use x25519_dalek::{PublicKey, StaticSecret};
 
 use crate::container::{Chunk, FLAG_CHUNK_ENCRYPTED};
 use crate::hash;
-use crate::payload;
+use crate::vector::CryptoSpec;
 use crate::ZSTD_SMALL_LEVEL;
 
 /// The fixed seed every nonce, salt and key is derived from.
@@ -25,9 +25,8 @@ pub const MACHINE_INFO: &[u8] = b"LUMEN machine-binding v1\x00";
 /// Argon2id parameters: iterations, memory in KiB, parallelism.
 pub const DEFAULT_ARGON2: (u32, u32, u32) = (1, 8, 1);
 /// The chunk types sealed as single units (spec 9.1).
-pub const ENC_CONTENT_TYPES: [[u8; 4]; 7] = [
-    *b"LAYR", *b"META", *b"PROF", *b"SECT", *b"LROV", *b"VOXL", *b"ZDIC",
-];
+pub const ENC_CONTENT_TYPES: [[u8; 4]; 6] =
+    [*b"LAYR", *b"META", *b"PROF", *b"LROV", *b"VOXL", *b"ZDIC"];
 
 /// Deterministic test material, so the corpus regenerates byte for byte.
 ///
@@ -230,27 +229,33 @@ pub fn auth_payload(
 
 /// Seal every content chunk (spec 9.1).
 ///
-/// LAYR keeps its header and block table plaintext and seals each block frame
-/// separately, so per-block random access still works (spec 9.3).
+/// A `LAYR` chunk keeps its version field in the clear and seals its single frame,
+/// so the container stays parseable and the frame stays a unit (spec 9.3). Every
+/// other content chunk is sealed whole, under unit index 0: the AAD binds a unit
+/// to `chunk_type || 0x00 || unit_index`, and a `LAYR` chunk needs the chunk's
+/// own directory index there, because with one unit per chunk an all-zero index
+/// would let a ciphertext be swapped between two `LAYR` chunks and still
+/// authenticate.
 pub fn seal_content_chunks(
     chunks: Vec<Chunk>,
-    frames: &[Vec<u8>],
-    uncompressed_sizes: &[usize],
     key: &[u8; 32],
-    cipher_id: &str,
+    crypto_spec: &CryptoSpec,
 ) -> Vec<Chunk> {
     let mut out = Vec::with_capacity(chunks.len());
-    for chunk in chunks {
+    for (index, chunk) in chunks.into_iter().enumerate() {
         if chunk.ctype == *b"LAYR" {
-            let sealed: Vec<Vec<u8>> = frames
-                .iter()
-                .enumerate()
-                .map(|(index, frame)| seal(key, cipher_id, b"LAYR", index as u32, frame))
-                .collect();
-            out.push(
-                Chunk::new(b"LAYR", payload::layr(&sealed, uncompressed_sizes))
-                    .flags(FLAG_CHUNK_ENCRYPTED),
-            );
+            let frame = &chunk.payload[4..];
+            let unit = if crypto_spec.bad_unit_index {
+                0
+            } else {
+                index as u32
+            };
+            let sealed = seal(key, crypto_spec.cipher_id, b"LAYR", unit, frame);
+            let mut container = Vec::with_capacity(4 + sealed.len());
+            container.extend_from_slice(&chunk.payload[..4]);
+            container.extend_from_slice(&sealed);
+            let len = container.len();
+            out.push(chunk.seal_with(container, len, FLAG_CHUNK_ENCRYPTED));
             continue;
         }
 
@@ -264,7 +269,7 @@ pub fn seal_content_chunks(
             } else {
                 chunk.payload.clone()
             };
-            let sealed = seal(key, cipher_id, &chunk.ctype, 0, &stored);
+            let sealed = seal(key, crypto_spec.cipher_id, &chunk.ctype, 0, &stored);
             let flags = chunk.flags | FLAG_CHUNK_ENCRYPTED;
             out.push(chunk.seal_with(sealed, plaintext_len, flags));
             continue;

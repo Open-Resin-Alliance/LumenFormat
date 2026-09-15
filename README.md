@@ -90,7 +90,7 @@ chunk group can be read on its own.
 | [`02-file-structure.md`](spec/02-file-structure.md) | §3 | Header, chunk directory at the end of the file, trailer |
 | [`03-chunks.md`](spec/03-chunks.md) | §4, §4.1-4.3 | Chunk type summary, `HDR`, `META`, `PROF` |
 | [`04-chunk-auth.md`](spec/04-chunk-auth.md) | §4.4 | `AUTH`, password and machine-binding sections |
-| [`05-print-control.md`](spec/05-print-control.md) | §4.5-4.7 | `SECT`, `LROV`, `PREV` |
+| [`05-print-control.md`](spec/05-print-control.md) | §4.5-4.7 | `SECT` (withdrawn), `LROV`, `PREV` |
 | [`06-layer-data.md`](spec/06-layer-data.md) | §4.8-4.11 | `LTBL`, `ZDIC`, `LAYR`, `LHAS` |
 | [`07-scene-chunks.md`](spec/07-scene-chunks.md) | §4.12-4.13 | `VOXL` embedded scene, `EXTD` extensions |
 | [`08-layer-encoding.md`](spec/08-layer-encoding.md) | §5 | Run-end encoding: binary, grayscale and split REE |
@@ -149,8 +149,8 @@ independently of the specification's own encoder:
 | Path | Contents |
 |------|----------|
 | `valid/*.lumen` | 12 files a conforming reader must accept, each pinning the structures it contains |
-| `invalid/*.lumen` | 37 files a conforming reader must reject, each failing the check its manifest entry names - and failing it *first* |
-| `manifest.json` | Golden data for every vector: sizes, offsets, block table, per-layer hashes, Merkle root, CRC-32C, the timing a conforming reader must resolve for a sample of `(layer, sector)` points, and the credentials for encrypted vectors |
+| `invalid/*.lumen` | 56 files a conforming reader must reject, each failing the check its manifest entry names - and failing it *first* |
+| `manifest.json` | Golden data for every vector: sizes, offsets, the layer table, each `LAYR` chunk's frame, per-layer hashes, Merkle root, CRC-32C, the timing a conforming reader must resolve for a sample of `(layer, sector)` points, and the credentials for encrypted vectors |
 | [`rust/corpus-gen/`](rust/corpus-gen/) | `make_vectors`: reference encoder that regenerates the corpus from the specification |
 | [`rust/corpus/`](rust/corpus/) | `verify_vectors`: independent reader and validator, sharing no code with the generator. `cross_check` runs it against files the reference crate wrote |
 
@@ -179,9 +179,10 @@ not 0, because the run proves less than it claims, and not 1, which means a chec
 
 The corpus fixes what the specification leaves open, and is explicit about what it cannot
 pin: compressed payload bytes depend on the zstd version and level, so the manifest records
-the version, level, dictionary ID and decompressed size and the validator asserts those
-rather than byte equality. Everything uncompressed - the header, `HDR`, `AUTH`, `LTBL`, the
-`LAYR` header and block table, every REE stream, the directory and the trailer - is exact.
+the version, level, each frame's dictionary ID and declared content size and the validator
+asserts those rather than byte equality. Everything uncompressed - the header, `HDR`, `AUTH`,
+the `LTBL` header and its 28-byte entries, each `LAYR` chunk's version field, every REE
+stream, the directory and the trailer - is exact.
 [`test-vectors/README.md`](test-vectors/README.md) has the per-vector table and the check
 names implementations are encouraged to report verbatim.
 

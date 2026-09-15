@@ -1,13 +1,22 @@
-//! Reading a file: [`LumenFile`], including random access to a single layer.
+//! Reading a file: [`LumenFile`], including random access to one layer.
 //!
 //! Opening validates, then parses only what is needed: the fixed header, the
-//! directory, and the chunks that describe the print. Layer masks are decoded on
-//! demand, one block at a time, so reading layer 1 of a 2,000-layer print
-//! decompresses one block rather than the whole file. For a firmware reader that
-//! pulls layers through a fixed buffer, that is the whole point of the block
-//! design ([`spec/09-compression.md`] section 6.2), and the cache here holds
-//! exactly one decompressed block at a time - the layer's own block, or the one
-//! last asked for.
+//! directory, `LTBL` and the chunks that describe the print. Layer masks are
+//! decoded on demand, one `LAYR` chunk at a time, so reading layer 1 of a
+//! 2,000-layer print decompresses the one chunk that holds it rather than the
+//! whole file. For a firmware reader that pulls layers through a fixed buffer,
+//! that is the whole point of the chunked design ([`spec/09-compression.md`]
+//! section 6.2), and the cache here holds exactly one decompressed chunk at a
+//! time - the one last asked for.
+//!
+//! A `(layer, sector)` is addressed by its `LTBL` entry: the entry names the
+//! `LAYR` chunk holding the layer's run and the slice of that chunk's output the
+//! layer occupies, so a single-sector layer costs one chunk read and a
+//! multi-sector layer costs as many as it has sectors. A reader that prints one
+//! material reads the layer's first entry and nothing else, which is what
+//! [`LumenFile::layer`] does; [`LumenFile::layer_sectors`] reads every sector,
+//! and [`LumenFile::is_single_material_complete`] says whether the first way
+//! loses anything.
 //!
 //! Opening validates and then parses, so a caller that also runs
 //! [`crate::validate`] separately pays for the container walk twice. Callers
@@ -17,18 +26,16 @@ use crate::check::Check;
 use crate::chunkio;
 use crate::chunks::extd::Extension;
 use crate::chunks::hdr::Hdr;
-use crate::chunks::layr::Layr;
 use crate::chunks::lhas::{self, LayerHashes};
-use crate::chunks::ltbl::LayerTable;
+use crate::chunks::ltbl::{LayerEntry, LayerTable};
 use crate::chunks::preview::Preview;
 use crate::chunks::zdic::ZstdDictionary;
 use crate::chunks::{self, json_chunks};
 use crate::container::{self, ChunkDescriptor, ChunkType, Directory, FileHeader};
 use crate::crypto::{self, Auth, Cipher, SessionKey};
 use crate::error::{Error, Result};
-use crate::json::{Lrov, Meta, Profile, Sect};
+use crate::json::{Meta, Profile, Timing};
 use crate::ree::{self, DecodedLayer};
-use crate::sectors;
 use crate::timing::{self, Resolved};
 use crate::validate::{Level, Validator};
 use std::cell::RefCell;
@@ -42,6 +49,16 @@ pub struct DecodedSector {
     pub layer: DecodedLayer,
 }
 
+/// One `LAYR` chunk: a sector's masks for one group of layers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LayrChunk {
+    /// The chunk's index in the directory, which is what an `LTBL` entry names
+    /// and what a sealed frame's associated data binds it to.
+    pub index: u32,
+    /// The chunk's directory entry.
+    pub descriptor: ChunkDescriptor,
+}
+
 /// An open LUMEN file.
 #[derive(Debug)]
 pub struct LumenFile<'a> {
@@ -51,16 +68,12 @@ pub struct LumenFile<'a> {
     hdr: Hdr,
     meta: Meta,
     profile: Option<Profile>,
-    sectors: Vec<Sect>,
-    lrov: Option<Lrov>,
     previews: Vec<Preview>,
     extensions: Vec<Extension>,
     dictionary: Option<ZstdDictionary>,
     layer_hashes: Option<LayerHashes>,
     layer_table: LayerTable,
-    layr: Layr,
-    layr_chunk: ChunkDescriptor,
-    layr_bytes: &'a [u8],
+    layr_chunks: Vec<LayrChunk>,
     voxl: Option<Vec<u8>>,
     auth: Option<Auth>,
     cipher: Option<Cipher>,
@@ -129,17 +142,6 @@ impl<'a> LumenFile<'a> {
             None => None,
             Some(bytes) => Some(json_chunks::parse_profile(&bytes)?),
         };
-        let mut sectors = Vec::new();
-        for d in directory.find_all(ChunkType::SECT).collect::<Vec<_>>() {
-            let stored = chunkio::stored(buf, d)?;
-            if let Some(bytes) = chunkio::payload(d, stored, cipher, key.as_ref())? {
-                sectors.push(json_chunks::parse_sect(&bytes)?);
-            }
-        }
-        let lrov = match parts.optional_required(ChunkType::LROV)? {
-            None => None,
-            Some(bytes) => Some(json_chunks::parse_lrov(&bytes)?),
-        };
         let mut previews = Vec::new();
         for d in directory.find_all(ChunkType::PREV).collect::<Vec<_>>() {
             let stored = chunkio::stored(buf, d)?;
@@ -174,11 +176,16 @@ impl<'a> LumenFile<'a> {
             Some(d) => Some(LayerHashes::parse(chunkio::stored(buf, d)?)?),
         };
         let layer_table = LayerTable::parse(&parts.required(ChunkType::LTBL)?)?;
-        let layr_chunk = *directory
-            .find(ChunkType::LAYR)
-            .ok_or_else(|| Error::new(Check::PresenceLayr, "no LAYR chunk"))?;
-        let layr_bytes = chunkio::stored(buf, &layr_chunk)?;
-        let layr = Layr::parse(layr_bytes)?;
+        let layr_chunks = directory
+            .descriptors
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| !d.is_null() && d.chunk_type == ChunkType::LAYR)
+            .map(|(index, d)| LayrChunk {
+                index: index as u32,
+                descriptor: *d,
+            })
+            .collect();
         let voxl = parts.optional_required(ChunkType::VOXL)?;
 
         Ok(LumenFile {
@@ -188,16 +195,12 @@ impl<'a> LumenFile<'a> {
             hdr,
             meta,
             profile,
-            sectors,
-            lrov,
             previews,
             extensions,
             dictionary,
             layer_hashes,
             layer_table,
-            layr,
-            layr_chunk,
-            layr_bytes,
+            layr_chunks,
             voxl,
             auth,
             cipher,
@@ -255,14 +258,11 @@ impl<'a> LumenFile<'a> {
         self.profile.as_ref()
     }
 
-    /// Every `SECT` chunk, in file order.
-    pub fn sectors(&self) -> &[Sect] {
-        &self.sectors
-    }
-
-    /// The `LROV` chunk, if present. A file carries at most one.
-    pub fn lrov(&self) -> Option<&Lrov> {
-        self.lrov.as_ref()
+    /// Every sector `META` defines, in the order it lists them.
+    ///
+    /// Sector 0 is implicit and has no entry here.
+    pub fn meta_sectors(&self) -> &[crate::json::Sector] {
+        self.meta.sectors.as_deref().unwrap_or_default()
     }
 
     /// Every `PREV` chunk, in file order.
@@ -290,9 +290,9 @@ impl<'a> LumenFile<'a> {
         &self.layer_table
     }
 
-    /// The `LAYR` header and block table.
-    pub fn layr(&self) -> &Layr {
-        &self.layr
+    /// Every `LAYR` chunk, in directory order.
+    pub fn layr_chunks(&self) -> &[LayrChunk] {
+        &self.layr_chunks
     }
 
     /// The `VOXL` payload, if present, verbatim.
@@ -315,7 +315,11 @@ impl<'a> LumenFile<'a> {
         self.hdr.total_pixels()
     }
 
-    /// Whether the file uses sector-based layer encoding.
+    /// Whether the file declares sector-based layer encoding, i.e. whether some
+    /// layer carries more than one sector (`hdr.multi_sector_flag`).
+    ///
+    /// This is informational: which sectors a layer carries is read from its
+    /// `LTBL` entries, not from this flag.
     pub fn multi_sector(&self) -> bool {
         self.header.multi_sector()
     }
@@ -330,20 +334,21 @@ impl<'a> LumenFile<'a> {
         self.key.is_some()
     }
 
-    /// The decompressed, decrypted bytes of block `index`.
-    pub fn block(&self, index: u32) -> Result<Vec<u8>> {
-        self.with_block(index, |data| Ok(data.to_vec()))
+    /// The decompressed, decrypted output of the `LAYR` chunk at directory index
+    /// `index`: the concatenation of every slice the table places in it.
+    pub fn layr_chunk_data(&self, index: u32) -> Result<Vec<u8>> {
+        self.with_chunk(index, |data| Ok(data.to_vec()))
     }
 
-    /// Run `f` over the decompressed bytes of block `index`, decompressing it
-    /// first if it is not the cached one.
+    /// Run `f` over the decompressed output of the `LAYR` chunk at directory
+    /// index `index`, decompressing it first if it is not the cached one.
     ///
-    /// The cache holds one block, so fetching layers out of a single block is
-    /// free after the first, and walking layers in order costs one decompression
-    /// per block.
-    fn with_block<T>(&self, index: u32, f: impl FnOnce(&[u8]) -> Result<T>) -> Result<T> {
+    /// The cache holds one chunk, so fetching the layers of one chunk is free
+    /// after the first, and walking layers in order costs one decompression per
+    /// chunk a layer touches.
+    fn with_chunk<T>(&self, index: u32, f: impl FnOnce(&[u8]) -> Result<T>) -> Result<T> {
         if self.cache.borrow().as_ref().map(|(k, _)| *k) != Some(index) {
-            let data = self.decompress_block(index)?;
+            let data = self.decompress_chunk(index)?;
             *self.cache.borrow_mut() = Some((index, data));
         }
         let guard = self.cache.borrow();
@@ -351,166 +356,195 @@ impl<'a> LumenFile<'a> {
         f(data)
     }
 
-    fn decompress_block(&self, index: u32) -> Result<Vec<u8>> {
-        let block = self.layr.blocks.get(index as usize).ok_or_else(|| {
-            Error::new(
-                Check::LtblBlockIndexInRange,
-                format!("block {index} does not exist"),
-            )
-        })?;
-        let frame = chunkio::block_frame(
-            &self.layr,
-            self.layr_bytes,
-            &self.layr_chunk,
-            index as usize,
-            self.cipher,
-            self.key.as_ref(),
-        )?
-        .ok_or_else(|| {
-            Error::new(
-                Check::CryptNoKey,
-                "the block is sealed and no session key is available",
-            )
-        })?;
-        let dict = self.dictionary.as_ref().map(|d| d.dict_bytes.as_slice());
-        chunks::decompress(&frame, block.uncompressed_size, dict)
-    }
-
-    /// The stored bytes of layer `index` within its block.
-    fn layer_bytes(&self, index: u32) -> Result<Vec<u8>> {
-        let entry = self
-            .layer_table
-            .entries
+    /// The descriptor of the `LAYR` chunk at directory index `index`.
+    fn layr_descriptor(&self, index: u32) -> Result<&ChunkDescriptor> {
+        let descriptor = self
+            .directory
+            .descriptors
             .get(index as usize)
+            .filter(|d| !d.is_null() && d.chunk_type == ChunkType::LAYR)
             .ok_or_else(|| {
                 Error::new(
-                    Check::LtblLayerIndexRange,
-                    format!("layer {index} does not exist"),
+                    Check::LtblFirstLayrInRange,
+                    format!("directory index {index} is not a LAYR chunk"),
                 )
             })?;
+        Ok(descriptor)
+    }
+
+    fn decompress_chunk(&self, index: u32) -> Result<Vec<u8>> {
+        let descriptor = self.layr_descriptor(index)?;
+        let stored = chunkio::stored(self.buf, descriptor)?;
+        let frame = chunkio::layr_frame(descriptor, index, stored, self.cipher, self.key.as_ref())?
+            .ok_or_else(|| {
+                Error::new(
+                    Check::CryptNoKey,
+                    "the frame is sealed and no session key is available",
+                )
+            })?;
+        let dict = self.dictionary.as_ref().map(|d| d.dict_bytes.as_slice());
+        chunks::decompress_frame(&frame, dict)
+    }
+
+    /// One entry's slice of its `LAYR` chunk's decompressed output.
+    fn slice(&self, entry: &LayerEntry) -> Result<Vec<u8>> {
         if entry.is_empty() {
             return Ok(Vec::new());
         }
         let start = entry.data_offset as usize;
         let len = entry.data_size as usize;
-        self.with_block(entry.block_index, |block| {
-            block
-                .get(start..start + len)
-                .map(|s| s.to_vec())
+        self.with_chunk(entry.first_layr, |chunk| {
+            chunk
+                .get(start..start.saturating_add(len))
+                .map(|slice| slice.to_vec())
                 .ok_or_else(|| {
                     Error::new(
-                        Check::LtblOffsetsWithinBlock,
-                        format!("layer {index} lies outside its block"),
+                        Check::LtblOffsetWithinChunk,
+                        format!(
+                            "a slice of {len} bytes at offset {start} lies outside its chunk's \
+                             {} bytes",
+                            chunk.len()
+                        ),
                     )
                 })
         })
     }
 
-    /// The decoded mask of layer `index`.
+    /// The stored bytes of layer `index`: its sectors' slices, concatenated in
+    /// ascending `sector_id`.
     ///
-    /// In a multi-sector file this is the union of every sector's mask, which is
-    /// what a single-material reader prints; [`LumenFile::layer_sectors`] gives
-    /// the sectors separately.
+    /// This is the byte range `LHAS` hashes for the layer (section 4.11), which
+    /// is why it is the concatenation rather than any one sector's data.
+    fn layer_data(&self, index: u32) -> Result<Vec<u8>> {
+        let entries = self.entries_of(index)?;
+        let mut out = Vec::new();
+        for entry in entries {
+            out.extend_from_slice(&self.slice(entry)?);
+        }
+        Ok(out)
+    }
+
+    /// The `LTBL` entries of layer `index`.
+    fn entries_of(&self, index: u32) -> Result<&[LayerEntry]> {
+        let entries = self.layer_table.layer_entries(index);
+        if entries.is_empty() {
+            return Err(Error::new(
+                Check::LtblLayerIndexRange,
+                format!("layer {index} does not exist"),
+            ));
+        }
+        Ok(entries)
+    }
+
+    /// The decoded mask of layer `index` as a single-material reader prints it.
+    ///
+    /// That reader reads the layer's first entry - sector 0's, which every layer
+    /// with data has - and skips the rest, so this is sector 0's mask and not the
+    /// union of every sector's. A layer whose first entry carries no data is
+    /// empty here even when a later sector holds data;
+    /// [`LumenFile::is_single_material_complete`] reports that case, and
+    /// [`LumenFile::layer_sectors`] reaches the other sectors.
     pub fn layer(&self, index: u32) -> Result<DecodedLayer> {
         let total_pixels = self.total_pixels();
-        if self.multi_sector() {
-            let entry = self
-                .layer_table
-                .entries
-                .get(index as usize)
-                .ok_or_else(|| {
-                    Error::new(
-                        Check::LtblLayerIndexRange,
-                        format!("layer {index} does not exist"),
-                    )
-                })?;
-            if entry.is_empty() {
-                return Ok(DecodedLayer::empty(total_pixels));
-            }
-            let mut pixels = vec![0u8; total_pixels as usize];
-            let mut first_tag = None;
-            for sector in self.layer_sectors(index)? {
-                if first_tag.is_none() {
-                    first_tag = sector.layer.tag;
-                }
-                for (out, pixel) in pixels.iter_mut().zip(sector.layer.pixels.iter()) {
-                    if *pixel > *out {
-                        *out = *pixel;
-                    }
-                }
-            }
-            // The union has no single stream of its own: `tag` reports the first
-            // sector's, which is what a caller reading the layer sequentially
-            // would see first, and `is_empty` is already answered above.
-            return Ok(DecodedLayer {
-                pixels,
-                tag: first_tag.or(Some(ree::TAG_BINARY)),
-            });
-        }
-        let data = self.layer_bytes(index)?;
-        if data.is_empty() {
+        let entries = self.entries_of(index)?;
+        let entry = &entries[0];
+        if entry.is_empty() {
             return Ok(DecodedLayer::empty(total_pixels));
         }
+        let data = self.slice(entry)?;
         ree::decode(&data, total_pixels, self.level.is_strict())
     }
 
-    /// Every sector's decoded mask on layer `index`, in the order stored.
+    /// Every sector's decoded mask on layer `index`, in ascending `sector_id`.
+    ///
+    /// A sector with no data on this layer has no mask and is not reported.
     pub fn layer_sectors(&self, index: u32) -> Result<Vec<DecodedSector>> {
-        let entry = self
-            .layer_table
-            .entries
-            .get(index as usize)
-            .ok_or_else(|| {
-                Error::new(
-                    Check::LtblLayerIndexRange,
-                    format!("layer {index} does not exist"),
-                )
-            })?;
-        if entry.is_empty() {
-            return Ok(Vec::new());
-        }
-        let data = self.layer_bytes(index)?;
         let total_pixels = self.total_pixels();
+        let entries = self.entries_of(index)?;
         let mut out = Vec::new();
-        for sector in sectors::decode(&data, entry.sector_count)? {
-            let layer = ree::decode(&sector.mask, total_pixels, self.level.is_strict())?;
+        for entry in entries {
+            if entry.is_empty() {
+                continue;
+            }
+            let data = self.slice(entry)?;
             out.push(DecodedSector {
-                sector_id: sector.sector_id,
-                layer,
+                sector_id: entry.sector_id,
+                layer: ree::decode(&data, total_pixels, self.level.is_strict())?,
             });
         }
         Ok(out)
     }
 
-    /// Whether a single-material reader can print this file faithfully.
+    /// Whether a single-material reader would print every layer faithfully.
     ///
-    /// False when any layer carries a non-empty sector other than 0, which a
-    /// reader that decodes only sector 0 would silently drop (section 7.2).
-    pub fn is_single_material_compatible(&self) -> Result<bool> {
-        if !self.multi_sector() {
-            return Ok(true);
-        }
-        for index in 0..self.layer_count() {
-            for sector in self.layer_sectors(index)? {
-                if sector.sector_id != 0 && sector.layer.pixels.iter().any(|p| *p != 0) {
-                    return Ok(false);
-                }
-            }
-        }
-        Ok(true)
+    /// False when any layer carries data in a sector other than 0, which is
+    /// content such a reader never reads and would drop silently: it must report
+    /// the file incomplete rather than complete (section 7.2).
+    pub fn is_single_material_complete(&self) -> bool {
+        !(0..self.layer_count()).any(|layer| {
+            self.layer_table
+                .layer_entries(layer)
+                .iter()
+                .any(|entry| entry.sector_id != 0 && !entry.is_empty())
+        })
     }
 
-    /// Resolve one layer's timing, optionally for one sector.
+    /// Resolve one `(layer, sector)`'s timing.
     ///
-    /// The returned values already carry the sector definition, the bottom and
-    /// transition blend, and every matching `LROV` entry. Overrides are not opt-in
-    /// ([`spec/05-print-control.md`] section 4.6): a reader that does not apply them
-    /// must refuse a file that carries an `LROV` chunk, because printing the layer
-    /// at META's exposure instead of its override fails quietly. This method is
-    /// therefore the only supported way to read a layer's timing.
+    /// The returned values already carry the sector's `META.sectors` entry, the
+    /// bottom and transition blend with the counts that sector carries or
+    /// inherits, and the `(layer, sector)`'s own `LROV` payload. Overrides are
+    /// not opt-in ([`spec/05-print-control.md`] section 4.6): a reader that does
+    /// not apply them must refuse a file that carries an `LROV` chunk, because
+    /// printing the layer at META's exposure instead of its override fails
+    /// quietly. This method is therefore the only supported way to read a
+    /// layer's timing.
     pub fn timing_for(&self, layer: u32, sector_id: u32) -> Result<Resolved> {
-        let sector = self.sectors.iter().find(|s| s.sector_id == sector_id);
-        timing::resolve(&self.meta, sector, self.lrov.as_ref(), layer, sector_id)
+        self.entries_of(layer)?;
+        let sector = match sector_id {
+            0 => None,
+            _ => self
+                .meta
+                .sectors
+                .as_deref()
+                .and_then(|sectors| sectors.iter().find(|s| s.sector_id == sector_id)),
+        };
+        let overrides = self.overrides_for(layer, sector_id)?;
+        timing::resolve(&self.meta, sector, overrides.as_ref(), layer, sector_id)
+    }
+
+    /// The `LROV` payload of `(layer, sector)`, when it has one.
+    fn overrides_for(&self, layer: u32, sector_id: u32) -> Result<Option<Timing>> {
+        let Some(entry) = self.layer_table.entry(layer, sector_id) else {
+            return Ok(None);
+        };
+        if entry.first_lrov == 0 {
+            return Ok(None);
+        }
+        let descriptor = self
+            .directory
+            .descriptors
+            .get(entry.first_lrov as usize)
+            .filter(|d| !d.is_null() && d.chunk_type == ChunkType::LROV)
+            .ok_or_else(|| {
+                Error::new(
+                    Check::LtblFirstLrovInRange,
+                    format!(
+                        "layer {layer} sector {sector_id} names directory index {}, which is not \
+                         an LROV chunk",
+                        entry.first_lrov
+                    ),
+                )
+            })?;
+        let stored = chunkio::stored(self.buf, descriptor)?;
+        let bytes = chunkio::payload(descriptor, stored, self.cipher, self.key.as_ref())?
+            .ok_or_else(|| {
+                Error::new(
+                    Check::CryptNoKey,
+                    "the LROV payload is sealed and no session key is available",
+                )
+            })?;
+        Ok(Some(json_chunks::parse_lrov(&bytes)?))
     }
 
     /// Verify layer `index` against the `LHAS` leaf table and Merkle path.
@@ -525,7 +559,7 @@ impl<'a> LumenFile<'a> {
                 format!("layer {index} is outside the hash table"),
             )
         })?;
-        let data = self.layer_bytes(index)?;
+        let data = self.layer_data(index)?;
         let leaf = lhas::leaf_hash(&data);
         if leaf != stored_leaf {
             return Err(Error::new(
@@ -550,7 +584,7 @@ impl<'a> LumenFile<'a> {
             .as_ref()
             .ok_or_else(|| Error::new(Check::LhasFrame, "the file carries no LHAS chunk"))?;
         for index in 0..self.layer_count() {
-            let data = self.layer_bytes(index)?;
+            let data = self.layer_data(index)?;
             let leaf = lhas::leaf_hash(&data);
             match hashes.layer_hashes.get(index as usize) {
                 Some(stored) if *stored == leaf => {}
