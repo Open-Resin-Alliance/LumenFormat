@@ -973,6 +973,277 @@
       "trailer_crc32c": "0x4B1F63AF"
     },
     {
+      "chunk_count": 7,
+      "description": "Five layers over one sector, three LAYR chunks and no dictionary, pinning every run-length array that holds no varints: layer 0 is one run of 0xFF (tag 0x00, run_count 1), layer 1 one run of 0x80 (tag 0x01, run_count 1, one value byte), layers 2 and 3 are splits whose thresholded core is a single run - one of 0xFF over a 0xC0 band at 1000..1200, whose first delta is two bytes, one of 0x00 under a 0x40 band at 0..500, whose first delta is 0 - and layer 4 is a split whose overlay is empty, the all-0xFF mask of layer 0 written under tag 0x02. Each of those arrays carries its four plane lengths as zeros: the header is written unconditionally, and a reader that skipped it would leave those bytes unconsumed. Layer 4 is the one stream the canonical tag choice of section 5.6 cannot reach, since an all-0xFF slice should carry tag 0x00; no check refuses the split form, so it is decodable rather than invalid.",
+      "dict": {
+        "dict_id": 0,
+        "dict_size": 0,
+        "present": false
+      },
+      "dir_offset": 769,
+      "display_height_px": 48,
+      "display_width_px": 64,
+      "features": [
+        "binary-ree",
+        "grayscale-ree",
+        "split-ree",
+        "single-run-stream",
+        "empty-plane-array",
+        "no-dictionary"
+      ],
+      "file": "valid/ree-degenerate-arrays.lumen",
+      "file_sha256": "c90abfeab6f9a67072fa37483fb4daa8ababca292ce21d5548fc53b566c301ad",
+      "file_size": 1001,
+      "header_flags": 0,
+      "layer_height_um": 50,
+      "layers": [
+        {
+          "decompressed_sha256": "f4a9d95b847cacf25daacdf395dacfa3b44e2de799ba05c368e22b6f8a231a5d",
+          "empty": false,
+          "index": 0,
+          "lhas_leaf": "07d9973bcb2d3ded4c0f62490e46d691887610933a3c0ce24d0920dae52cca0b",
+          "sector_count": 1,
+          "sector_tags": [
+            0
+          ],
+          "tag": 0
+        },
+        {
+          "decompressed_sha256": "7951807178bbab473f2e1ca34607732b1b36bd9944a7610df39604083c4d9f30",
+          "empty": false,
+          "index": 1,
+          "lhas_leaf": "a33dd4e4cbbf42290fb83ba5d0978f37c4f70114109c8d7f542c7eb624d59181",
+          "sector_count": 1,
+          "sector_tags": [
+            1
+          ],
+          "tag": 1
+        },
+        {
+          "decompressed_sha256": "c08ed913515660ad9235931a7d34d55767b72afa774792e226b7e978d5e1b87d",
+          "empty": false,
+          "index": 2,
+          "lhas_leaf": "4a673951530a038d7ada65562a42eda28257baa8339a5062a9c0c462a3270f8d",
+          "sector_count": 1,
+          "sector_tags": [
+            2
+          ],
+          "tag": 2
+        },
+        {
+          "decompressed_sha256": "6da630ba3a132d316847f7003434c83409a55b98765992f3d942c5101392ac16",
+          "empty": false,
+          "index": 3,
+          "lhas_leaf": "b27560f2a3184336215caf8f173f57933c2c95e0b6112484b0b42d5c53998a89",
+          "sector_count": 1,
+          "sector_tags": [
+            2
+          ],
+          "tag": 2
+        },
+        {
+          "decompressed_sha256": "3f46bbb043932749717fe1b93e16ced78af6c4eb7783b2f536e03b70fd70516f",
+          "empty": false,
+          "index": 4,
+          "lhas_leaf": "7df285275fced6c2485656a9d5f6664812de70d1fc423477134e3ceb32766a77",
+          "sector_count": 1,
+          "sector_tags": [
+            2
+          ],
+          "tag": 2
+        }
+      ],
+      "layers_per_chunk": 2,
+      "layr_chunks": [
+        {
+          "content_size": 14,
+          "dict_id": 0,
+          "first_layer": 0,
+          "frame_size": 23,
+          "index": 4,
+          "layer_count": 2,
+          "sealed": false,
+          "sector_id": 0,
+          "stored_len": 27,
+          "version": 1
+        },
+        {
+          "content_size": 1429,
+          "dict_id": 0,
+          "first_layer": 2,
+          "frame_size": 58,
+          "index": 5,
+          "layer_count": 2,
+          "sealed": false,
+          "sector_id": 0,
+          "stored_len": 62,
+          "version": 1
+        },
+        {
+          "content_size": 12,
+          "dict_id": 0,
+          "first_layer": 4,
+          "frame_size": 21,
+          "index": 6,
+          "layer_count": 1,
+          "sealed": false,
+          "sector_id": 0,
+          "stored_len": 25,
+          "version": 1
+        }
+      ],
+      "ltbl": [
+        {
+          "additional_sector_count": 0,
+          "data_offset": 0,
+          "data_size": 7,
+          "entry_index": 0,
+          "first_layr": 4,
+          "first_lrov": 0,
+          "layer": 0,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 7,
+          "data_size": 7,
+          "entry_index": 1,
+          "first_layr": 4,
+          "first_lrov": 0,
+          "layer": 1,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 0,
+          "data_size": 415,
+          "entry_index": 2,
+          "first_layr": 5,
+          "first_lrov": 0,
+          "layer": 2,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 415,
+          "data_size": 1014,
+          "entry_index": 3,
+          "first_layr": 5,
+          "first_lrov": 0,
+          "layer": 3,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 0,
+          "data_size": 12,
+          "entry_index": 4,
+          "first_layr": 6,
+          "first_lrov": 0,
+          "layer": 4,
+          "sector_id": 0
+        }
+      ],
+      "merkle_root": "4943707140dd3a79b63866e7aacbd97d122060c4234d7e423a742739731b35e5",
+      "multi_sector": false,
+      "name": "ree-degenerate-arrays",
+      "resolved_timing": [
+        {
+          "exposure_ms": 30000,
+          "layer": 0,
+          "layer_height_um": 50,
+          "lift_fast_distance_um": 0,
+          "lift_fast_speed_um_min": 0,
+          "lift_slow_distance_um": 5000,
+          "lift_slow_speed_um_min": 65000,
+          "light_pwm": 255,
+          "retract_fast_distance_um": 5000,
+          "retract_fast_speed_um_min": 150000,
+          "retract_slow_distance_um": 0,
+          "retract_slow_speed_um_min": 0,
+          "sector": 0,
+          "wait_time_after_cure_ms": 0,
+          "wait_time_after_lift_ms": 0,
+          "wait_time_before_cure_ms": 0
+        },
+        {
+          "exposure_ms": 30000,
+          "layer": 1,
+          "layer_height_um": 50,
+          "lift_fast_distance_um": 0,
+          "lift_fast_speed_um_min": 0,
+          "lift_slow_distance_um": 5000,
+          "lift_slow_speed_um_min": 65000,
+          "light_pwm": 255,
+          "retract_fast_distance_um": 5000,
+          "retract_fast_speed_um_min": 150000,
+          "retract_slow_distance_um": 0,
+          "retract_slow_speed_um_min": 0,
+          "sector": 0,
+          "wait_time_after_cure_ms": 0,
+          "wait_time_after_lift_ms": 0,
+          "wait_time_before_cure_ms": 0
+        },
+        {
+          "exposure_ms": 16250,
+          "layer": 2,
+          "layer_height_um": 50,
+          "lift_fast_distance_um": 0,
+          "lift_fast_speed_um_min": 0,
+          "lift_slow_distance_um": 5000,
+          "lift_slow_speed_um_min": 65000,
+          "light_pwm": 255,
+          "retract_fast_distance_um": 5000,
+          "retract_fast_speed_um_min": 150000,
+          "retract_slow_distance_um": 0,
+          "retract_slow_speed_um_min": 0,
+          "sector": 0,
+          "wait_time_after_cure_ms": 0,
+          "wait_time_after_lift_ms": 0,
+          "wait_time_before_cure_ms": 0
+        },
+        {
+          "exposure_ms": 2500,
+          "layer": 3,
+          "layer_height_um": 50,
+          "lift_fast_distance_um": 0,
+          "lift_fast_speed_um_min": 0,
+          "lift_slow_distance_um": 5000,
+          "lift_slow_speed_um_min": 65000,
+          "light_pwm": 255,
+          "retract_fast_distance_um": 5000,
+          "retract_fast_speed_um_min": 150000,
+          "retract_slow_distance_um": 0,
+          "retract_slow_speed_um_min": 0,
+          "sector": 0,
+          "wait_time_after_cure_ms": 0,
+          "wait_time_after_lift_ms": 0,
+          "wait_time_before_cure_ms": 0
+        },
+        {
+          "exposure_ms": 2500,
+          "layer": 4,
+          "layer_height_um": 50,
+          "lift_fast_distance_um": 0,
+          "lift_fast_speed_um_min": 0,
+          "lift_slow_distance_um": 5000,
+          "lift_slow_speed_um_min": 65000,
+          "light_pwm": 255,
+          "retract_fast_distance_um": 5000,
+          "retract_fast_speed_um_min": 150000,
+          "retract_slow_distance_um": 0,
+          "retract_slow_speed_um_min": 0,
+          "sector": 0,
+          "wait_time_after_cure_ms": 0,
+          "wait_time_after_lift_ms": 0,
+          "wait_time_before_cure_ms": 0
+        }
+      ],
+      "total_layers": 5,
+      "total_uncompressed_size": 858,
+      "trailer_crc32c": "0xC1B77882"
+    },
+    {
       "chunk_count": 9,
       "description": "64 layers with a trained ZDIC dictionary, in four LAYR chunks of sixteen layers each, every frame carrying the dictionary's id.",
       "dict": {

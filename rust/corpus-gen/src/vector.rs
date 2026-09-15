@@ -71,6 +71,10 @@ pub struct LayerOptions<'a> {
     pub dict_samples_bytes: usize,
     pub split_layers: &'a [usize],
     pub force_run_count_zero: &'a [usize],
+    /// Layers stored under tag 0x02 whatever their mask holds, for the one stream
+    /// shape the canonical tag choice cannot reach: an all-`0x00`/`0xFF` mask
+    /// whose split overlay is empty (spec 5.5, 5.6).
+    pub force_split: &'a [usize],
     /// Compress the frames without declaring their content size, which
     /// `layr.content_size_present` refuses (spec 4.10).
     pub omit_content_size: bool,
@@ -151,15 +155,20 @@ pub fn encode_layers(display: (usize, usize), layers: &[Layer], options: &LayerO
         }
 
         let prefer_split = options.split_layers.contains(&layer);
+        let force_split = options.force_split.contains(&layer);
         let encoded: Vec<Slice> = sectors
             .iter()
             .enumerate()
             .filter_map(|(sector_id, spans)| {
-                ree::encode_sector(&ree::runs_from_spans(total, spans), prefer_split).map(|bytes| {
-                    Slice {
-                        sector_id: sector_id as u32,
-                        bytes,
-                    }
+                let runs = ree::runs_from_spans(total, spans);
+                let bytes = if force_split {
+                    ree::encode_sector_split(&runs)
+                } else {
+                    ree::encode_sector(&runs, prefer_split)
+                }?;
+                Some(Slice {
+                    sector_id: sector_id as u32,
+                    bytes,
                 })
             })
             .collect();
@@ -339,6 +348,9 @@ pub struct VectorSpec<'a> {
     pub dict_samples_bytes: usize,
     pub split_layers: Vec<usize>,
     pub force_run_count_zero: Vec<usize>,
+    /// Layers stored under tag 0x02 whatever their mask holds
+    /// ([`LayerOptions::force_split`]).
+    pub force_split: Vec<usize>,
     pub meta_extra: Vec<(&'a str, Value)>,
     /// Fields a vector adds to the corpus' support entry in `META.sectors`, on
     /// top of the exposure [`sectors_value`](VectorSpec::sectors_value) starts
@@ -413,6 +425,7 @@ impl<'a> Default for VectorSpec<'a> {
             dict_samples_bytes: 2048,
             split_layers: Vec::new(),
             force_run_count_zero: Vec::new(),
+            force_split: Vec::new(),
             meta_extra: Vec::new(),
             sector_extra: Vec::new(),
             sectors: None,
@@ -798,6 +811,7 @@ pub fn build_vector(spec: &VectorSpec) -> Built {
             dict_samples_bytes: spec.dict_samples_bytes,
             split_layers: &spec.split_layers,
             force_run_count_zero: &spec.force_run_count_zero,
+            force_split: &spec.force_split,
             omit_content_size: spec.omit_content_size,
             unused_zdic: spec.unused_zdic,
         },
@@ -860,8 +874,8 @@ impl<'a> Default for CryptoSpec<'a> {
 
 /// An encrypted file: the same content chunks, sealed, plus an AUTH chunk.
 ///
-/// The non-canonical all-black form is never forced here, because an encrypted
-/// vector has no need of it - the Python producer passes the empty set too.
+/// Neither non-canonical form is forced here, because an encrypted vector has no
+/// need of one - the Python producer passes the empty sets too.
 pub fn build_encrypted_vector(spec: &VectorSpec, crypto_spec: &CryptoSpec) -> Built {
     let enc = encode_layers(
         spec.display,
@@ -872,6 +886,7 @@ pub fn build_encrypted_vector(spec: &VectorSpec, crypto_spec: &CryptoSpec) -> Bu
             dict_samples_bytes: spec.dict_samples_bytes,
             split_layers: &spec.split_layers,
             force_run_count_zero: &[],
+            force_split: &[],
             omit_content_size: spec.omit_content_size,
             unused_zdic: false,
         },

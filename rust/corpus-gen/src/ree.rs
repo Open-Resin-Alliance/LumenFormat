@@ -215,3 +215,20 @@ pub fn encode_sector(runs: &[Run], prefer_split: bool) -> Option<Vec<u8>> {
         }
     }
 }
+
+/// Encoded sector body under tag 0x02 whatever the mask holds, or `None` for an
+/// empty sector.
+///
+/// [`pick_tag`] gives an all-`0x00`/`0xFF` mask tag 0x00, so this is the only way
+/// to write the one stream shape that tag cannot carry: a split whose overlay is
+/// empty, whose `aa_positions` are still `PLANES(0)` - four zero lengths. The
+/// stream is decodable and no rule refuses it, but spec 5.6's tag choice keeps it
+/// out of the canonical form; the vector that uses it says so.
+pub fn encode_sector_split(runs: &[Run]) -> Option<Vec<u8>> {
+    if runs.iter().all(|&(_, value)| value == 0) {
+        return None;
+    }
+    let mut out = vec![TAG_SPLIT];
+    out.extend(enc_split(runs));
+    Some(out)
+}

@@ -1,4 +1,4 @@
-//! The corpus: the twelve valid vectors, the deliberate defects, and the manifest.
+//! The corpus: the thirteen valid vectors, the deliberate defects, and the manifest.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -1116,10 +1116,11 @@ fn prune(dir: &Path, written: &BTreeSet<PathBuf>, removed: &mut usize) {
 // valid vectors
 // --------------------------------------------------------------------------
 
-/// The twelve valid vectors, in the order the manifest lists them.
+/// The thirteen valid vectors, in the order the manifest lists them.
 pub fn valid_vectors() -> Vec<Built> {
     vec![
         binary_basic(),
+        ree_degenerate_arrays(),
         dict_multi_block(),
         multi_sector(),
         sector_blend_ranges(),
@@ -1166,6 +1167,44 @@ fn binary_basic() -> Built {
             ("bottom_wait_time_after_lift_ms", Value::from(333)),
             ("bottom_light_pwm", Value::from(200)),
         ],
+        ..Default::default()
+    })
+}
+
+/// 5 layers whose run-length arrays hold no varints, no dictionary, three chunks.
+fn ree_degenerate_arrays() -> Built {
+    // 64 x 48 over one sector: 3 072 pixels per layer.
+    let layers: Vec<vector::Layer> = vec![
+        // One run of 0xFF: tag 0x00, run_count 1, no stored length.
+        vec![vec![(0, 3072, 255)]],
+        // One run of 0x80: tag 0x01, run_count 1, one value, no stored length.
+        vec![vec![(0, 3072, 128)]],
+        // Every pixel thresholds to 0xFF, so the split core is one run; the
+        // overlay is the 0xC0 band, whose first delta is 1000.
+        vec![vec![(0, 1000, 255), (1000, 1200, 192), (1200, 3072, 255)]],
+        // Every pixel thresholds to 0x00, so the core is one run of the other
+        // value; the overlay starts at pixel 0, whose delta is 0.
+        vec![vec![(0, 500, 64), (500, 3072, 0)]],
+        // The all-0xFF mask of layer 0 under tag 0x02: an empty overlay, and so
+        // an empty `aa_positions` array.
+        vec![vec![(0, 3072, 255)]],
+    ];
+    vector::build_vector(&VectorSpec {
+        name: "ree-degenerate-arrays",
+        description: "Five layers over one sector, three LAYR chunks and no dictionary, pinning every run-length array that holds no varints: layer 0 is one run of 0xFF (tag 0x00, run_count 1), layer 1 one run of 0x80 (tag 0x01, run_count 1, one value byte), layers 2 and 3 are splits whose thresholded core is a single run - one of 0xFF over a 0xC0 band at 1000..1200, whose first delta is two bytes, one of 0x00 under a 0x40 band at 0..500, whose first delta is 0 - and layer 4 is a split whose overlay is empty, the all-0xFF mask of layer 0 written under tag 0x02. Each of those arrays carries its four plane lengths as zeros: the header is written unconditionally, and a reader that skipped it would leave those bytes unconsumed. Layer 4 is the one stream the canonical tag choice of section 5.6 cannot reach, since an all-0xFF slice should carry tag 0x00; no check refuses the split form, so it is decodable rather than invalid.",
+        features: &[
+            "binary-ree",
+            "grayscale-ree",
+            "split-ree",
+            "single-run-stream",
+            "empty-plane-array",
+            "no-dictionary",
+        ],
+        display: (64, 48),
+        layers,
+        layers_per_chunk: 2,
+        split_layers: vec![2, 3],
+        force_split: vec![4],
         ..Default::default()
     })
 }
