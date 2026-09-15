@@ -2,6 +2,9 @@
 name = "lumen-corpus"
 version = "0.1.0"
 edition = "2021"
+# Same floor as the generator: both are workspace tools rather than shipped
+# crates, so they track the toolchain the workspace is built with.
+rust-version = "1.88"
 publish = false
 description = "The LUMEN specification's own reader: validates .lumen files without using the reference crate"
 

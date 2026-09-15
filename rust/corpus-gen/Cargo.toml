@@ -2,6 +2,9 @@
 name = "lumen-corpus-gen"
 version = "0.1.0"
 edition = "2021"
+# 1.88 for `slice::as_chunks_mut`, which the preview PNGs use. The published
+# crate's 1.85 claim is unaffected: this tool is not shipped, only run.
+rust-version = "1.88"
 publish = false
 description = "Generates the LUMEN conformance corpus from the specification, without using the reference crate"
 
