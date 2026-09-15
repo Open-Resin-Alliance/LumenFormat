@@ -33,6 +33,18 @@
       "metadataPath": "material.layerHeightMm"
     },
     {
+      "key": "zstdLevel",
+      "label": "Compression Level",
+      "kind": "integer",
+      "defaultValue": 6,
+      "min": 1,
+      "max": 22,
+      "step": 1,
+      "placement": { "tabId": "simple", "sectionId": "global", "cardId": "global-settings", "order": 20 },
+      "metadataPath": "lumen.zstdLevel",
+      "description": "zstd level for layer frames. 3 slices fastest and gives the largest files, 6 is the default, 19 is smallest and costs seconds on a large print."
+    },
+    {
       "key": "bottomLayerCount",
       "label": "Burn-in Layers",
       "kind": "integer",
