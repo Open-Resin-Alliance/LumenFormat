@@ -24,7 +24,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use lumen::chunks::head::Head;
-use lumen::json::{AntiAliasing, Material, Meta, Printer, Slicer, Timing};
+use lumen::json::{AntiAliasing, Material, Meta, Printer, ScaleCompensation, Slicer, Timing};
 use serde_json::Value;
 
 use crate::engine::SlicerV3Error;
@@ -48,6 +48,19 @@ pub const EMBED_VOXL_SCENE_PATH: &str = "lumen.embedVoxlScene";
 
 /// The settings key that carries the scene's bytes, base64-encoded.
 pub const VOXL_SCENE_PATH: &str = "lumen.voxlSceneBase64";
+
+/// The settings keys that carry the per-axis scale compensation, in percent.
+///
+/// Read by their exact `lumen.*` paths, for the same reason the two scene keys are:
+/// no ChiTuBox profile has an equivalent, so there is nothing to fall back through.
+/// They are the only channel a value has into `META.scale_compensation_pct` today -
+/// the material profile has carried `scaleCompensationPct` all along, but the slice
+/// job has no field for it, so nothing fills these from the profile yet.
+pub const SCALE_COMPENSATION_PATHS: [&str; 3] = [
+    "lumen.scaleCompensationXPct",
+    "lumen.scaleCompensationYPct",
+    "lumen.scaleCompensationZPct",
+];
 
 /// Everything the encoder needs from the job besides the masks themselves.
 pub struct LumenMetadata {
@@ -359,6 +372,18 @@ pub fn build(job: &SliceJobV3) -> Result<LumenMetadata, SlicerV3Error> {
     timing.chamber_temperature_c = values.number("chamberTemperatureC");
     timing.vat_temperature_c = values.number("vatTemperatureC");
 
+    // Scale compensation, one axis per field and the three written together. A page
+    // whose three values are all zero - the default, and all the page can say while
+    // nothing applies a compensation - leaves META without the object rather than
+    // claiming zero compensation over a profile that carries an axis of its own; the
+    // same "zero is not overriding" rule the burn-in waits follow. An axis the job
+    // says nothing about counts as zero, so one axis set is enough to write all three.
+    let scale_compensation_pct = {
+        let [x, y, z] =
+            SCALE_COMPENSATION_PATHS.map(|path| values.number_at(path).unwrap_or(0.0));
+        (x != 0.0 || y != 0.0 || z != 0.0).then_some(ScaleCompensation { x, y, z })
+    };
+
     // The printer node, as the manifest writes it. Pixel pitch is not carried, so it
     // is derived from the plate and the panel, which is the same derivation the
     // engine's own `xy_pixel_pitch_mm` helper makes.
@@ -426,6 +451,7 @@ pub fn build(job: &SliceJobV3) -> Result<LumenMetadata, SlicerV3Error> {
         materials,
         printer: Some(printer),
         anti_aliasing: Some(anti_aliasing),
+        scale_compensation_pct,
         slicer: Some(Slicer {
             name: Some("DragonFruit".to_string()),
             version: Some(env!("CARGO_PKG_VERSION").to_string()),

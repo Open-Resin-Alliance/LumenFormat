@@ -68,6 +68,12 @@
       "order": 10
     },
     {
+      "id": "scale",
+      "title": "Scale Compensation",
+      "tabId": "advanced",
+      "order": 20
+    },
+    {
       "id": "temperature",
       "title": "Temperature",
       "tabId": "meta",
@@ -138,6 +144,13 @@
       "order": 10
     },
     {
+      "id": "scale-settings",
+      "title": "Scale Compensation",
+      "tabId": "advanced",
+      "sectionId": "scale",
+      "order": 10
+    },
+    {
       "id": "temperature-settings",
       "title": "Temperature",
       "tabId": "meta",
@@ -161,13 +174,33 @@
       "min": 0.001,
       "max": 1,
       "step": 0.001,
+      "rowKey": "global-settings-row",
+      "rowWeight": 1,
       "placement": {
         "tabId": "general",
         "sectionId": "global",
         "cardId": "global-settings",
         "order": 10
       },
-      "metadataPath": "material.layerHeightMm"
+      "metadataPath": "material.layerHeightMm",
+      "description": "How tall one layer is. A thinner layer holds more detail and prints more of them, so the print takes longer."
+    },
+    {
+      "key": "elephantFootCompensation",
+      "label": "Elephant's Foot Compensation",
+      "kind": "boolean",
+      "defaultValue": false,
+      "disabled": true,
+      "rowKey": "global-settings-row",
+      "rowWeight": 1,
+      "placement": {
+        "tabId": "general",
+        "sectionId": "global",
+        "cardId": "global-settings",
+        "order": 20
+      },
+      "metadataPath": "material.elephantFootCompensation",
+      "description": "Does nothing yet: no slicer applies an elephant's-foot compensation. The correction is made by insetting the bottom layers' masks in the geometry rather than in anything LUMEN records, so the input stays disabled until that lands."
     },
     {
       "key": "zstdLevel",
@@ -249,7 +282,8 @@
         "cardId": "burn-in-settings",
         "order": 30
       },
-      "metadataPath": "material.bottomExposureSec"
+      "metadataPath": "material.bottomExposureSec",
+      "description": "How long a burn-in layer is exposed. The first layers have to bond to the build plate, so they cure far longer than the layers above them."
     },
     {
       "key": "normalExposureSec",
@@ -265,7 +299,8 @@
         "cardId": "normal-settings",
         "order": 10
       },
-      "metadataPath": "material.normalExposureSec"
+      "metadataPath": "material.normalExposureSec",
+      "description": "How long every layer above the burn-in ones is exposed. The resin's own cure time is the value to start from, and the first one to tune when a print comes out soft or over-cured."
     },
     {
       "key": "waitTimeBeforeCureSec",
@@ -353,6 +388,66 @@
       "description": "The same power setting for the burn-in layers, which usually run at full output so the first layers bond to the plate."
     },
     {
+      "key": "scaleCompensationXPct",
+      "label": "Scale X (%)",
+      "kind": "number",
+      "defaultValue": 0,
+      "min": -100,
+      "max": 100,
+      "step": 0.1,
+      "disabled": true,
+      "rowKey": "scale-compensation",
+      "rowWeight": 1,
+      "placement": {
+        "tabId": "advanced",
+        "sectionId": "scale",
+        "cardId": "scale-settings",
+        "order": 10
+      },
+      "metadataPath": "lumen.scaleCompensationXPct",
+      "description": "Shrinkage compensation for the X axis, in percent. 0 leaves the material profile's own value alone, and the input stays disabled until the slicer applies a compensation."
+    },
+    {
+      "key": "scaleCompensationYPct",
+      "label": "Scale Y (%)",
+      "kind": "number",
+      "defaultValue": 0,
+      "min": -100,
+      "max": 100,
+      "step": 0.1,
+      "disabled": true,
+      "rowKey": "scale-compensation",
+      "rowWeight": 1,
+      "placement": {
+        "tabId": "advanced",
+        "sectionId": "scale",
+        "cardId": "scale-settings",
+        "order": 20
+      },
+      "metadataPath": "lumen.scaleCompensationYPct",
+      "description": "Shrinkage compensation for the Y axis, in percent. 0 leaves the material profile's own value alone, and the input stays disabled until the slicer applies a compensation."
+    },
+    {
+      "key": "scaleCompensationZPct",
+      "label": "Scale Z (%)",
+      "kind": "number",
+      "defaultValue": 0,
+      "min": -100,
+      "max": 100,
+      "step": 0.1,
+      "disabled": true,
+      "rowKey": "scale-compensation",
+      "rowWeight": 1,
+      "placement": {
+        "tabId": "advanced",
+        "sectionId": "scale",
+        "cardId": "scale-settings",
+        "order": 30
+      },
+      "metadataPath": "lumen.scaleCompensationZPct",
+      "description": "Shrinkage compensation for the Z axis, in percent. 0 leaves the material profile's own value alone, and the input stays disabled until the slicer applies a compensation."
+    },
+    {
       "key": "bottomLiftDistanceMm",
       "label": "Burn-in Lift Distance (mm)",
       "kind": "number",
@@ -367,7 +462,7 @@
         "order": 10
       },
       "metadataPath": "lumen.bottomLiftDistanceMm",
-      "description": "How far a burn-in layer is lifted. Those first layers stick to the film harder than normal ones, so they peel further and more slowly.",
+      "description": "How far a burn-in layer is lifted. The first, slow segment peels the layer off the film, which the sticky first layers need most, and the fast segment then travels its own distance. A 0 in the second distance makes the lift single-stage, so this distance carries the whole move.",
       "tag": "Slow",
       "color": "#f59e0b",
       "splitWithKey": "bottomLiftDistance2Mm"
@@ -407,7 +502,8 @@
       "metadataPath": "lumen.bottomLiftSpeedMmMin",
       "tag": "Slow",
       "color": "#f59e0b",
-      "splitWithKey": "bottomLiftSpeed2MmMin"
+      "splitWithKey": "bottomLiftSpeed2MmMin",
+      "description": "How fast the peel segment of a burn-in lift moves. Peeling slowly keeps the suction on the film low, which is what the first layers against the plate need. The second speed is used only when the second distance is non-zero; a 0 there makes the lift single-stage and the fast segment never happens."
     },
     {
       "key": "bottomLiftSpeed2MmMin",
@@ -444,7 +540,8 @@
       "metadataPath": "lumen.bottomRetractSpeedMmMin",
       "tag": "Fast",
       "color": "#22c55e",
-      "splitWithKey": "bottomRetractSpeed2MmMin"
+      "splitWithKey": "bottomRetractSpeed2MmMin",
+      "description": "How fast a burn-in layer travels back down. The retract's two halves are the lift's the other way round: this first segment is the fast one and the second is the slow approach into the resin, so this is the fast half. A 0 in the second distance makes the retract single-stage."
     },
     {
       "key": "bottomRetractSpeed2MmMin",
@@ -481,7 +578,8 @@
       "metadataPath": "material.liftDistanceMm",
       "tag": "Slow",
       "color": "#f59e0b",
-      "splitWithKey": "liftDistance2Mm"
+      "splitWithKey": "liftDistance2Mm",
+      "description": "How far the plate lifts after each layer. The first, slow segment peels the cured layer off the film, and the fast segment then travels its own distance. A 0 in the second distance makes the lift single-stage, so this distance carries the whole move."
     },
     {
       "key": "liftDistance2Mm",
@@ -518,7 +616,8 @@
       "metadataPath": "material.liftSpeedMmMin",
       "tag": "Slow",
       "color": "#f59e0b",
-      "splitWithKey": "liftSpeed2MmMin"
+      "splitWithKey": "liftSpeed2MmMin",
+      "description": "How fast the peel segment of the lift moves. Peeling slowly keeps the suction on the film low, which is what stops a fresh layer tearing away from its supports. The second speed is used only when the second distance is non-zero; a 0 there makes the lift single-stage."
     },
     {
       "key": "liftSpeed2MmMin",
@@ -555,7 +654,8 @@
       "metadataPath": "material.retractSpeedMmMin",
       "tag": "Fast",
       "color": "#22c55e",
-      "splitWithKey": "retractSpeed2MmMin"
+      "splitWithKey": "retractSpeed2MmMin",
+      "description": "How fast the plate travels back down. The retract's two halves are the lift's the other way round: this first segment is the fast one and the second is the slow approach that settles the plate into the resin. A 0 in the second distance makes the retract single-stage."
     },
     {
       "key": "retractSpeed2MmMin",
@@ -639,7 +739,8 @@
         "cardId": "temperature-settings",
         "order": 10
       },
-      "metadataPath": "lumen.chamberTemperatureC"
+      "metadataPath": "lumen.chamberTemperatureC",
+      "description": "The temperature the printer's chamber was at, in Celsius. Informational: it is written down for whoever reads the file later and changes nothing about the print, so it can be left alone."
     },
     {
       "key": "vatTemperatureC",
@@ -654,7 +755,8 @@
         "cardId": "temperature-settings",
         "order": 20
       },
-      "metadataPath": "lumen.vatTemperatureC"
+      "metadataPath": "lumen.vatTemperatureC",
+      "description": "The temperature the resin was at when the print was made, in Celsius. Informational, like the chamber temperature: it is recorded rather than used, so it can be left alone."
     },
     {
       "key": "embedVoxlScene",
