@@ -49,7 +49,7 @@ use crate::json::{Material, Meta, Profile, Timing, REQUIRED_META_FIELDS};
 use crate::ree;
 use serde_json::{Map, Value};
 use std::borrow::Cow;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 /// Header flag bits 0, 2 and 4: reserved, and required to be zero.
 ///
@@ -164,6 +164,7 @@ impl Validator {
 
         let head = ctx.read_hdr()?;
         check_hdr(&head)?;
+        ctx.display_pixels.set(head.total_pixels());
 
         let auth = ctx.read_auth()?;
         ctx.cipher = auth.as_ref().map(|a| a.cipher);
@@ -220,6 +221,10 @@ struct Ctx<'a> {
     /// multi-sector layer's second sector, or a strict second pass - does not
     /// decompress it twice.
     cache: RefCell<Option<(u32, Vec<u8>)>>,
+    /// The display's pixel count, set once `HEAD` is parsed. A frame's declared
+    /// output is bounded per slice of it (section 11.3), and the chunk walks run
+    /// after the header, so by then it is known.
+    display_pixels: Cell<u32>,
 }
 
 impl<'a> Ctx<'a> {
@@ -235,6 +240,7 @@ impl<'a> Ctx<'a> {
             key,
             cipher: None,
             cache: RefCell::new(None),
+            display_pixels: Cell::new(0),
         })
     }
 
@@ -448,14 +454,48 @@ impl<'a> Ctx<'a> {
                     )
                 })?;
                 // The frame is released before the output is cached, so the two
-                // are never live at the same time.
-                chunks::decompress_frame(&frame, dictionary)?
+                // are never live at the same time. Its declared output is bounded
+                // by the slices the layer table points into this chunk, which is
+                // the specification's rule (section 11.3) - a ratio guard cannot
+                // stand in for it, because a block of repeating layers compresses
+                // past any fixed ratio and is still conforming.
+                let bound = self.chunk_bound(index, frame.len());
+                chunks::decompress_frame(&frame, dictionary, bound)?
             };
             *self.cache.borrow_mut() = Some((index, data));
         }
         let guard = self.cache.borrow();
         let (_, data) = guard.as_ref().expect("filled immediately above");
         f(data)
+    }
+
+    /// How many slices the layer table points into a `LAYR` chunk.
+    ///
+    /// A slice is an entry that carries bytes, and the count is floored at one so
+    /// that a chunk nothing points into is still allowed one layer's worth: this
+    /// is the bound of section 11.3, and the reader uses the same definition so a
+    /// file cannot pass one and fail the other.
+    fn chunk_bound(&self, index: u32, frame_len: usize) -> u64 {
+        let pixels = self.display_pixels.get();
+        if pixels == 0 {
+            // Unreachable through `validate`, which reads the header first; a
+            // bound from the frame's own bytes is the fallback that cannot be
+            // tighter than a conforming file.
+            return (frame_len as u64).saturating_mul(chunks::MAX_ZSTD_RATIO as u64);
+        }
+        chunks::allocation_bound(self.slices_into(index), pixels)
+    }
+
+    fn slices_into(&self, index: u32) -> u64 {
+        let Ok(Some(table)) = self.read_ltbl() else {
+            return 1;
+        };
+        let count = table
+            .entries
+            .iter()
+            .filter(|entry| !entry.is_empty() && entry.first_layr == index)
+            .count() as u64;
+        count.max(1)
     }
 
     /// The descriptor of the `LAYR` chunk at directory index `index`.

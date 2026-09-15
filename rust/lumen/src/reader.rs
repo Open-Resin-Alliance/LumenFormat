@@ -383,7 +383,33 @@ impl<'a> LumenFile<'a> {
                 )
             })?;
         let dict = self.dictionary.as_ref().map(|d| d.dict_bytes.as_slice());
-        chunks::decompress_frame(&frame, dict)
+        // The bound is the file's own: the layers whose entries point into this
+        // chunk, each of which can hold at most a grayscale REE stream of this
+        // display. A frame's bytes cannot say how far it legitimately expands -
+        // a block of repeating layers compresses past any ratio an encoder's own
+        // output could justify - so the layer table is what bounds it, and a
+        // reader that used a ratio instead would refuse conforming files.
+        let bound = chunks::allocation_bound(self.slices_into(index), self.total_pixels());
+        chunks::decompress_frame(&frame, dict, bound)
+    }
+
+    /// How many slices the layer table points into `index`, floored at one.
+    ///
+    /// The same definition the validator uses for `layr.allocation_bound`, so the
+    /// bound this reader allocates against is the bound the specification states:
+    /// an entry that carries bytes counts, an entry that carries none does not,
+    /// and a chunk nothing points into still gets one layer's worth.
+    fn slices_into(&self, index: u32) -> u64 {
+        let count = (0..self.layer_table.layer_count)
+            .map(|layer| {
+                self.layer_table
+                    .layer_entries(layer)
+                    .iter()
+                    .filter(|entry| !entry.is_empty() && entry.first_layr == index)
+                    .count() as u64
+            })
+            .sum::<u64>();
+        count.max(1)
     }
 
     /// One entry's slice of its `LAYR` chunk's decompressed output.

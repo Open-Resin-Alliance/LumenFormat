@@ -48,14 +48,30 @@ pub fn compress(payload: &[u8], level: i32, dictionary: Option<&[u8]>) -> Result
 }
 
 /// Decompress a zstd frame, checking the result is exactly `uncompressed_size`.
+///
+/// The size is bounded by what the frame's own bytes can justify, which is a
+/// coarse guard for a payload whose bound is unknown until the chunk around it is
+/// parsed. A `LAYR` frame has a better bound - the slices that point into it -
+/// so it goes through [`decompress_frame`] instead (section 11.3).
 pub fn decompress(
     frame: &[u8],
     uncompressed_size: u64,
     dictionary: Option<&[u8]>,
 ) -> Result<Vec<u8>> {
-    // Refuse to reserve memory a frame's own bytes cannot justify before the
+    let bound = (frame.len() as u64).saturating_mul(MAX_ZSTD_RATIO as u64);
+    decompress_within(frame, uncompressed_size, dictionary, bound)
+}
+
+/// Decompress a zstd frame, refusing a declared size above `bound`.
+pub fn decompress_within(
+    frame: &[u8],
+    uncompressed_size: u64,
+    dictionary: Option<&[u8]>,
+    bound: u64,
+) -> Result<Vec<u8>> {
+    // Refuse to reserve memory the file's own structure cannot justify before the
     // decompressor allocates for the declared size (section 11.3).
-    check_allocation(frame.len(), uncompressed_size)?;
+    check_allocation(uncompressed_size, bound, frame.len())?;
     let capacity = usize::try_from(uncompressed_size).map_err(|_| {
         Error::new(
             Check::LayrFrameDecompressedSize,
@@ -116,11 +132,18 @@ pub fn frame_content_size(frame: &[u8]) -> Result<u64> {
     }
 }
 
-/// Decompress a `LAYR` frame, sizing its output from the frame's own header.
-pub fn decompress_frame(frame: &[u8], dictionary: Option<&[u8]>) -> Result<Vec<u8>> {
+/// Decompress a `LAYR` frame, sizing its output from the frame's own header and
+/// bounding it by `bound`.
+///
+/// The bound is the caller's, because a `LAYR` frame's plausible output is
+/// derived from the file rather than from the frame: it is
+/// [`allocation_bound`] over the slices the layer table points into this chunk.
+/// A ratio guard cannot stand in for it - an encoder may write a block whose
+/// layers repeat, and zstd then compresses far past any fixed ratio, which is a
+/// conforming file rather than a hostile one.
+pub fn decompress_frame(frame: &[u8], dictionary: Option<&[u8]>, bound: u64) -> Result<Vec<u8>> {
     let size = frame_content_size(frame)?;
-    check_allocation(frame.len(), size)?;
-    decompress(frame, size, dictionary)
+    decompress_within(frame, size, dictionary, bound)
 }
 
 /// The dictionary ID a raw dictionary reports.
@@ -149,13 +172,14 @@ pub fn allocation_bound(layers: u64, total_pixels: u32) -> u64 {
     layers.saturating_mul(u64::from(total_pixels).saturating_mul(5).saturating_add(64))
 }
 
-/// Reject a payload that would need more memory than its own bytes can justify.
-pub fn check_allocation(payload_len: usize, uncompressed_size: u64) -> Result<()> {
-    if uncompressed_size > (payload_len as u64).saturating_mul(MAX_ZSTD_RATIO as u64) {
+/// Reject a declared size above the bound the file's own structure allows.
+pub fn check_allocation(uncompressed_size: u64, bound: u64, payload_len: usize) -> Result<()> {
+    if uncompressed_size > bound {
         return Err(Error::new(
             Check::LayrAllocationBound,
             format!(
-                "declared uncompressed size {uncompressed_size} is implausible for {payload_len} stored bytes"
+                "declared uncompressed size {uncompressed_size} exceeds the {bound} bytes the \
+                 structure allows for {payload_len} stored bytes"
             ),
         ));
     }
@@ -208,7 +232,10 @@ mod tests {
         let payload: Vec<u8> = (0..4096u32).map(|i| (i % 17) as u8).collect();
         let framed = compress(&payload, 3, None).unwrap();
         assert_eq!(frame_content_size(&framed).unwrap(), payload.len() as u64);
-        assert_eq!(decompress_frame(&framed, None).unwrap(), payload);
+        // A bound generous enough for anything this frame could expand to: the
+        // test is about the header, not about the bound.
+        let bound = (framed.len() as u64).saturating_mul(MAX_ZSTD_RATIO as u64);
+        assert_eq!(decompress_frame(&framed, None, bound).unwrap(), payload);
 
         // A `LAYR` frame is sized from its own header, because the chunk
         // descriptor describes the container and not the frame's output. A frame
@@ -227,13 +254,42 @@ mod tests {
 
     #[test]
     fn check_allocation_bounds_the_declared_size() {
-        assert!(check_allocation(1, (MAX_ZSTD_RATIO - 1) as u64).is_ok());
+        let bound = (MAX_ZSTD_RATIO - 1) as u64;
+        assert!(check_allocation(bound, bound, 1).is_ok());
         assert_eq!(
-            check_allocation(1, MAX_ZSTD_RATIO as u64 + 1)
+            check_allocation(bound + 1, bound, 1).unwrap_err().check(),
+            Check::LayrAllocationBound
+        );
+        assert!(allocation_bound(2, 1000) > 0);
+    }
+
+    /// A frame may compress far past the ratio guard and still be conforming: a
+    /// block whose layers repeat does exactly that. What bounds it is the slices
+    /// the layer table points into its chunk, so a `LAYR` frame is decompressed
+    /// against that bound instead of against the ratio.
+    #[test]
+    fn a_layr_frame_is_bounded_by_its_slices_not_by_a_ratio() {
+        let payload = vec![0u8; 1 << 20];
+        let frame = compress(&payload, 3, None).unwrap();
+        let ratio = payload.len() as f64 / frame.len() as f64;
+        assert!(
+            ratio > MAX_ZSTD_RATIO as f64,
+            "this test needs a frame past the ratio guard, got {ratio:.0}:1"
+        );
+
+        // The ratio guard refuses it, which is why it cannot be the LAYR rule.
+        assert_eq!(
+            decompress_frame(&frame, None, (frame.len() as u64) * MAX_ZSTD_RATIO as u64)
                 .unwrap_err()
                 .check(),
             Check::LayrAllocationBound
         );
-        assert!(allocation_bound(2, 1000) > 0);
+
+        // A bound from the file's own structure accepts it, and the output is
+        // exactly the declared size.
+        let total_pixels = 1 << 20;
+        let bound = allocation_bound(1, total_pixels);
+        assert!(bound >= payload.len() as u64);
+        assert_eq!(decompress_frame(&frame, None, bound).unwrap(), payload);
     }
 }
