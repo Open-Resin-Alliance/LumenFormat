@@ -43,6 +43,7 @@ use crate::crypto::{
 use crate::decompress::{frame_dict_id, Decoder};
 use crate::primitives::{merkle_root, read_varint};
 use crate::ree::{self, Violation};
+use crate::timing::TimingInputs;
 
 /// `META`'s required fields (§4.2).
 const REQUIRED_META_FIELDS: [&str; 10] = [
@@ -107,6 +108,7 @@ pub enum Payload {
 pub struct Checks {
     items: Vec<Item>,
     payloads: BTreeMap<[u8; 4], Payload>,
+    timing: Option<TimingInputs>,
 }
 
 impl Checks {
@@ -142,6 +144,13 @@ impl Checks {
     /// wants to pin the bytes.
     pub fn payloads(&self) -> &BTreeMap<[u8; 4], Payload> {
         &self.payloads
+    }
+
+    /// The `META`, `SECT` and `LROV` objects this run parsed, for a caller that
+    /// wants to resolve §8's pipeline independently of the reader. `None` when
+    /// the run stopped before parsing them, which no conforming vector does.
+    pub fn timing_inputs(&self) -> Option<&TimingInputs> {
+        self.timing.as_ref()
     }
 
     pub fn len(&self) -> usize {
@@ -772,6 +781,8 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
         payloads.insert(*b"PROF", Payload::One(prof_plain));
     }
 
+    // The `LROV` body, kept for the timing inputs below.
+    let mut lrov_body = None;
     if let Some(entry) = first(&real, b"LROV") {
         let Some(lrov_plain) = content.bytes(entry) else {
             return checks;
@@ -818,7 +829,19 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
             }),
         );
         payloads.insert(*b"LROV", Payload::One(lrov_plain));
+        lrov_body = Some(lrov);
     }
+
+    // The values §8 resolves a point from, taken from the chunks this run just
+    // parsed - so a sealed file is resolved from what its key unwrapped rather
+    // than from the bytes on disk. The layer count is HDR's, which the sample of
+    // points is bounded by.
+    checks.timing = Some(TimingInputs {
+        total_layers,
+        meta,
+        sects,
+        lrov: lrov_body,
+    });
 
     let prev_entries = find(&real, b"PREV");
     if !prev_entries.is_empty() {

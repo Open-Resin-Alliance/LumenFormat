@@ -65,15 +65,17 @@ fn main() -> ExitCode {
                 return ExitCode::from(1);
             }
         };
+        let comparison = check_manifest(vector, &path, checks.payloads(), checks.timing_inputs());
         if verbose {
             checks.print_verbose();
+            comparison.timing.print_verbose();
         }
         let mut bad: Vec<String> = checks
             .failed()
             .iter()
             .map(|name| (*name).to_string())
             .collect();
-        bad.extend(check_manifest(vector, &path, checks.payloads()));
+        bad.extend(comparison.failures);
         if !checks.completed() {
             incomplete += 1;
         }

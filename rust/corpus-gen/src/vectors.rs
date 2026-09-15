@@ -783,7 +783,7 @@ fn binary_basic() -> Built {
     ];
     vector::build_vector(&VectorSpec {
         name: "binary-basic",
-        description: "Six layers covering the empty-layer form, binary REE, grayscale REE and split REE, across three blocks with no dictionary.",
+        description: "Six layers covering the empty-layer form, binary REE, grayscale REE and split REE, across three blocks with no dictionary, over a bottom range whose motion, wait and PWM values differ from the normal ones: the bottom layers take the bottom-prefixed values verbatim, the transition layer blends them, and light_pwm switches to the normal value at the first non-bottom layer instead of blending.",
         features: &[
             "empty-layer",
             "binary-ree",
@@ -796,6 +796,13 @@ fn binary_basic() -> Built {
         layers,
         block_size: 2,
         split_layers: vec![4],
+        meta_extra: vec![
+            ("bottom_lift_slow_distance_um", Value::from(7000)),
+            ("bottom_lift_slow_speed_um_min", Value::from(40000)),
+            ("bottom_wait_time_before_cure_ms", Value::from(1200)),
+            ("bottom_wait_time_after_lift_ms", Value::from(333)),
+            ("bottom_light_pwm", Value::from(200)),
+        ],
         ..Default::default()
     })
 }
@@ -1000,10 +1007,14 @@ fn layer_overrides() -> Built {
             "layer_range" => vec![6, 8],
             "wait_time_after_lift_ms" => 1000,
         ],
+        obj![
+            "layer" => 4,
+            "wait_time_after_lift_ms" => 900,
+        ],
     ];
     vector::build_vector(&VectorSpec {
         name: "layer-overrides",
-        description: "Ten layers with an LROV chunk covering a single layer, an inclusive layer range scoped to sector 0, and a range that applies to every sector.",
+        description: "Ten layers with an LROV chunk whose four entries cover a single layer, an inclusive range scoped to sector 0, a range that applies to every sector, and a second entry on layer 4, which the range already matches. The two entries that match layer 4 fold field by field rather than the later one replacing the earlier, so that layer keeps the range's exposure and wait while taking the single-layer entry's wait after the lift.",
         features: &[
             "lrov-chunk",
             "layer-override",
@@ -1013,7 +1024,7 @@ fn layer_overrides() -> Built {
         display: (64, 48),
         layers: vector::repeated(10, &[(0, 120, 255)]),
         block_size: 5,
-        lrov: Some(payload::lrov(overrides)),
+        lrov: Some(overrides),
         ..Default::default()
     })
 }
@@ -1242,7 +1253,7 @@ fn lrov_vector(overrides: Vec<Value>) -> Vec<u8> {
         display: (64, 48),
         layers: vector::repeated(10, &[(0, 120, 255)]),
         block_size: 5,
-        lrov: Some(payload::lrov(overrides)),
+        lrov: Some(overrides),
         ..Default::default()
     })
     .raw

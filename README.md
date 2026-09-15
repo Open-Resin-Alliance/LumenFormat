@@ -160,6 +160,12 @@ that one module is self-consistent. Four invalid vectors are marked `strict_only
 defect is invisible to a loose-mode reader, and the corpus asserts that a loose read accepts
 them, which pins the loose/strict distinction itself.
 
+The manifest also records the settings a conforming reader must resolve for a sample of
+`(layer, sector)` points, so the §8 pipeline - base values, bottom/transition blending, the
+overrides - is checkable by any implementation and not only by this crate's own tests. That
+is what makes §4.6's mandatory handling of per-layer overrides enforceable rather than
+prose.
+
 ```sh
 cd rust
 cargo run --release -p lumen-corpus --bin verify_vectors        # validate the committed corpus

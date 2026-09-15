@@ -16,6 +16,7 @@ pub mod json;
 pub mod payload;
 pub mod png;
 pub mod ree;
+pub mod timing;
 pub mod vector;
 pub mod vectors;
 

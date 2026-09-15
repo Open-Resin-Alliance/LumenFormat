@@ -10,6 +10,7 @@ use crate::json;
 use crate::obj;
 use crate::payload::{self, LayerEntry};
 use crate::ree;
+use crate::timing;
 use crate::ZSTD_LAYER_LEVEL;
 
 /// The encoder name every HDR payload carries.
@@ -227,10 +228,35 @@ pub struct VectorSpec<'a> {
     pub force_run_count_zero: Vec<usize>,
     pub meta_extra: Vec<(&'a str, Value)>,
     pub prof: Option<Vec<u8>>,
-    pub lrov: Option<Vec<u8>>,
+    pub lrov: Option<Vec<Value>>,
     pub prevs: Vec<(Vec<u8>, u32, bool)>,
     pub voxl: Option<Vec<u8>>,
     pub extds: Vec<(Vec<u8>, u32)>,
+}
+
+impl VectorSpec<'_> {
+    /// The `META` payload's object (spec 4.2), which the manifest's timing
+    /// resolves from the way the file's own reader would.
+    pub fn meta_value(&self) -> Value {
+        payload::meta_value(&self.meta_extra)
+    }
+
+    /// The `SECT` definitions the file carries (spec 4.5), in chunk order.
+    ///
+    /// The corpus has one support sector, and it is present exactly when the
+    /// layer data is multi-sector.
+    pub fn sectors(&self, multi_sector: bool) -> Vec<Value> {
+        if multi_sector {
+            vec![payload::sect_value(1, "Support", 3000)]
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// The `LROV` entries the file carries (spec 4.6), in file order.
+    pub fn overrides(&self) -> &[Value] {
+        self.lrov.as_deref().unwrap_or(&[])
+    }
 }
 
 impl<'a> Default for VectorSpec<'a> {
@@ -279,16 +305,16 @@ pub fn content_chunks(spec: &VectorSpec, enc: &Layers) -> Vec<Chunk> {
                 ..Default::default()
             }),
         ),
-        Chunk::new(b"META", payload::meta(&spec.meta_extra)).compressed(),
+        Chunk::new(b"META", json::dumps(&spec.meta_value())).compressed(),
     ];
     if let Some(prof) = &spec.prof {
         chunks.push(Chunk::new(b"PROF", prof.clone()).compressed());
     }
-    if enc.multi_sector {
-        chunks.push(Chunk::new(b"SECT", payload::sect(1, "Support", 3000)).compressed());
+    for definition in spec.sectors(enc.multi_sector) {
+        chunks.push(Chunk::new(b"SECT", json::dumps(&definition)).compressed());
     }
     if let Some(lrov) = &spec.lrov {
-        chunks.push(Chunk::new(b"LROV", lrov.clone()).compressed());
+        chunks.push(Chunk::new(b"LROV", payload::lrov(lrov)).compressed());
     }
     if enc.use_dict {
         chunks.push(Chunk::new(
@@ -323,6 +349,21 @@ pub fn content_chunks(spec: &VectorSpec, enc: &Layers) -> Vec<Chunk> {
 }
 
 /// The manifest entry's golden data for one vector.
+///
+/// The entry pins the bytes, and `resolved_timing` additionally pins what a
+/// conforming reader must resolve from the file's META, `SECT` and `LROV`
+/// payloads for a sample of `(layer, sector)` points ([`crate::timing`]), so a
+/// third-party implementation has numbers to agree with and not only bytes to
+/// re-derive. The sample is the product of a set of layers and a set of sectors,
+/// chosen to touch every branch of the pipeline rather than every layer: the two
+/// ends of the bottom range and its first transition step, the first fully-normal
+/// layer and the last layer, each of them beside every layer an `LROV` entry
+/// names and that layer's neighbours - which is what puts an override boundary and
+/// the layers on either side of it in the same table - against sector 0, every
+/// sector a `SECT` chunk defines and every sector an override targets. Pinning
+/// every layer would add no branch the pipeline does not already show here: a
+/// reader that agrees at these points and disagrees between them has a boundary
+/// error, not a sampling gap.
 pub fn vector_meta(
     spec: &VectorSpec,
     enc: &Layers,
@@ -350,6 +391,17 @@ pub fn vector_meta(
         .collect();
 
     let features: Vec<Value> = spec.features.iter().map(|f| Value::from(*f)).collect();
+    // The timing pipeline reads the very payloads the chunks carry, not a second
+    // copy of them: META as `content_chunks` wrote it, the `SECT` definitions it
+    // wrote, and the LROV entries in file order.
+    let meta = spec.meta_value();
+    let sectors = spec.sectors(enc.multi_sector);
+    let timing = timing::Pipeline::new(
+        &meta,
+        &sectors,
+        spec.overrides(),
+        enc.layer_bytes.len() as u32,
+    );
     let mut entries: Vec<(&str, Value)> = vec![
         ("name", Value::from(spec.name)),
         ("description", Value::from(spec.description)),
@@ -390,6 +442,7 @@ pub fn vector_meta(
             Value::from(hash::hex(&hash::merkle_root(&enc.leaves))),
         ),
         ("layers", Value::Array(layer_entries)),
+        ("resolved_timing", timing.manifest()),
     ];
     if let Some(crypto_value) = crypto_value {
         entries.push(("crypto", crypto_value));

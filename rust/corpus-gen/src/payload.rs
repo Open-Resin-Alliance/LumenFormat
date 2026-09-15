@@ -77,9 +77,13 @@ pub fn hdr(header: &Header) -> Vec<u8> {
     out
 }
 
-/// META, with `overrides` applied on top of the corpus' settings (spec 4.2).
-pub fn meta(overrides: &[(&str, Value)]) -> Vec<u8> {
-    json::dumps(&json::merge(
+/// META's object, with `overrides` applied on top of the corpus' settings
+/// (spec 4.2).
+///
+/// The object rather than its bytes, because the manifest resolves its timing
+/// pipeline from the same values the payload carries.
+pub fn meta_value(overrides: &[(&str, Value)]) -> Value {
+    json::merge(
         obj![
             "meta_version" => 1,
             "normal_exposure_ms" => 2500,
@@ -93,17 +97,17 @@ pub fn meta(overrides: &[(&str, Value)]) -> Vec<u8> {
             "retract_fast_speed_um_min" => 150000,
         ],
         overrides,
-    ))
+    )
 }
 
-/// SECT (spec 4.5).
-pub fn sect(sector_id: u32, name: &str, exposure_ms: u32) -> Vec<u8> {
-    json::dumps(&obj![
+/// One `SECT` definition (spec 4.5), as the object its chunk carries.
+pub fn sect_value(sector_id: u32, name: &str, exposure_ms: u32) -> Value {
+    obj![
         "sector_id" => sector_id,
         "name" => name,
         "material_index" => 0,
         "normal_exposure_ms" => exposure_ms,
-    ])
+    ]
 }
 
 /// LTBL (spec 4.9): one 20-byte entry per layer.
@@ -275,9 +279,10 @@ pub fn prof(settings_extra: ProfSettings, overrides: ProfOverrides) -> Vec<u8> {
     json::dumps(&profile)
 }
 
-/// LROV (spec 4.6).
-pub fn lrov(overrides: Vec<Value>) -> Vec<u8> {
-    json::dumps(&obj!["overrides" => overrides])
+/// LROV (spec 4.6): the entries in file order, which is the order a reader
+/// folds them in.
+pub fn lrov(overrides: &[Value]) -> Vec<u8> {
+    json::dumps(&obj!["overrides" => Value::Array(overrides.to_vec())])
 }
 
 /// VOXL (spec 4.12): a minimal V1 scene document.

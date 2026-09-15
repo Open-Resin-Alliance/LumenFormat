@@ -21,6 +21,9 @@
 //! * [`content`] is the JSON shape rules the content chunks are held to.
 //! * [`decompress`] is zstd, with the oracle's semantics rather than the
 //!   obvious ones.
+//! * [`timing`] is §8's pipeline: the values a conforming reader must resolve
+//!   for a `(layer, sector)` point, which the manifest records for a sample of
+//!   them.
 //! * [`manifest`] compares a file against the corpus' recorded golden values,
 //!   which is a different claim from "it conforms".
 //! * [`primitives`] and [`bytes`] are the arithmetic and the byte reads those
@@ -35,9 +38,10 @@ pub mod manifest;
 pub mod primitives;
 pub mod reader;
 pub mod ree;
+pub mod timing;
 
 pub use crypto::CryptoBlock;
-pub use manifest::{check_manifest, Invalid, Manifest, Valid};
+pub use manifest::{check_manifest, Comparison, Invalid, Manifest, Valid};
 pub use primitives::crc32c_self_test;
 pub use reader::{validate, validate_bytes, Checks, Payload};
 

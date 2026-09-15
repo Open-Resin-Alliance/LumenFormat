@@ -10,7 +10,7 @@ LUMEN v1.0 and are validated against it.
 |------|----------|
 | `valid/*.lumen` | Files a conforming reader must accept |
 | `invalid/*.lumen` | Files a conforming reader must reject, each failing the check its manifest entry names |
-| `manifest.json` | Golden data for every vector: sizes, offsets, block table, per-layer hashes, Merkle root, CRC-32C, and the credentials and parameters for encrypted vectors |
+| `manifest.json` | Golden data for every vector: sizes, offsets, block table, per-layer hashes, Merkle root, CRC-32C, the timing a conforming reader must resolve for a sample of `(layer, sector)` points, and the credentials and parameters for encrypted vectors |
 | [`../rust/corpus-gen`](../rust/corpus-gen) | `make_vectors`: the reference encoder that regenerates the corpus from the specification |
 | [`../rust/corpus`](../rust/corpus) | `verify_vectors`: the independent reader and validator. `cross_check` points that same reader at files the reference crate wrote |
 
@@ -70,18 +70,44 @@ structures and all layer hashes must not change. Regeneration is deterministic
 for a fixed zstd version, including the encrypted vectors, because every
 nonce, salt and key is derived from a fixed seed (see *Test credentials*).
 
+## Resolved timing
+
+Bytes are not the whole contract. §8 resolves one layer's settings from META, that sector's
+`SECT` definition, the bottom/transition blend and the `LROV` overrides, and §4.6 makes
+applying overrides mandatory for a reader: a printer that ignores them prints those layers at
+the wrong exposure, and nothing in the file says so afterwards. So every valid vector also
+carries `resolved_timing` in the manifest - for a sample of `(layer, sector)` points, the
+settings a conforming reader must resolve, field for field, as integers. Temperatures and the
+cure curve are not pinned: they pass through from META or a sector definition unblended, and
+this pins the pipeline that does the blending.
+
+The sample covers every branch rather than every layer. With `B = bottom_layer_count`,
+`T = transition_layer_count` and `N = total_layers`:
+
+- layers `{0, 1, B-1, B, B+T, N-1}`, each clamped into range, plus every layer an `LROV`
+  entry names or bounds and each of its immediate neighbours;
+- sectors `{0}`, plus every sector a `SECT` chunk defines and every sector an `LROV` entry
+  targets;
+- every pair of those - so the points include the bottom range, the first interpolation step,
+  the first fully-normal layer, the last layer, and each override boundary next to the layer
+  it does not reach.
+
+`layer-overrides` is the one to read first: layer 2 carries an override, layers 3 to 5 carry
+one scoped to sector 0 with a different pause, layers 6 to 8 carry one for every sector, and
+the neighbouring layers are left at META's values.
+
 ## Valid vectors
 
 | Vector | Layers | Blocks | Cipher / mode | Exercises |
 |--------|--------|--------|---------------|-----------|
-| `binary-basic` | 6 | 3 | - | the empty-layer form, binary REE, grayscale REE, split REE, multi-block framing, single-sector layer data |
+| `binary-basic` | 6 | 3 | - | the empty-layer form, binary REE, grayscale REE, split REE, multi-block framing, single-sector layer data, and a bottom range whose motion, wait and PWM values differ from the normal ones: the bottom layers take the bottom-prefixed values verbatim, the transition layer blends them, and `light_pwm` switches to the normal value at the first non-bottom layer rather than blending |
 | `dict-multi-block` | 64 | 4 | - | `ZDIC`, dictionary-ID agreement across every block frame, four-block framing, split and grayscale REE at scale |
 | `multi-sector` | 4 | 2 | - | `MULTI_SECTOR`, the per-layer sector varint framing, per-layer sector tags, the partition invariant, a layer with a single active sector inside a multi-sector file, an empty layer |
 | `encrypted-password` | 32 | 2 | AES-256-GCM, password | the `AUTH` chunk and its fixed 65-byte password section, Argon2id and AES-256-KW unwrapping to the session key, a sealed dictionary, sealed metadata, two blocks of individually sealed layer frames with their per-block AAD, and dictionary-ID agreement across sealed frames |
 | `encrypted-machine` | 4 | 1 | ChaCha20-Poly1305, machine binding | three recipient entries, matching by `machine_fp` without contacting the other recipients, X25519 and HKDF-SHA-256 and AES-256-KW unwrapping, the low-order-point entry that must be rejected, the second cipher, a single sealed block |
 | `encrypted-both` | 6 | 3 | AES-256-GCM, both modes | mode bits 0 and 1 in one `AUTH`, one session key wrapped both ways, sealed `SECT` and sealed layer frames in a multi-sector file |
 | `print-profile` | 4 | 2 | AES-256-GCM, password | a sealed `PROF`: profile identity and UUID, a material library, and a `settings` block reusing META's field names, including the experimental cure curve and the exposure and wait times as integer milliseconds |
-| `layer-overrides` | 10 | 2 | - | `LROV`: a single-layer override, an inclusive `layer_range` scoped to sector 0, and a range that applies to every sector; each override sets its exposures and wait times as integer milliseconds, and a conforming reader MUST apply them ([§4.6](../spec/05-print-control.md#46-lrov---layer-override-chunk)) |
+| `layer-overrides` | 10 | 2 | - | `LROV` with four entries: a single layer, an inclusive `layer_range` scoped to sector 0, a range that applies to every sector, and a second entry on a layer the range already matches, so those two fold field by field rather than the later replacing the earlier. A conforming reader MUST apply them ([§4.6](../spec/05-print-control.md#46-lrov---layer-override-chunk)) |
 | `previews` | 4 | 2 | AES-256-GCM, password | two `PREV` chunks in one file - a large preview in the clear and a sealed icon - with the role in the descriptor's flags. Preview sealing is optional even when the file is encrypted |
 | `embedded-scene` | 4 | 2 | AES-256-GCM, password | a sealed `VOXL` chunk: an embedded scene is copied in and must come back out unchanged, while LUMEN itself never parses it |
 | `extensions` | 4 | 2 | - | two non-critical `EXTD` chunks - a reserved ORA type code and a vendor extension - pinning the frame, the `vendor_id` field and the `critical` bit, and the rule that readers skip extensions they do not implement |

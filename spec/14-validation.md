@@ -141,7 +141,11 @@ The repository carries byte-exact test vectors and an independent validator unde
 valid vector pins the uncompressed structures it contains exactly - the file header,
 `HDR`, `AUTH`, `LTBL`, the `LAYR` header and block table, `LHAS`, every REE stream, the
 chunk directory and the trailer - and each invalid vector fails exactly one named check
-from this section. Compressed payloads are pinned by property rather than by byte,
+from this section. Each valid vector also records the settings a conforming reader must
+resolve for a sample of `(layer, sector)` points, which pins the [§8](11-layer-timing.md#8-per-layer-settings-model)
+pipeline - base values, bottom and transition blending, absent-field defaults, and the
+`LROV` overrides a reader is required to apply ([§4.6](05-print-control.md#46-lrov---layer-override-chunk)) -
+rather than only the bytes. Compressed payloads are pinned by property rather than by byte,
 because zstd output is not stable across versions. The encrypted vectors carry their
 test password and recipient key in the manifest.
 
