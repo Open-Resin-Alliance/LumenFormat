@@ -6,9 +6,11 @@
 //! is what lets this crate re-emit a chunk it did not fully understand
 //! ([`spec/13-versioning.md`] section 10.2).
 //!
-//! Floating-point JSON syntax is accepted for every field the specification
-//! calls an ordinary number; lengths and speeds are integer micrometres and
-//! integer micrometres per minute, so they are modelled as integers.
+//! Durations are whole milliseconds, lengths are integer micrometers and speeds
+//! are integer micrometers per minute, so all three are modelled as integers and
+//! nothing below one millisecond is expressible. Floating-point JSON syntax is
+//! accepted for every field the specification calls an ordinary number, which is
+//! what a temperature, an energy, a percentage or a density is.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -16,8 +18,8 @@ use serde_json::{Map, Value};
 /// The ten fields META must carry ([`spec/14-validation.md`] section 11.2).
 pub const REQUIRED_META_FIELDS: [&str; 10] = [
     "meta_version",
-    "normal_exposure_sec",
-    "bottom_exposure_sec",
+    "normal_exposure_ms",
+    "bottom_exposure_ms",
     "bottom_layer_count",
     "transition_layer_count",
     "layer_height_um",
@@ -36,15 +38,15 @@ pub const REQUIRED_META_FIELDS: [&str; 10] = [
 /// ([`spec/11-layer-timing.md`] section 8).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Timing {
-    /// Default layer thickness in micrometres.
+    /// Default layer thickness in micrometers.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub layer_height_um: Option<u32>,
-    /// Exposure time for normal layers, in seconds.
+    /// Exposure time for normal layers, in milliseconds.
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub normal_exposure_sec: Option<f64>,
-    /// Exposure time for bottom layers, in seconds.
+    pub normal_exposure_ms: Option<u32>,
+    /// Exposure time for bottom layers, in milliseconds.
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub bottom_exposure_sec: Option<f64>,
+    pub bottom_exposure_ms: Option<u32>,
     /// How many layers the bottom range holds.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub bottom_layer_count: Option<u32>,
@@ -102,24 +104,24 @@ pub struct Timing {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub bottom_retract_slow_speed_um_min: Option<u32>,
 
-    /// Pause before curing, in seconds.
+    /// Pause before curing, in milliseconds.
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub wait_time_before_cure_sec: Option<f64>,
-    /// Pause after curing, in seconds.
+    pub wait_time_before_cure_ms: Option<u32>,
+    /// Pause after curing, in milliseconds.
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub wait_time_after_cure_sec: Option<f64>,
-    /// Pause after the lift, in seconds.
+    pub wait_time_after_cure_ms: Option<u32>,
+    /// Pause after the lift, in milliseconds.
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub wait_time_after_lift_sec: Option<f64>,
-    /// Bottom-layer pause before curing, in seconds.
+    pub wait_time_after_lift_ms: Option<u32>,
+    /// Bottom-layer pause before curing, in milliseconds.
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub bottom_wait_time_before_cure_sec: Option<f64>,
-    /// Bottom-layer pause after curing, in seconds.
+    pub bottom_wait_time_before_cure_ms: Option<u32>,
+    /// Bottom-layer pause after curing, in milliseconds.
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub bottom_wait_time_after_cure_sec: Option<f64>,
-    /// Bottom-layer pause after the lift, in seconds.
+    pub bottom_wait_time_after_cure_ms: Option<u32>,
+    /// Bottom-layer pause after the lift, in milliseconds.
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub bottom_wait_time_after_lift_sec: Option<f64>,
+    pub bottom_wait_time_after_lift_ms: Option<u32>,
 
     /// Light PWM for normal layers, `0`-`255`.
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -157,8 +159,8 @@ impl Timing {
     pub fn field_names() -> &'static [&'static str] {
         &[
             "layer_height_um",
-            "normal_exposure_sec",
-            "bottom_exposure_sec",
+            "normal_exposure_ms",
+            "bottom_exposure_ms",
             "bottom_layer_count",
             "transition_layer_count",
             "lift_slow_distance_um",
@@ -177,12 +179,12 @@ impl Timing {
             "bottom_retract_fast_speed_um_min",
             "bottom_retract_slow_distance_um",
             "bottom_retract_slow_speed_um_min",
-            "wait_time_before_cure_sec",
-            "wait_time_after_cure_sec",
-            "wait_time_after_lift_sec",
-            "bottom_wait_time_before_cure_sec",
-            "bottom_wait_time_after_cure_sec",
-            "bottom_wait_time_after_lift_sec",
+            "wait_time_before_cure_ms",
+            "wait_time_after_cure_ms",
+            "wait_time_after_lift_ms",
+            "bottom_wait_time_before_cure_ms",
+            "bottom_wait_time_after_cure_ms",
+            "bottom_wait_time_after_lift_ms",
             "light_pwm",
             "bottom_light_pwm",
             "chamber_temperature_c",
@@ -208,7 +210,7 @@ impl Timing {
 /// The experimental resin working curve: Beer-Lambert parameters.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct CureCurve {
-    /// Penetration depth in micrometres.
+    /// Penetration depth in micrometers.
     pub dp_um: f64,
     /// Critical exposure in mJ/cm^2.
     pub ec_mj_cm2: f64,
@@ -231,7 +233,7 @@ pub struct Material {
     /// Density in grams per millilitre.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub density_g_ml: Option<f64>,
-    /// Display colour.
+    /// Display color.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub color_rgba: Option<[u8; 4]>,
     /// Bottle price, vendor metadata.
@@ -266,16 +268,16 @@ pub struct Printer {
     /// Display height in pixels.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub display_height_px: Option<u32>,
-    /// Pixel pitch in micrometres.
+    /// Pixel pitch in micrometers.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub pixel_size_um: Option<u32>,
-    /// Build plate X dimension in micrometres.
+    /// Build plate X dimension in micrometers.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub build_width_um: Option<u32>,
-    /// Build plate Y dimension in micrometres.
+    /// Build plate Y dimension in micrometers.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub build_depth_um: Option<u32>,
-    /// Build plate Z dimension in micrometres.
+    /// Build plate Z dimension in micrometers.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub build_height_um: Option<u32>,
     /// Panel bit depth.
@@ -301,7 +303,7 @@ pub struct CompatiblePrinter {
     /// Display height in pixels.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub display_height_px: Option<u32>,
-    /// Pixel pitch in micrometres.
+    /// Pixel pitch in micrometers.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub pixel_size_um: Option<u32>,
     /// Unknown keys, preserved verbatim.
@@ -405,9 +407,9 @@ pub struct Meta {
     /// Per-axis scale compensation.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub scale_compensation_pct: Option<ScaleCompensation>,
-    /// Estimated print time in seconds, informational.
+    /// Estimated print time in milliseconds, informational.
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub estimated_print_time_sec: Option<u64>,
+    pub estimated_print_time_ms: Option<u32>,
     /// Estimated resin volume in millilitres, informational.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub estimated_resin_volume_ml: Option<f64>,
@@ -483,7 +485,7 @@ pub struct Sect {
     /// Index into the material library. Defaults to `0` when absent.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub material_index: Option<usize>,
-    /// Display hint overriding the material's colour for this sector.
+    /// Display hint overriding the material's color for this sector.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub color_rgba: Option<[u8; 4]>,
     /// Timing overrides; absent fields inherit from META.

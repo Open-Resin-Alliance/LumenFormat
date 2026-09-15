@@ -50,15 +50,24 @@ derived from it store the *total* lift and only the second segment:
 | `retract_fast_distance_um` | `RetractHeight` (the first segment) |
 | `retract_slow_distance_um` | `RetractHeight2` (the second segment) |
 | `bottom_retract_slow_distance_um` | `BottomRetractHeight2` |
-| `wait_time_after_cure_sec` | `LightOffDelay` |
+| `wait_time_after_cure_ms` | `LightOffDelay` |
 
 A converter that copies `lift_slow_distance_um` straight into `LiftHeight` lifts only a
 fraction of the intended travel, because ours is the first segment where theirs is
 the sum. The last row is the reverse case: ChiTuBox's `LightOffDelay` is a pause after the
-exposure, which is exactly what `wait_time_after_cure_sec` is, so the two are one wait under
+exposure, which is exactly what `wait_time_after_cure_ms` is, so the two are one wait under
 two names. Lumen keeps the wait and drops the older field, whose meaning is not consistent
-between firmwares - some apply it before the lift, some treat it as a per-layer total. It also has a unit to convert: ChiTuBox stores these as millimetre floats, so
-multiply by 1000 writing Lumen and divide reading ChiTuBox, and expect the float to land
-where the integer cannot - a ChiTuBox value of 5.0005 mm has no exact micrometre form. Note also that the slicer's CTB timing struct carries a
+between firmwares - some apply it before the lift, some treat it as a per-layer total.
+
+Two rows carry a unit to convert. ChiTuBox stores lift heights as millimetre floats, so
+multiply by 1000 writing Lumen and divide by 1000 reading ChiTuBox; it stores timings as
+second floats, so the same factor converts `wait_time_after_cure_ms` and `LightOffDelay`.
+Both directions lose what the integer cannot hold: a ChiTuBox value of 5.0005 mm has no
+exact micrometer form, and a `LightOffDelay` of 2.0005 s has no exact millisecond form.
+Round to the nearest unit in both directions. Neither format carries a sub-micrometer
+length or a sub-millisecond duration, so a converted value may sit less than one unit from
+its source and a round trip does not always return the original float.
+
+Note also that the slicer's CTB timing struct carries a
 `bottom_retract_height2_mm` field: it is the same quantity as
 `bottom_retract_slow_distance_um`, under the other format's name.

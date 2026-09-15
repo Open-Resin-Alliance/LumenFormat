@@ -14,10 +14,10 @@ const DEFAULT_LIGHT_PWM: u32 = 255;
 /// The concrete timing of one `(layer, sector)` pair.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Resolved {
-    /// Layer thickness in micrometres.
+    /// Layer thickness in micrometers.
     pub layer_height_um: u32,
-    /// Exposure time for this layer, in seconds.
-    pub exposure_sec: f64,
+    /// Exposure time for this layer, in milliseconds.
+    pub exposure_ms: u32,
     /// Lift, slow segment distance.
     pub lift_slow_distance_um: u32,
     /// Lift, slow segment speed.
@@ -34,12 +34,12 @@ pub struct Resolved {
     pub retract_slow_distance_um: u32,
     /// Retract, slow segment speed.
     pub retract_slow_speed_um_min: u32,
-    /// Pause before curing, in seconds.
-    pub wait_time_before_cure_sec: f64,
-    /// Pause after curing, in seconds.
-    pub wait_time_after_cure_sec: f64,
-    /// Pause after the lift, in seconds.
-    pub wait_time_after_lift_sec: f64,
+    /// Pause before curing, in milliseconds.
+    pub wait_time_before_cure_ms: u32,
+    /// Pause after curing, in milliseconds.
+    pub wait_time_after_cure_ms: u32,
+    /// Pause after the lift, in milliseconds.
+    pub wait_time_after_lift_ms: u32,
     /// Light PWM for this layer.
     pub light_pwm: u32,
     /// Chamber target temperature, if any.
@@ -106,9 +106,9 @@ pub fn resolve(
     let bottom_light_pwm = merged(timing, sect, |t| t.bottom_light_pwm).unwrap_or(light_pwm);
 
     // The values the bottom and transition ranges blend, each as a (normal,
-    // bottom) pair. An absent optional field resolves to `0`/`0.0`, which the
-    // spec renders as a segment that is not performed, or no pause at all.
-    let exposure = pair!(timing, sect, normal_exposure_sec, bottom_exposure_sec, 0.0);
+    // bottom) pair. An absent optional field resolves to `0`, which the spec
+    // renders as a segment that is not performed, or no pause at all.
+    let exposure = pair!(timing, sect, normal_exposure_ms, bottom_exposure_ms, 0);
     let lift_slow_distance = pair!(
         timing,
         sect,
@@ -168,23 +168,23 @@ pub fn resolve(
     let wait_before_cure = pair!(
         timing,
         sect,
-        wait_time_before_cure_sec,
-        bottom_wait_time_before_cure_sec,
-        0.0
+        wait_time_before_cure_ms,
+        bottom_wait_time_before_cure_ms,
+        0
     );
     let wait_after_cure = pair!(
         timing,
         sect,
-        wait_time_after_cure_sec,
-        bottom_wait_time_after_cure_sec,
-        0.0
+        wait_time_after_cure_ms,
+        bottom_wait_time_after_cure_ms,
+        0
     );
     let wait_after_lift = pair!(
         timing,
         sect,
-        wait_time_after_lift_sec,
-        bottom_wait_time_after_lift_sec,
-        0.0
+        wait_time_after_lift_ms,
+        bottom_wait_time_after_lift_ms,
+        0
     );
 
     // `u64` keeps `bottom + transition` from wrapping on a malformed META.
@@ -194,16 +194,22 @@ pub fn resolve(
     let stage = if index < bottom {
         Stage::Bottom
     } else if index < bottom + transition {
-        // One step into the range is the first blend step, and the first
-        // fully-normal layer, `bottom + transition`, is `t = 1`.
-        Stage::Transition((index - bottom + 1) as f64 / (transition + 1) as f64)
+        // One step into the range is the first blend step, so `k` runs
+        // `1..=transition_layer_count` and the first fully-normal layer,
+        // `bottom + transition`, is the `k == N` case the formula collapses to
+        // the normal value. Both counts are `u32`s widened before the `+ 1`, so
+        // even `transition = u32::MAX` cannot overflow.
+        Stage::Transition {
+            k: index - bottom + 1,
+            n: transition + 1,
+        }
     } else {
         Stage::Normal
     };
 
     let mut resolved = Resolved {
         layer_height_um,
-        exposure_sec: blend_f64(exposure, stage),
+        exposure_ms: blend_u32(exposure, stage),
         lift_slow_distance_um: blend_u32(lift_slow_distance, stage),
         lift_slow_speed_um_min: blend_u32(lift_slow_speed, stage),
         lift_fast_distance_um: blend_u32(lift_fast_distance, stage),
@@ -212,9 +218,9 @@ pub fn resolve(
         retract_fast_speed_um_min: blend_u32(retract_fast_speed, stage),
         retract_slow_distance_um: blend_u32(retract_slow_distance, stage),
         retract_slow_speed_um_min: blend_u32(retract_slow_speed, stage),
-        wait_time_before_cure_sec: blend_f64(wait_before_cure, stage),
-        wait_time_after_cure_sec: blend_f64(wait_after_cure, stage),
-        wait_time_after_lift_sec: blend_f64(wait_after_lift, stage),
+        wait_time_before_cure_ms: blend_u32(wait_before_cure, stage),
+        wait_time_after_cure_ms: blend_u32(wait_after_cure, stage),
+        wait_time_after_lift_ms: blend_u32(wait_after_lift, stage),
         // PWM is categorical: it switches at the first non-bottom layer instead
         // of interpolating.
         light_pwm: match stage {
@@ -225,7 +231,7 @@ pub fn resolve(
         vat_temperature_c: merged(timing, sect, |t| t.vat_temperature_c),
         cure_curve: merged(timing, sect, |t| t.cure_curve),
         is_bottom: matches!(stage, Stage::Bottom),
-        is_transition: matches!(stage, Stage::Transition(_)),
+        is_transition: matches!(stage, Stage::Transition { .. }),
     };
 
     // Every matching entry folds onto the values in file order, so the last one
@@ -248,8 +254,8 @@ enum Stage {
     Bottom,
     /// At or beyond `bottom_layer_count + transition_layer_count`: normal values.
     Normal,
-    /// Inside the transition range, with its blend factor `t`.
-    Transition(f64),
+    /// Inside the transition range: the `k`th of `n` blend steps.
+    Transition { k: u64, n: u64 },
 }
 
 /// One field's two forms, with an absent bottom form already folded onto the
@@ -308,8 +314,8 @@ fn field_pair<T: Copy>(
 fn meta_carries(meta: &Meta, name: &str) -> bool {
     let timing = &meta.timing;
     match name {
-        "normal_exposure_sec" => timing.normal_exposure_sec.is_some(),
-        "bottom_exposure_sec" => timing.bottom_exposure_sec.is_some(),
+        "normal_exposure_ms" => timing.normal_exposure_ms.is_some(),
+        "bottom_exposure_ms" => timing.bottom_exposure_ms.is_some(),
         "bottom_layer_count" => timing.bottom_layer_count.is_some(),
         "transition_layer_count" => timing.transition_layer_count.is_some(),
         "layer_height_um" => timing.layer_height_um.is_some(),
@@ -321,28 +327,36 @@ fn meta_carries(meta: &Meta, name: &str) -> bool {
     }
 }
 
-/// An integer field at `stage`: verbatim at either end, rounded in between.
+/// An integer field at `stage`: verbatim at either end, blended in between.
+///
+/// The blend is the specification's exact integer form (§8), with `N = n` and
+/// `k` the step:
+///
+/// ```text
+/// value = round((bottom * (N - k) + normal * k) / N)
+/// ```
+///
+/// `round` is half away from zero, which for the non-negative values here is
+/// half **up**: a remainder of exactly half a unit rounds to the larger value.
+/// The numerator is computed in `u128` and the doubling the tie needs is folded
+/// into it, so no pair of `u32` values and no layer count a malformed META can
+/// carry can overflow the intermediate or truncate the result: the value is a
+/// convex combination of the two ends, so it lies between them and fits the
+/// `u32` it came from.
 fn blend_u32(field: Blend<u32>, stage: Stage) -> u32 {
     match stage {
         Stage::Bottom => field.bottom,
         Stage::Normal => field.normal,
-        Stage::Transition(t) => {
-            let bottom = f64::from(field.bottom);
-            let normal = f64::from(field.normal);
-            let value = bottom + t * (normal - bottom);
-            // `round` breaks ties away from zero, as the spec asks, and the
-            // value lies between two `u32`s, so the cast cannot saturate.
-            value.round() as u32
+        Stage::Transition { k, n } => {
+            let bottom = u128::from(field.bottom);
+            let normal = u128::from(field.normal);
+            let numerator = bottom * (n - k) as u128 + normal * k as u128;
+            // `floor(numerator / n + 1/2)`, written so that the half-unit is
+            // exact: `(2 * numerator + n) / (2 * n)`. `n` is
+            // `transition_layer_count + 1`, so it is never zero, and `k < n`
+            // inside the range.
+            ((2 * numerator + n as u128) / (2 * n as u128)) as u32
         }
-    }
-}
-
-/// A floating-point field at `stage`: verbatim at either end, blended between.
-fn blend_f64(field: Blend<f64>, stage: Stage) -> f64 {
-    match stage {
-        Stage::Bottom => field.bottom,
-        Stage::Normal => field.normal,
-        Stage::Transition(t) => field.bottom + t * (field.normal - field.bottom),
     }
 }
 
@@ -371,8 +385,8 @@ fn fold_entry(resolved: &mut Resolved, over: &Timing) {
     if let Some(value) = over.layer_height_um {
         resolved.layer_height_um = value;
     }
-    if let Some(value) = over.normal_exposure_sec.or(over.bottom_exposure_sec) {
-        resolved.exposure_sec = value;
+    if let Some(value) = over.normal_exposure_ms.or(over.bottom_exposure_ms) {
+        resolved.exposure_ms = value;
     }
     if let Some(value) = over
         .lift_slow_distance_um
@@ -423,22 +437,22 @@ fn fold_entry(resolved: &mut Resolved, over: &Timing) {
         resolved.retract_slow_speed_um_min = value;
     }
     if let Some(value) = over
-        .wait_time_before_cure_sec
-        .or(over.bottom_wait_time_before_cure_sec)
+        .wait_time_before_cure_ms
+        .or(over.bottom_wait_time_before_cure_ms)
     {
-        resolved.wait_time_before_cure_sec = value;
+        resolved.wait_time_before_cure_ms = value;
     }
     if let Some(value) = over
-        .wait_time_after_cure_sec
-        .or(over.bottom_wait_time_after_cure_sec)
+        .wait_time_after_cure_ms
+        .or(over.bottom_wait_time_after_cure_ms)
     {
-        resolved.wait_time_after_cure_sec = value;
+        resolved.wait_time_after_cure_ms = value;
     }
     if let Some(value) = over
-        .wait_time_after_lift_sec
-        .or(over.bottom_wait_time_after_lift_sec)
+        .wait_time_after_lift_ms
+        .or(over.bottom_wait_time_after_lift_ms)
     {
-        resolved.wait_time_after_lift_sec = value;
+        resolved.wait_time_after_lift_ms = value;
     }
     if let Some(value) = over.light_pwm.or(over.bottom_light_pwm) {
         resolved.light_pwm = value;
@@ -465,8 +479,8 @@ mod tests {
             meta_version: Some(1),
             timing: Timing {
                 layer_height_um: Some(50),
-                normal_exposure_sec: Some(2.5),
-                bottom_exposure_sec: Some(30.0),
+                normal_exposure_ms: Some(2500),
+                bottom_exposure_ms: Some(30000),
                 bottom_layer_count: Some(4),
                 transition_layer_count: Some(8),
                 lift_slow_distance_um: Some(5000),
@@ -477,9 +491,9 @@ mod tests {
                 retract_fast_speed_um_min: Some(150000),
                 retract_slow_distance_um: Some(3000),
                 retract_slow_speed_um_min: Some(180000),
-                wait_time_before_cure_sec: Some(1.0),
-                wait_time_after_cure_sec: Some(0.0),
-                wait_time_after_lift_sec: Some(0.5),
+                wait_time_before_cure_ms: Some(1000),
+                wait_time_after_cure_ms: Some(0),
+                wait_time_after_lift_ms: Some(500),
                 light_pwm: Some(255),
                 ..Timing::default()
             },
@@ -496,11 +510,14 @@ mod tests {
     fn exposure_blends_bottom_transition_and_normal() {
         let meta = meta();
 
-        assert_eq!(at(&meta, 0).exposure_sec, 30.0);
-        assert_eq!(at(&meta, 3).exposure_sec, 30.0);
-        assert!((at(&meta, 4).exposure_sec - (30.0 + (1.0 / 9.0) * (2.5 - 30.0))).abs() < 1e-9);
-        assert!((at(&meta, 11).exposure_sec - (30.0 + (8.0 / 9.0) * (2.5 - 30.0))).abs() < 1e-9);
-        assert_eq!(at(&meta, 12).exposure_sec, 2.5);
+        assert_eq!(at(&meta, 0).exposure_ms, 30000);
+        assert_eq!(at(&meta, 3).exposure_ms, 30000);
+        // Layer 4 is `k = 1` of `N = 9`:
+        // (30000 * 8 + 2500 * 1) / 9 = 26944.44.. -> 26944.
+        assert_eq!(at(&meta, 4).exposure_ms, 26944);
+        // Layer 11 is `k = 8`: (30000 * 1 + 2500 * 8) / 9 = 5555.55.. -> 5556.
+        assert_eq!(at(&meta, 11).exposure_ms, 5556);
+        assert_eq!(at(&meta, 12).exposure_ms, 2500);
 
         assert_eq!(
             (at(&meta, 0).is_bottom, at(&meta, 0).is_transition),
@@ -531,17 +548,15 @@ mod tests {
     #[test]
     fn wait_times_interpolate_between_their_two_forms() {
         let mut meta = meta();
-        meta.timing.bottom_wait_time_before_cure_sec = Some(10.0);
+        meta.timing.bottom_wait_time_before_cure_ms = Some(10000);
 
-        assert_eq!(at(&meta, 0).wait_time_before_cure_sec, 10.0);
-        assert!(
-            (at(&meta, 4).wait_time_before_cure_sec - (10.0 + (1.0 / 9.0) * (1.0 - 10.0))).abs()
-                < 1e-9
-        );
-        assert_eq!(at(&meta, 12).wait_time_before_cure_sec, 1.0);
+        assert_eq!(at(&meta, 0).wait_time_before_cure_ms, 10000);
+        // `k = 1` of `N = 9`: (10000 * 8 + 1000 * 1) / 9 = 9000 exactly.
+        assert_eq!(at(&meta, 4).wait_time_before_cure_ms, 9000);
+        assert_eq!(at(&meta, 12).wait_time_before_cure_ms, 1000);
         // A wait with no bottom form holds its normal value throughout.
-        assert_eq!(at(&meta, 0).wait_time_after_lift_sec, 0.5);
-        assert_eq!(at(&meta, 5).wait_time_after_lift_sec, 0.5);
+        assert_eq!(at(&meta, 0).wait_time_after_lift_ms, 500);
+        assert_eq!(at(&meta, 5).wait_time_after_lift_ms, 500);
     }
 
     #[test]
@@ -560,23 +575,50 @@ mod tests {
     }
 
     #[test]
-    fn integer_motion_interpolates_and_rounds_away_from_zero() {
+    fn interpolation_rounds_half_away_from_zero() {
         let mut meta = meta();
         meta.timing.bottom_lift_slow_distance_um = Some(6000);
 
         assert_eq!(at(&meta, 0).lift_slow_distance_um, 6000);
-        // 6000 + (1/9)(5000 - 6000) = 5888.88.. -> 5889
+        // `k = 1` of `N = 9`: (6000 * 8 + 5000 * 1) / 9 = 5888.88.. -> 5889.
         assert_eq!(at(&meta, 4).lift_slow_distance_um, 5889);
         assert_eq!(at(&meta, 12).lift_slow_distance_um, 5000);
 
-        // With a one-layer transition the factor is exactly 1/2, which makes
-        // 5001 + 0.5 * (5000 - 5001) = 5000.5 a tie to break.
+        // A one-layer transition makes `N = 2`, so an odd sum lands exactly on
+        // the half: `(bottom + normal) / 2`. Truncation would take the smaller
+        // value every time; the rule takes the larger, half away from zero.
         let mut half = meta.clone();
         half.timing.bottom_layer_count = Some(1);
         half.timing.transition_layer_count = Some(1);
         half.timing.lift_slow_distance_um = Some(5000);
         half.timing.bottom_lift_slow_distance_um = Some(5001);
+        half.timing.normal_exposure_ms = Some(2500);
+        half.timing.bottom_exposure_ms = Some(2501);
+        half.timing.wait_time_after_lift_ms = Some(100);
+        half.timing.bottom_wait_time_after_lift_ms = Some(101);
+
         assert_eq!(at(&half, 1).lift_slow_distance_um, 5001);
+        assert_eq!(at(&half, 1).exposure_ms, 2501);
+        assert_eq!(at(&half, 1).wait_time_after_lift_ms, 101);
+        // Either end is verbatim: layer 0 is a bottom layer, layer 2 normal.
+        assert_eq!(at(&half, 0).exposure_ms, 2501);
+        assert_eq!(at(&half, 2).exposure_ms, 2500);
+
+        // The widest layer counts a malformed META can carry: `N` is 2^32 and
+        // the weighted sum reaches close to 2^64. That is the case the
+        // intermediate width exists for, so it is pinned: an implementation
+        // computing this in `u32` would wrap `bottom + transition` to zero and
+        // one computing the sum too narrowly would truncate. The value is a
+        // convex combination rounded to nearest, `u32::MAX / 2^32`.
+        let mut extreme = meta.clone();
+        extreme.timing.bottom_layer_count = Some(0);
+        extreme.timing.transition_layer_count = Some(u32::MAX);
+        extreme.timing.normal_exposure_ms = Some(0);
+        extreme.timing.bottom_exposure_ms = Some(u32::MAX);
+
+        assert_eq!(at(&extreme, u32::MAX - 1).exposure_ms, 1);
+        assert!(at(&extreme, u32::MAX - 1).is_transition);
+        assert_eq!(at(&extreme, u32::MAX).exposure_ms, 0);
     }
 
     #[test]
@@ -610,8 +652,8 @@ mod tests {
         let sector = Sect {
             sector_id: 1,
             timing: Timing {
-                normal_exposure_sec: Some(3.0),
-                bottom_exposure_sec: Some(35.0),
+                normal_exposure_ms: Some(3000),
+                bottom_exposure_ms: Some(35000),
                 ..Timing::default()
             },
             ..Sect::default()
@@ -621,28 +663,28 @@ mod tests {
         assert_eq!(
             resolve(&meta, Some(&sector), None, 0, 0)
                 .unwrap()
-                .exposure_sec,
-            30.0
+                .exposure_ms,
+            30000
         );
         assert_eq!(
             resolve(&meta, Some(&sector), None, 12, 0)
                 .unwrap()
-                .exposure_sec,
-            2.5
+                .exposure_ms,
+            2500
         );
 
         // Sector 1 blends the sector's own pair.
         assert_eq!(
             resolve(&meta, Some(&sector), None, 0, 1)
                 .unwrap()
-                .exposure_sec,
-            35.0
+                .exposure_ms,
+            35000
         );
         assert_eq!(
             resolve(&meta, Some(&sector), None, 12, 1)
                 .unwrap()
-                .exposure_sec,
-            3.0
+                .exposure_ms,
+            3000
         );
 
         // A field the definition leaves out still comes from META...
@@ -653,7 +695,7 @@ mod tests {
             5000
         );
         // ...for a sector with no definition at all, as well.
-        assert_eq!(resolve(&meta, None, None, 12, 1).unwrap().exposure_sec, 2.5);
+        assert_eq!(resolve(&meta, None, None, 12, 1).unwrap().exposure_ms, 2500);
 
         // The definition's own layer counts move the ranges for its sector.
         let sector = Sect {
@@ -718,7 +760,7 @@ mod tests {
                 LrovEntry {
                     layer: Some(12),
                     timing: Timing {
-                        normal_exposure_sec: Some(9.0),
+                        normal_exposure_ms: Some(9000),
                         lift_slow_distance_um: Some(7000),
                         ..Timing::default()
                     },
@@ -727,7 +769,7 @@ mod tests {
                 LrovEntry {
                     layer_range: Some([10, 15]),
                     timing: Timing {
-                        normal_exposure_sec: Some(4.0),
+                        normal_exposure_ms: Some(4000),
                         ..Timing::default()
                     },
                     ..LrovEntry::default()
@@ -737,7 +779,7 @@ mod tests {
 
         let resolved = resolve(&meta, None, Some(&lrov), 12, 0).unwrap();
         // The later entry wins for the field both entries carry...
-        assert_eq!(resolved.exposure_sec, 4.0);
+        assert_eq!(resolved.exposure_ms, 4000);
         // ...while the field only the earlier one carries still stands.
         assert_eq!(resolved.lift_slow_distance_um, 7000);
 
@@ -745,14 +787,14 @@ mod tests {
         assert_eq!(
             resolve(&meta, None, Some(&lrov), 16, 0)
                 .unwrap()
-                .exposure_sec,
-            2.5
+                .exposure_ms,
+            2500
         );
         assert_eq!(
             resolve(&meta, None, Some(&lrov), 11, 0)
                 .unwrap()
-                .exposure_sec,
-            4.0
+                .exposure_ms,
+            4000
         );
     }
 
@@ -764,7 +806,7 @@ mod tests {
                 layer: Some(12),
                 sector_id: Some(1),
                 timing: Timing {
-                    normal_exposure_sec: Some(8.0),
+                    normal_exposure_ms: Some(8000),
                     ..Timing::default()
                 },
                 ..LrovEntry::default()
@@ -774,14 +816,14 @@ mod tests {
         assert_eq!(
             resolve(&meta, None, Some(&lrov), 12, 0)
                 .unwrap()
-                .exposure_sec,
-            2.5
+                .exposure_ms,
+            2500
         );
         assert_eq!(
             resolve(&meta, None, Some(&lrov), 12, 1)
                 .unwrap()
-                .exposure_sec,
-            8.0
+                .exposure_ms,
+            8000
         );
 
         // An entry without a sector applies to every sector.
@@ -789,7 +831,7 @@ mod tests {
             overrides: vec![LrovEntry {
                 layer: Some(12),
                 timing: Timing {
-                    normal_exposure_sec: Some(6.0),
+                    normal_exposure_ms: Some(6000),
                     ..Timing::default()
                 },
                 ..LrovEntry::default()
@@ -798,14 +840,14 @@ mod tests {
         assert_eq!(
             resolve(&meta, None, Some(&every_sector), 12, 0)
                 .unwrap()
-                .exposure_sec,
-            6.0
+                .exposure_ms,
+            6000
         );
         assert_eq!(
             resolve(&meta, None, Some(&every_sector), 12, 1)
                 .unwrap()
-                .exposure_sec,
-            6.0
+                .exposure_ms,
+            6000
         );
     }
 
@@ -839,20 +881,20 @@ mod tests {
     #[test]
     fn missing_required_meta_field_is_reported() {
         let mut meta = meta();
-        meta.timing.bottom_exposure_sec = None;
+        meta.timing.bottom_exposure_ms = None;
         meta.timing.lift_slow_speed_um_min = None;
 
         let err = resolve(&meta, None, None, 0, 0).unwrap_err();
         assert_eq!(err.check(), Check::MetaRequiredFields);
         let detail = err.detail();
-        assert!(detail.contains("bottom_exposure_sec"), "{detail}");
+        assert!(detail.contains("bottom_exposure_ms"), "{detail}");
         assert!(detail.contains("lift_slow_speed_um_min"), "{detail}");
-        assert!(!detail.contains("normal_exposure_sec"), "{detail}");
+        assert!(!detail.contains("normal_exposure_ms"), "{detail}");
 
         // The schema version is `validate`'s business, not the pipeline's.
         let mut no_version = meta.clone();
         no_version.meta_version = None;
-        no_version.timing.bottom_exposure_sec = Some(30.0);
+        no_version.timing.bottom_exposure_ms = Some(30000);
         no_version.timing.lift_slow_speed_um_min = Some(65000);
         assert!(resolve(&no_version, None, None, 0, 0).is_ok());
     }

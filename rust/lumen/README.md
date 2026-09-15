@@ -49,20 +49,20 @@ let file = LumenFile::open(&bytes, Level::Loose)?;
 println!("{} layers of {}x{}", file.layer_count(),
          file.hdr().display_width_px, file.hdr().display_height_px);
 let meta = file.meta();
-println!("normal exposure {} s", meta.timing.normal_exposure_sec.unwrap_or(0.0));
+println!("normal exposure {} ms", meta.timing.normal_exposure_ms.unwrap_or(0));
 
 let layer = file.layer(0)?;            // decompresses one block, not the file
 println!("{:?} {}", layer.tag, layer.pixels.len());
 
 // Timing, with the bottom/transition blend and LROV overrides already applied.
 let timing = file.timing_for(0, 0)?;
-println!("layer 0: {} s at PWM {}", timing.exposure_sec, timing.light_pwm);
+println!("layer 0: {} ms at PWM {}", timing.exposure_ms, timing.light_pwm);
 # Ok::<(), lumen::Error>(())
 ```
 
 `layer` decompresses only the block that holds the layer it was asked for, so a
 firmware reader streams a 2,000-layer print through a bounded buffer instead of
-materialising it. See [`LumenFile::block`] for the block-level interface and
+materializing it. See [`LumenFile::block`] for the block-level interface and
 [`LumenFile::verify_layer`] for bounded integrity verification.
 
 **On size.** [`LumenFile`] borrows the container's bytes. Opening validates, which
@@ -192,7 +192,7 @@ password wrapping and X25519 machine binding (§9), and the checks of §11.
 Deliberately not implemented, with reasons:
 
 - **VOXL parsing.** A `VOXL` payload is opaque to LUMEN (§4.12) and is carried
-  through byte for byte. A strict read checks only that it is recognisably VOXL.
+  through byte for byte. A strict read checks only that it is recognizably VOXL.
 - **Extension payloads.** `EXTD` is vendor-defined and copied through, never
   interpreted (§4.13). No extension is implemented, so any extension claiming
   `critical` is refused, as the specification requires.

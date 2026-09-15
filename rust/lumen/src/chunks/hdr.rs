@@ -27,13 +27,13 @@ pub struct Hdr {
     pub physical_width_px: u32,
     /// Physical panel height, an integer multiple of the display height.
     pub physical_height_px: u32,
-    /// Build plate X dimension in micrometres.
+    /// Build plate X dimension in micrometers.
     pub build_width_um: u32,
-    /// Build plate Y dimension in micrometres.
+    /// Build plate Y dimension in micrometers.
     pub build_depth_um: u32,
-    /// Build plate Z dimension in micrometres.
+    /// Build plate Z dimension in micrometers.
     pub build_height_um: u32,
-    /// Default layer thickness in micrometres.
+    /// Default layer thickness in micrometers.
     pub layer_height_um: u32,
     /// Total layer count, which `LTBL.layer_count` must equal.
     pub total_layers: u32,

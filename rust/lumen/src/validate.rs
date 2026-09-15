@@ -6,7 +6,7 @@
 //!
 //! That ordering is load-bearing. The conformance corpus asserts that each
 //! invalid vector fails its advertised check *first*, so a check that runs
-//! earlier than the specification's order can mask the one a vector pins. Two
+//! earlier than the specification's order can mask the one a vector pins. Three
 //! orderings are chosen against the tempting alternative:
 //!
 //! - `presence.auth` runs before `crypt.chunk_flags`. A file whose header sets
@@ -16,6 +16,11 @@
 //!   descriptor that claims a payload is sealed while the file has no key would
 //!   otherwise be read as plaintext and reported as a JSON error rather than a
 //!   flag inconsistency.
+//! - The integer rule for durations runs over the raw JSON, before the typed
+//!   parse of the chunk carrying it. A fractional duration is a defective value,
+//!   not a defective document, so it reports the named check (`meta.time_integer`
+//!   and its siblings) rather than the generic JSON error a failed
+//!   deserialization would produce.
 //!
 //! A sealed file validated without a key is checked as far as its plaintext
 //! allows. The directory, `HDR`, `AUTH`, `LTBL`, the `LAYR` header and block
@@ -42,13 +47,35 @@ use crate::crypto::{self, Cipher, SessionKey};
 use crate::error::{Error, Result};
 use crate::json::{Material, Meta, Profile, Sect, Timing, REQUIRED_META_FIELDS};
 use crate::{ree, sectors};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 /// Header flag bits 0, 2 and 4: reserved, and required to be zero.
 ///
 /// Bits 5-31 are reserved for future use and a reader must ignore them
 /// (section 3.1), so they are outside this mask.
 const HEADER_MUST_BE_ZERO: u32 = (1 << 0) | (1 << 2) | (1 << 4);
+
+/// The durations the timing namespace defines, in whole milliseconds: META
+/// (section 4.2), a `SECT` (4.5), a `PROF`'s `settings` block (4.3) and an
+/// `LROV` entry (4.6) all draw on these keys.
+///
+/// They are listed rather than taken from [`Timing`] because the rule is checked
+/// against the raw JSON, before the typed parse: a `*_ms` key the namespace does
+/// not define is an unknown field, which is preserved rather than measured.
+const TIME_MS_FIELDS: [&str; 8] = [
+    "normal_exposure_ms",
+    "bottom_exposure_ms",
+    "wait_time_before_cure_ms",
+    "wait_time_after_cure_ms",
+    "wait_time_after_lift_ms",
+    "bottom_wait_time_before_cure_ms",
+    "bottom_wait_time_after_cure_ms",
+    "bottom_wait_time_after_lift_ms",
+];
+
+/// META's own duration, informational and outside the namespace a `SECT`, a
+/// `PROF.settings` block or an `LROV` entry draws on (section 4.2).
+const ESTIMATED_PRINT_TIME_MS: &str = "estimated_print_time_ms";
 
 /// The chunk types that carry content and must therefore be sealed whenever the
 /// file is (section 9.1).
@@ -441,6 +468,14 @@ impl<'a> Ctx<'a> {
                 format!("META is missing {}", missing.join(", ")),
             ));
         }
+        check_integer_durations(
+            object,
+            TIME_MS_FIELDS
+                .iter()
+                .copied()
+                .chain(std::iter::once(ESTIMATED_PRINT_TIME_MS)),
+            Check::MetaTimeInteger,
+        )?;
         let meta: Meta = serde_json::from_value(value).map_err(json_error)?;
         Ok(Some(meta))
     }
@@ -449,18 +484,40 @@ impl<'a> Ctx<'a> {
         let Some(d) = self.dir.find(Tag::PROF) else {
             return Ok(None);
         };
-        match self.payload(d)? {
-            None => Ok(None),
-            Some(bytes) => Ok(Some(serde_json::from_slice(&bytes).map_err(json_error)?)),
+        let Some(bytes) = self.payload(d)? else {
+            return Ok(None);
+        };
+        let value: Value = serde_json::from_slice(&bytes).map_err(json_error)?;
+        // A profile's durations live in its `settings` block, which draws on
+        // META's own field names. Anything else about the block's shape is the
+        // typed parse's business.
+        if let Some(settings) = value.get("settings").and_then(Value::as_object) {
+            check_integer_durations(
+                settings,
+                TIME_MS_FIELDS.iter().copied(),
+                Check::ProfSettingsTimeInteger,
+            )?;
         }
+        Ok(Some(serde_json::from_value(value).map_err(json_error)?))
     }
 
     fn read_sects(&self) -> Result<Vec<Sect>> {
         let mut out = Vec::new();
         for d in self.dir.find_all(Tag::SECT).collect::<Vec<_>>() {
-            if let Some(bytes) = self.payload(d)? {
-                out.push(serde_json::from_slice(&bytes).map_err(json_error)?);
+            let Some(bytes) = self.payload(d)? else {
+                continue;
+            };
+            let value: Value = serde_json::from_slice(&bytes).map_err(json_error)?;
+            // A `SECT`'s timing overrides are flattened in beside `sector_id`, so
+            // the durations sit at the top level of its own object.
+            if let Some(object) = value.as_object() {
+                check_integer_durations(
+                    object,
+                    TIME_MS_FIELDS.iter().copied(),
+                    Check::SectTimeInteger,
+                )?;
             }
+            out.push(serde_json::from_value(value).map_err(json_error)?);
         }
         Ok(out)
     }
@@ -469,10 +526,24 @@ impl<'a> Ctx<'a> {
         let Some(d) = self.dir.find(Tag::LROV) else {
             return Ok(None);
         };
-        match self.payload(d)? {
-            None => Ok(None),
-            Some(bytes) => Ok(Some(serde_json::from_slice(&bytes).map_err(json_error)?)),
+        let Some(bytes) = self.payload(d)? else {
+            return Ok(None);
+        };
+        let value: Value = serde_json::from_slice(&bytes).map_err(json_error)?;
+        // Each entry carries its own overrides, flattened in beside `layer`,
+        // `layer_range` and `sector_id`; neither of those is a duration.
+        if let Some(overrides) = value.get("overrides").and_then(Value::as_array) {
+            for entry in overrides {
+                if let Some(object) = entry.as_object() {
+                    check_integer_durations(
+                        object,
+                        TIME_MS_FIELDS.iter().copied(),
+                        Check::LrovTimeInteger,
+                    )?;
+                }
+            }
         }
+        Ok(Some(serde_json::from_value(value).map_err(json_error)?))
     }
 
     fn check_previews(&self) -> Result<()> {
@@ -963,6 +1034,40 @@ fn json_error(err: serde_json::Error) -> Error {
     Error::new(Check::MetaJson, err.to_string())
 }
 
+/// Enforce the integer rule for the durations named in `names`.
+///
+/// A duration is an exact whole number of milliseconds, so a value with a
+/// fractional part is a type violation rather than a range one, and a loose
+/// reader rejects it too (section 11.5). Reading the raw numbers is what makes
+/// the named check the *first* failure: a fractional duration cannot
+/// deserialize into the integer field it belongs to, so the typed parse would
+/// report a generic JSON error instead. A reader MAY also reject integral
+/// floating-point syntax, and this one does: `2500.0` is written as a
+/// floating-point number, and a negative or too-large one is no more a
+/// millisecond count this format can express.
+fn check_integer_durations<'a>(
+    object: &Map<String, Value>,
+    names: impl Iterator<Item = &'a str>,
+    check: Check,
+) -> Result<()> {
+    for name in names {
+        let Some(value) = object.get(name) else {
+            continue;
+        };
+        // A non-number is a shape error another check owns. A number that is not
+        // a whole count inside the field's range is not a duration this format
+        // can express: `2500.0` has no `as_u64`, and neither has a negative or
+        // an over-large value.
+        if value.is_number() && value.as_u64().is_none_or(|n| n > u64::from(u32::MAX)) {
+            return Err(Error::new(
+                check,
+                format!("{name} is {value}, which is not a whole number of milliseconds"),
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// `HDR` rules from sections 11.1 and 11.2.
 fn check_hdr(hdr: &Hdr) -> Result<()> {
     if hdr.total_layers == 0 {
@@ -1008,16 +1113,16 @@ fn check_meta(meta: &Meta) -> Result<()> {
         None => return Err(Error::new(Check::MetaVersion, "no meta_version")),
     }
     let timing = &meta.timing;
-    if timing.normal_exposure_sec.unwrap_or(0.0) <= 0.0 {
+    if timing.normal_exposure_ms.unwrap_or(0) == 0 {
         return Err(Error::new(
             Check::MetaExposure,
-            "normal_exposure_sec is not positive",
+            "normal_exposure_ms is not positive",
         ));
     }
-    if timing.bottom_exposure_sec.unwrap_or(0.0) <= 0.0 {
+    if timing.bottom_exposure_ms.unwrap_or(0) == 0 {
         return Err(Error::new(
             Check::MetaExposure,
-            "bottom_exposure_sec is not positive",
+            "bottom_exposure_ms is not positive",
         ));
     }
     if timing.layer_height_um.unwrap_or(0) == 0 {
@@ -1064,8 +1169,8 @@ fn check_profile(profile: &Profile) -> Result<()> {
             "profile_name and profile_version must be non-empty",
         ));
     }
-    if profile.settings.normal_exposure_sec.unwrap_or(0.0) <= 0.0
-        || profile.settings.bottom_exposure_sec.unwrap_or(0.0) <= 0.0
+    if profile.settings.normal_exposure_ms.unwrap_or(0) == 0
+        || profile.settings.bottom_exposure_ms.unwrap_or(0) == 0
     {
         return Err(Error::new(
             Check::ProfSettingsExposure,

@@ -40,8 +40,8 @@ fn hdr(layers: u32) -> Hdr {
 fn meta() -> Meta {
     let mut timing = Timing {
         layer_height_um: Some(50),
-        normal_exposure_sec: Some(2.5),
-        bottom_exposure_sec: Some(30.0),
+        normal_exposure_ms: Some(2500),
+        bottom_exposure_ms: Some(30000),
         bottom_layer_count: Some(2),
         transition_layer_count: Some(2),
         lift_slow_distance_um: Some(5000),
@@ -195,16 +195,13 @@ fn plaintext_round_trip_with_a_dictionary_and_multiple_blocks() {
 
     // META has bottom_layer_count 2 and transition_layer_count 2, so layer 4 is
     // the first fully normal layer and layers 0-1 use the bottom exposure.
-    assert_eq!(file.timing_for(0, 0).expect("layer 0").exposure_sec, 30.0);
-    assert_eq!(file.timing_for(1, 0).expect("layer 1").exposure_sec, 30.0);
-    assert_eq!(file.timing_for(4, 0).expect("layer 4").exposure_sec, 2.5);
+    assert_eq!(file.timing_for(0, 0).expect("layer 0").exposure_ms, 30000);
+    assert_eq!(file.timing_for(1, 0).expect("layer 1").exposure_ms, 30000);
+    assert_eq!(file.timing_for(4, 0).expect("layer 4").exposure_ms, 2500);
     let transition = file.timing_for(2, 0).expect("layer 2");
     assert!(transition.is_transition);
-    assert!(
-        transition.exposure_sec < 30.0 && transition.exposure_sec > 2.5,
-        "layer 2 interpolates: {}",
-        transition.exposure_sec
-    );
+    // `N = 3`, so layer 2 is `k = 1`: (30000 * 2 + 2500) / 3 = 20833.33.. .
+    assert_eq!(transition.exposure_ms, 20833, "layer 2 interpolates");
 }
 
 #[test]
@@ -306,8 +303,8 @@ fn multi_sector_round_trips_and_reports_its_sectors() {
         material_index: None,
         color_rgba: Some([0, 255, 0, 128]),
         timing: Timing {
-            normal_exposure_sec: Some(3.0),
-            bottom_exposure_sec: Some(35.0),
+            normal_exposure_ms: Some(3000),
+            bottom_exposure_ms: Some(35000),
             ..Timing::default()
         },
     }]);
@@ -363,11 +360,11 @@ fn multi_sector_round_trips_and_reports_its_sectors() {
     let sector_1 = file.timing_for(0, 1).expect("sector 1 timing");
     assert!(sector_0.is_bottom, "layer 0 is a bottom layer");
     assert_eq!(
-        sector_0.exposure_sec, 30.0,
+        sector_0.exposure_ms, 30000,
         "sector 0 takes META's bottom exposure"
     );
     assert_eq!(
-        sector_1.exposure_sec, 35.0,
+        sector_1.exposure_ms, 35000,
         "sector 1 overrides the bottom exposure"
     );
 }

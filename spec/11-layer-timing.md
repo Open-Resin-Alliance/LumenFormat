@@ -12,20 +12,26 @@ The layer timing pipeline resolves as follows for each layer index `i`:
    `bottom_layer_count .. bottom_layer_count+transition_layer_count-1`, let
 
    ```
-   t = (i - bottom_layer_count + 1) / (transition_layer_count + 1)
+   N = transition_layer_count + 1
+   k = i - bottom_layer_count + 1        (1 <= k <= transition_layer_count)
+   value = round((bottom_value × (N − k) + normal_value × k) / N)
    ```
 
-   and set each **interpolatable** value to
-   `bottom_value + t × (normal_value - bottom_value)`. The first fully-normal layer is
-   therefore `bottom_layer_count + transition_layer_count`, where `t = 1`.
+   and set each **interpolatable** value to the result. The arithmetic is exact integer
+   arithmetic end to end and `round` rounds half away from zero: a remainder of exactly
+   half a unit rounds up in magnitude. No floating-point step remains in the pipeline, and
+   nothing is rounded twice. Every quantity is an integer - the layer counts, `k`, `N` and
+   each interpolatable value - so two implementations given the same META, SECT and LROV
+   inputs derive the same value for every field of every layer. The first fully-normal
+   layer is `bottom_layer_count + transition_layer_count`, where `k = N` and the formula
+   collapses to `normal_value` exactly.
 
-   Interpolatable values are the continuous motion and timing parameters: exposure
-   times, lift/retract distances and speeds, and wait times. A
-   `bottom_*` value that is absent equals its normal counterpart, which makes that
-   field's interpolation a no-op. Integer and categorical values do **not** interpolate:
-   `light_pwm`/`bottom_light_pwm` switch to the normal value at the first non-bottom
-   layer, and `bottom_layer_count` and `transition_layer_count` are taken verbatim from
-   META.
+   Interpolatable values are exposure times, lift/retract distances and speeds, and wait
+   times. A `bottom_*` value that is absent equals its normal counterpart, which makes
+   that field's interpolation a no-op. The values that do **not** interpolate are PWM and
+   the layer counts: `light_pwm`/`bottom_light_pwm` switch to the normal value at the
+   first non-bottom layer, and `bottom_layer_count` and `transition_layer_count` are
+   taken verbatim from META.
 3. **LROV overrides:** Any matching `layer` or `layer_range` entry in LROV overrides
    the interpolated value for the sectors it targets (`sector_id` absent = all
    sectors). The last matching entry wins per `(layer, sector)` pair.

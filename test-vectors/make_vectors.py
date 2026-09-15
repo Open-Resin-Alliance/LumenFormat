@@ -249,8 +249,8 @@ def hdr_payload(encoder_name: str, display_w: int, display_h: int, build_w_um: i
 def meta_payload(**overrides) -> bytes:
     meta = {
         "meta_version": 1,
-        "normal_exposure_sec": 2.5,
-        "bottom_exposure_sec": 30.0,
+        "normal_exposure_ms": 2500,
+        "bottom_exposure_ms": 30000,
         "bottom_layer_count": 2,
         "transition_layer_count": 1,
         "layer_height_um": 50,
@@ -263,12 +263,12 @@ def meta_payload(**overrides) -> bytes:
     return json.dumps(meta, indent=2, sort_keys=True).encode()
 
 
-def sect_payload(sector_id: int, name: str, exposure: float) -> bytes:
+def sect_payload(sector_id: int, name: str, exposure_ms: int) -> bytes:
     return json.dumps({
         "sector_id": sector_id,
         "name": name,
         "material_index": 0,
-        "normal_exposure_sec": exposure,
+        "normal_exposure_ms": exposure_ms,
     }, indent=2, sort_keys=True).encode()
 
 
@@ -310,8 +310,8 @@ def prof_payload(settings_extra: dict | None = None, **overrides) -> bytes:
         "profile_type": "combined",
         "profile_uuid": "3f2504e0-4f89-11d3-9a0c-0305e82c3301",
         "settings": {
-            "normal_exposure_sec": 2.5,
-            "bottom_exposure_sec": 32.0,
+            "normal_exposure_ms": 2500,
+            "bottom_exposure_ms": 32000,
             "bottom_layer_count": 5,
             "transition_layer_count": 8,
             "layer_height_um": 50,
@@ -327,9 +327,9 @@ def prof_payload(settings_extra: dict | None = None, **overrides) -> bytes:
             "bottom_lift_slow_speed_um_min": 50000,
             "bottom_retract_fast_distance_um": 6000,
             "bottom_retract_fast_speed_um_min": 100000,
-            "wait_time_before_cure_sec": 1.0,
-            "wait_time_after_cure_sec": 0.0,
-            "wait_time_after_lift_sec": 0.5,
+            "wait_time_before_cure_ms": 1000,
+            "wait_time_after_cure_ms": 0,
+            "wait_time_after_lift_ms": 500,
             "light_pwm": 255,
             "chamber_temperature_c": 30.0,
             "vat_temperature_c": 28.0,
@@ -605,7 +605,7 @@ def content_chunks(enc: dict, encoder_name: str, display: tuple[int, int], layer
     if prof is not None:
         chunks.append({"type": b"PROF", "payload": prof, "compressed": True})
     if enc["multi_sector"]:
-        chunks.append({"type": b"SECT", "payload": sect_payload(1, "Support", 3.0),
+        chunks.append({"type": b"SECT", "payload": sect_payload(1, "Support", 3000),
                        "compressed": True})
     if lrov is not None:
         chunks.append({"type": b"LROV", "payload": lrov, "compressed": True})
@@ -1008,10 +1008,10 @@ def vector_print_profile():
 def vector_layer_overrides():
     """Plaintext, per-layer and per-range overrides."""
     overrides = [
-        {"layer": 2, "normal_exposure_sec": 2.8, "lift_slow_distance_um": 6000},
-        {"layer_range": [3, 5], "sector_id": 0, "normal_exposure_sec": 2.2,
-         "wait_time_before_cure_sec": 0.5},
-        {"layer_range": [6, 8], "wait_time_after_lift_sec": 1.0},
+        {"layer": 2, "normal_exposure_ms": 2800, "lift_slow_distance_um": 6000},
+        {"layer_range": [3, 5], "sector_id": 0, "normal_exposure_ms": 2200,
+         "wait_time_before_cure_ms": 500},
+        {"layer_range": [6, 8], "wait_time_after_lift_ms": 1000},
     ]
     return build_vector(
         "layer-overrides",
@@ -1185,6 +1185,18 @@ def main() -> int:
                  "The trailer CRC-32C does not match the file bytes.", "trailer.crc32c",
                  bytes(b), base="binary-basic")
 
+    # x09: a fractional duration. Durations are exact whole milliseconds, so a
+    # value with a fractional part is not a duration the format can carry; the
+    # file is otherwise valid, so the type rule is the only thing wrong with it.
+    raw_m, _, _ = build_vector(
+        "x-meta-fractional", "source", [], (64, 48), 50,
+        [[((0, 255, 255),)] for _ in range(4)], block_size=2, use_dict=False,
+        meta_extra={"normal_exposure_ms": 2500.5})
+    emit_invalid("meta-exposure-fractional",
+                 "META carries normal_exposure_ms = 2500.5. Durations are exact whole "
+                 "milliseconds, so a fractional value is not a duration this format can express.",
+                 "meta.time_integer", raw_m, base=None)
+
     # ---------------- encrypted invalid vectors ----------------
 
     def patch_chunk_flags(raw_in, layout_in, ctype, flags):
@@ -1281,7 +1293,7 @@ def main() -> int:
                       profile_name="")
     emit_prof_invalid("prof-settings-exposure", "prof.settings_exposure",
                       "PROF settings carry a zero normal exposure.",
-                      settings_extra={"normal_exposure_sec": 0.0})
+                      settings_extra={"normal_exposure_ms": 0})
     emit_prof_invalid("prof-settings-layer-height", "prof.settings_layer_height",
                       "PROF settings carry a zero layer height.",
                       settings_extra={"layer_height_um": 0})
@@ -1304,16 +1316,22 @@ def main() -> int:
 
     emit_lrov_invalid("lrov-entry-form-both", "lrov.entry_form",
                       "An LROV entry carries both layer and layer_range, which the entry form forbids.",
-                      [{"layer": 2, "layer_range": [2, 4], "normal_exposure_sec": 2.8}])
+                      [{"layer": 2, "layer_range": [2, 4], "normal_exposure_ms": 2800}])
     emit_lrov_invalid("lrov-layer-out-of-range", "lrov.layer_index_range",
                       "An LROV entry overrides layer 40 in a ten-layer file.",
-                      [{"layer": 40, "normal_exposure_sec": 2.8}])
+                      [{"layer": 40, "normal_exposure_ms": 2800}])
     emit_lrov_invalid("lrov-range-reversed", "lrov.layer_range_order",
                       "An LROV layer_range ends before it begins.",
-                      [{"layer_range": [8, 3], "normal_exposure_sec": 2.8}])
+                      [{"layer_range": [8, 3], "normal_exposure_ms": 2800}])
     emit_lrov_invalid("lrov-sector-undefined", "lrov.sector_id_defined",
                       "An LROV entry targets sector 7, which no SECT chunk in this single-sector file defines.",
-                      [{"layer_range": [3, 5], "sector_id": 7, "normal_exposure_sec": 2.8}])
+                      [{"layer_range": [3, 5], "sector_id": 7, "normal_exposure_ms": 2800}])
+    emit_lrov_invalid("lrov-wait-fractional", "lrov.time_integer",
+                      "An LROV entry carries wait_time_before_cure_ms = 500.5. A wait time is a whole "
+                      "number of milliseconds, so a fractional value is not a duration this format "
+                      "can express.",
+                      [{"layer": 2, "normal_exposure_ms": 2800,
+                        "wait_time_before_cure_ms": 500.5}])
 
     raw_pv, _, layout_pv = build_vector(
         "x-prev", "source", [], (64, 48), 50, [[((0, 90, 255),)] for _ in range(4)],

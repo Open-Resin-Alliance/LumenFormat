@@ -2,7 +2,7 @@
 //! ([`spec/07-scene-chunks.md`] section 4.12).
 //!
 //! Nothing here parses a scene. The transport contract is that the bytes come
-//! back out unchanged; recognising which generation a payload is, so a slicer
+//! back out unchanged; recognizing which generation a payload is, so a slicer
 //! knows what it is about to hand to the VOXL parser, is all a LUMEN reader can
 //! do without knowing VOXL.
 
@@ -14,7 +14,7 @@ pub const VOXL_V2_MAGIC: [u8; 4] = *b"VOXL";
 /// The first byte of a VOXL V1 JSON document.
 pub const VOXL_V1_MARKER: u8 = b'{';
 
-/// Whether a payload is recognisably a VOXL file of either generation.
+/// Whether a payload is recognizably a VOXL file of either generation.
 pub fn is_voxl(payload: &[u8]) -> bool {
     payload.starts_with(&VOXL_V2_MAGIC) || payload.first() == Some(&VOXL_V1_MARKER)
 }

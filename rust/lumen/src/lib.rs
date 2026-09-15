@@ -36,7 +36,7 @@
 //! [`reader::LumenFile`] decodes what a caller asks for and nothing else: a
 //! layer is fetched by index, which decompresses only the block that holds it.
 //! A firmware reader can open the file, read `META` and the layer table, and
-//! stream layers through a fixed-size buffer without ever materialising the
+//! stream layers through a fixed-size buffer without ever materializing the
 //! whole file. A slicer can instead use [`writer::Encoder`], which trains the
 //! zstd dictionary, frames the blocks and assembles the directory.
 

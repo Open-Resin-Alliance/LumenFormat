@@ -82,8 +82,8 @@ nonce, salt and key is derived from a fixed seed (see *Test credentials*).
 | `encrypted-password` | 32 | 2 | AES-256-GCM, password | the `AUTH` chunk and its fixed 65-byte password section, Argon2id and AES-256-KW unwrapping to the session key, a sealed dictionary, sealed metadata, two blocks of individually sealed layer frames with their per-block AAD, and dictionary-ID agreement across sealed frames |
 | `encrypted-machine` | 4 | 1 | ChaCha20-Poly1305, machine binding | three recipient entries, matching by `machine_fp` without contacting the other recipients, X25519 and HKDF-SHA-256 and AES-256-KW unwrapping, the low-order-point entry that must be rejected, the second cipher, a single sealed block |
 | `encrypted-both` | 6 | 3 | AES-256-GCM, both modes | mode bits 0 and 1 in one `AUTH`, one session key wrapped both ways, sealed `SECT` and sealed layer frames in a multi-sector file |
-| `print-profile` | 4 | 2 | AES-256-GCM, password | a sealed `PROF`: profile identity and UUID, a material library, and a `settings` block reusing META's field names including the experimental cure curve |
-| `layer-overrides` | 10 | 2 | - | `LROV`: a single-layer override, an inclusive `layer_range` scoped to sector 0, and a range that applies to every sector |
+| `print-profile` | 4 | 2 | AES-256-GCM, password | a sealed `PROF`: profile identity and UUID, a material library, and a `settings` block reusing META's field names, including the experimental cure curve and the exposure and wait times as integer milliseconds |
+| `layer-overrides` | 10 | 2 | - | `LROV`: a single-layer override, an inclusive `layer_range` scoped to sector 0, and a range that applies to every sector; each override sets its exposures and wait times as integer milliseconds |
 | `previews` | 4 | 2 | AES-256-GCM, password | two `PREV` chunks in one file - a large preview in the clear and a sealed icon - with the role in the descriptor's flags. Preview sealing is optional even when the file is encrypted |
 | `embedded-scene` | 4 | 2 | AES-256-GCM, password | a sealed `VOXL` chunk: an embedded scene is copied in and must come back out unchanged, while LUMEN itself never parses it |
 | `extensions` | 4 | 2 | - | two non-critical `EXTD` chunks - a reserved ORA type code and a vendor extension - pinning the frame, the `vendor_id` field and the `critical` bit, and the rule that readers skip extensions they do not implement |
@@ -115,6 +115,7 @@ stopping at the file-completeness check first.
 | `layer-hash-mismatch` | layer 0's stored leaf altered, `merkle_root` recomputed to match | `lhas.leaf_match` *(strict)* |
 | `layer-range-past-block` | `LTBL` entry 2 claims a `data_size` past its block's decompressed size | `ltbl.offsets_within_block` |
 | `trailer-crc-mismatch` | the trailer CRC-32C does not match the file bytes | `trailer.crc32c` |
+| `meta-exposure-fractional` | `META.normal_exposure_ms` is `2500.5` | `meta.time_integer` |
 | `encrypted-flag-without-auth` | the header sets `ENCRYPTED` and there is no `AUTH` chunk | `presence.auth` |
 | `auth-cipher-unknown` | `AUTH.cipher_id` is `XXXX` | `auth.cipher_known` |
 | `crypt-mode-empty` | `AUTH.mode` is 0, so neither wrapping method is declared | `crypt.mode_empty` |
@@ -126,7 +127,7 @@ stopping at the file-completeness check first.
 | `crypt-tag-corrupt` | one ciphertext byte of LAYR block 0 flipped, which its tag must reject | `crypt.tag_verify` |
 | `prof-type-unknown` | `PROF.profile_type` is `"resin"` | `prof.profile_type` |
 | `prof-identity-empty` | `PROF.profile_name` is empty | `prof.profile_identity` |
-| `prof-settings-exposure` | `PROF` settings carry a zero normal exposure | `prof.settings_exposure` |
+| `prof-settings-exposure` | `PROF` settings carry `normal_exposure_ms = 0` | `prof.settings_exposure` |
 | `prof-settings-layer-height` | `PROF` settings carry a zero layer height | `prof.settings_layer_height` |
 | `prof-cure-curve` | `PROF` cure curve has `dp_um = 0.0` | `prof.cure_curve` |
 | `prof-uuid-malformed` | `PROF.profile_uuid` is not a UUID | `prof.profile_uuid` |
@@ -135,6 +136,7 @@ stopping at the file-completeness check first.
 | `lrov-layer-out-of-range` | an `LROV` entry overrides layer 40 of a ten-layer file | `lrov.layer_index_range` |
 | `lrov-range-reversed` | an `LROV` `layer_range` ends before it begins | `lrov.layer_range_order` |
 | `lrov-sector-undefined` | an `LROV` entry targets a sector no `SECT` defines | `lrov.sector_id_defined` |
+| `lrov-wait-fractional` | an `LROV` entry carries `wait_time_before_cure_ms = 500.5` | `lrov.time_integer` |
 | `prev-flags` | a `PREV` chunk sets reserved flag bit 5 alongside its role | `prev.flags` |
 | `prev-not-png` | a `PREV` payload does not begin with the PNG signature | `prev.png_signature` *(strict)* |
 | `voxl-not-voxl` | the embedded scene is a JSON array, so the payload begins with neither the V2 magic nor the V1 document marker | `voxl.signature` *(strict)* |
@@ -160,6 +162,12 @@ Checks are named `<group>.<rule>`, mirroring section 11:
 `trailer.*`, `header.*`, `dir.*`, `chunk.*`, `presence.*`, `hdr.*`, `auth.*`,
 `meta.*`, `sect.*`, `prof.*`, `lrov.*`, `prev.*`, `voxl.*`, `extd.*`, `ltbl.*`,
 `layr.*`, `zdic.*`, `lhas.*`, `ree.*`, `sector.*`, `crypt.*`.
+
+Every `*_ms` duration is checked by the chunk that carries it: `meta.time_integer`,
+`sect.time_integer`, `prof.settings_time_integer` and `lrov.time_integer`. A
+duration with a fractional part is a type violation rather than a precision
+problem, so none of the four is strict-only: a loose reader rejects it too
+(section 11.5).
 
 Implementations are encouraged to use the same names when reporting which rule
 failed. Use them verbatim as `expected_failure` when adding vectors.

@@ -162,7 +162,7 @@ pub struct RecipientEntry {
 /// The `AUTH` chunk.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Auth {
-    /// The recognised cipher.
+    /// The recognized cipher.
     pub cipher: Cipher,
     /// Layout version.
     pub auth_version: u32,
@@ -1077,7 +1077,7 @@ mod tests {
         overrun[16..20].copy_from_slice(&(RECIPIENT_ENTRY_LEN as u32).to_le_bytes());
         assert_eq!(parse_auth(&overrun).unwrap_err().check(), Check::AuthFrame);
 
-        // An unrecognised cipher or layout version.
+        // An unrecognized cipher or layout version.
         assert_eq!(
             parse_auth(&raw_auth(
                 *b"XXXX",

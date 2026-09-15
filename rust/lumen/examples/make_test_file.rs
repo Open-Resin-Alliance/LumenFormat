@@ -186,8 +186,8 @@ fn meta() -> Meta {
         meta_version: Some(1),
         timing: Timing {
             layer_height_um: Some(50),
-            normal_exposure_sec: Some(2.5),
-            bottom_exposure_sec: Some(30.0),
+            normal_exposure_ms: Some(2500),
+            bottom_exposure_ms: Some(30000),
             bottom_layer_count: Some(2),
             transition_layer_count: Some(3),
             lift_slow_distance_um: Some(5000),
@@ -198,10 +198,10 @@ fn meta() -> Meta {
             retract_fast_speed_um_min: Some(150_000),
             retract_slow_distance_um: Some(3000),
             retract_slow_speed_um_min: Some(180_000),
-            wait_time_before_cure_sec: Some(1.0),
-            wait_time_after_cure_sec: Some(0.0),
-            wait_time_after_lift_sec: Some(0.5),
-            bottom_wait_time_before_cure_sec: Some(1.5),
+            wait_time_before_cure_ms: Some(1000),
+            wait_time_after_cure_ms: Some(0),
+            wait_time_after_lift_ms: Some(500),
+            bottom_wait_time_before_cure_ms: Some(1500),
             light_pwm: Some(255),
             chamber_temperature_c: Some(30.0),
             cure_curve: Some(lumen::json::CureCurve {
@@ -232,7 +232,7 @@ fn meta() -> Meta {
             mode: Some("blur".to_string()),
             ..AntiAliasing::default()
         }),
-        estimated_print_time_sec: Some(14_400),
+        estimated_print_time_ms: Some(14_400_000),
         slicer: Some(lumen::json::Slicer {
             name: Some("lumen-format".to_string()),
             version: Some("0.1.0".to_string()),
@@ -457,8 +457,8 @@ fn describe(bytes: &[u8], password: Option<&str>) {
     for index in [0, 1, 2, 3, 4, 5, file.layer_count() - 1] {
         let timing = file.timing_for(index, 0).expect("resolvable timing");
         println!(
-            "  layer {index:>2}: {:>6.2} s exposure, lift {} um at {} um/min, pwm {}{}{}",
-            timing.exposure_sec,
+            "  layer {index:>2}: {:>6} ms exposure, lift {} um at {} um/min, pwm {}{}{}",
+            timing.exposure_ms,
             timing.lift_slow_distance_um,
             timing.lift_slow_speed_um_min,
             timing.light_pwm,

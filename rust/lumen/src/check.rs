@@ -86,6 +86,8 @@ pub enum Check {
     MetaVersion,
     /// A required META field is absent.
     MetaRequiredFields,
+    /// A META duration is not an integer number of milliseconds.
+    MetaTimeInteger,
     /// An exposure time is not `> 0`.
     MetaExposure,
     /// `layer_height_um` is not `> 0`.
@@ -98,6 +100,8 @@ pub enum Check {
     MetaTemperatureRange,
 
     // -- group: sect (section 4.5) -----------------------------------------
+    /// A SECT duration is not an integer number of milliseconds.
+    SectTimeInteger,
     /// A SECT chunk uses `sector_id < 1`.
     SectSectorIdReserved,
     /// Two SECT chunks carry the same `sector_id`.
@@ -110,6 +114,8 @@ pub enum Check {
     ProfProfileType,
     /// `profile_name` or `profile_version` is empty.
     ProfProfileIdentity,
+    /// A profile duration is not an integer number of milliseconds.
+    ProfSettingsTimeInteger,
     /// A profile exposure time is not `> 0`.
     ProfSettingsExposure,
     /// A profile `layer_height_um` is not `> 0`.
@@ -122,6 +128,8 @@ pub enum Check {
     ProfMaterialsShape,
 
     // -- group: lrov (section 4.6) -----------------------------------------
+    /// An entry's duration is not an integer number of milliseconds.
+    LrovTimeInteger,
     /// An entry carries both `layer` and `layer_range`, or neither.
     LrovEntryForm,
     /// A layer index is outside `[0, total_layers)`.
@@ -307,22 +315,26 @@ impl Check {
             MetaJson => "meta.json",
             MetaVersion => "meta.version",
             MetaRequiredFields => "meta.required_fields",
+            MetaTimeInteger => "meta.time_integer",
             MetaExposure => "meta.exposure",
             MetaLayerHeight => "meta.layer_height",
             MetaMaterialsShape => "meta.materials_shape",
             MetaCureCurve => "meta.cure_curve",
             MetaTemperatureRange => "meta.temperature_range",
             SectSectorIdReserved => "sect.sector_id_reserved",
+            SectTimeInteger => "sect.time_integer",
             SectSectorIdUnique => "sect.sector_id_unique",
             SectMaterialIndex => "sect.material_index",
             ProfProfileType => "prof.profile_type",
             ProfProfileIdentity => "prof.profile_identity",
+            ProfSettingsTimeInteger => "prof.settings_time_integer",
             ProfSettingsExposure => "prof.settings_exposure",
             ProfSettingsLayerHeight => "prof.settings_layer_height",
             ProfCureCurve => "prof.cure_curve",
             ProfProfileUuid => "prof.profile_uuid",
             ProfMaterialsShape => "prof.materials_shape",
             LrovEntryForm => "lrov.entry_form",
+            LrovTimeInteger => "lrov.time_integer",
             LrovLayerIndexRange => "lrov.layer_index_range",
             LrovLayerRangeOrder => "lrov.layer_range_order",
             LrovSectorIdDefined => "lrov.sector_id_defined",

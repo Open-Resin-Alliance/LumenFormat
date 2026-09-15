@@ -79,14 +79,14 @@ mod tests {
     fn meta_round_trips_and_preserves_unknown_keys() {
         let payload = br#"{
             "meta_version": 1,
-            "normal_exposure_sec": 2.5,
-            "bottom_exposure_sec": 30.0,
+            "normal_exposure_ms": 2500,
+            "bottom_exposure_ms": 30000,
             "layer_height_um": 50,
             "vendor_extension": {"a": 1}
         }"#;
         let meta = parse_meta(payload).unwrap();
         assert_eq!(meta.meta_version, Some(1));
-        assert_eq!(meta.timing.normal_exposure_sec, Some(2.5));
+        assert_eq!(meta.timing.normal_exposure_ms, Some(2500));
         // An unknown key is preserved rather than rejected or dropped.
         assert_eq!(
             meta.timing.extra.get("vendor_extension"),
@@ -115,7 +115,7 @@ mod tests {
         assert_eq!(parse_sect(&sect_to_bytes(&sect).unwrap()).unwrap(), sect);
 
         let lrov = parse_lrov(
-            br#"{"overrides": [{"layer": 3, "normal_exposure_sec": 2.0},
+            br#"{"overrides": [{"layer": 3, "normal_exposure_ms": 2000},
                                {"layer_range": [5, 9], "sector_id": 1}]}"#,
         )
         .unwrap();

@@ -109,7 +109,7 @@ mod tests {
         png.extend_from_slice(b"IHDR");
         png.extend_from_slice(&1u32.to_be_bytes()); // width
         png.extend_from_slice(&1u32.to_be_bytes()); // height
-        png.extend_from_slice(&[8, 6, 0, 0, 0]); // bit depth, colour, compression, filter, interlace
+        png.extend_from_slice(&[8, 6, 0, 0, 0]); // bit depth, color, compression, filter, interlace
         png
     }
 

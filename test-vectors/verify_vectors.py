@@ -340,6 +340,24 @@ def is_number(v) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool)
 
 
+def is_int(v) -> bool:
+    """A JSON integer, as opposed to a bool (which is an int in Python)."""
+    return isinstance(v, int) and not isinstance(v, bool)
+
+
+def time_fields_integer(obj) -> bool:
+    """§4.2: every `*_ms` duration is a JSON integer.
+
+    Durations are exact whole milliseconds, so a value with a fractional part is
+    a type violation rather than a precision problem - which is why a loose
+    reader rejects it too (§11.5).  Whether a chunk carries any timing field at
+    all is the chunk's own business: a non-object is left to the shape checks.
+    """
+    if not isinstance(obj, dict):
+        return True
+    return all(not k.endswith("_ms") or is_int(v) for k, v in obj.items())
+
+
 def materials_shape_ok(mats) -> bool:
     """§11.2: absent, or a non-empty array of objects each with a non-empty name."""
     return mats is None or (
@@ -649,12 +667,16 @@ def validate(path: str, strict: bool, verbose: bool = False, crypto: dict | None
     # ---- META / SECT ---------------------------------------------------
     meta = json.loads(content(b"META"))
     mats = meta.get("materials")
+    # Durations are whole milliseconds (§4.2), so the type rule comes before
+    # anything that reads a duration's value.
+    chk("meta.time_integer", time_fields_integer(meta))
     chk("meta.required_fields", all(k in meta for k in (
-        "meta_version", "normal_exposure_sec", "bottom_exposure_sec", "bottom_layer_count",
+        "meta_version", "normal_exposure_ms", "bottom_exposure_ms", "bottom_layer_count",
         "transition_layer_count", "layer_height_um", "lift_slow_distance_um", "lift_slow_speed_um_min",
         "retract_fast_distance_um", "retract_fast_speed_um_min")))
     chk("meta.materials_shape", materials_shape_ok(mats))
     sects = [json.loads(content_entry(e)) for e in find(b"SECT")]
+    chk("sect.time_integer", all(time_fields_integer(s) for s in sects))
     chk("sect.sector_id_nonzero", all(s.get("sector_id", 0) >= 1 for s in sects))
     chk("sect.ids_unique", len({s["sector_id"] for s in sects}) == len(sects))
     chk("sect.material_index_bounds", all(
@@ -676,12 +698,13 @@ def validate(path: str, strict: bool, verbose: bool = False, crypto: dict | None
             isinstance(prof.get("profile_name"), str) and prof["profile_name"] != ""
             and isinstance(prof.get("profile_version"), str) and prof["profile_version"] != "")
         chk("prof.profile_type", prof.get("profile_type") in ("material", "printer", "combined"))
+        chk("prof.settings_time_integer", time_fields_integer(settings))
         chk("prof.settings_exposure",
             isinstance(settings, dict)
-            and is_number(settings.get("normal_exposure_sec"))
-            and settings["normal_exposure_sec"] > 0.0
-            and is_number(settings.get("bottom_exposure_sec"))
-            and settings["bottom_exposure_sec"] > 0.0)
+            and is_int(settings.get("normal_exposure_ms"))
+            and settings["normal_exposure_ms"] > 0
+            and is_int(settings.get("bottom_exposure_ms"))
+            and settings["bottom_exposure_ms"] > 0)
         chk("prof.settings_layer_height",
             isinstance(settings, dict)
             and is_number(settings.get("layer_height_um"))
@@ -703,6 +726,8 @@ def validate(path: str, strict: bool, verbose: bool = False, crypto: dict | None
         lrov = json.loads(lrov_plain)
         overrides = lrov.get("overrides") if isinstance(lrov, dict) else None
         entries = overrides if isinstance(overrides, list) else None
+        chk("lrov.time_integer", entries is None
+            or all(time_fields_integer(x) for x in entries))
         chk("lrov.entry_form", entries is not None and all(
             isinstance(x, dict) and (("layer" in x) != ("layer_range" in x)) for x in entries))
         chk("lrov.layer_index_range", entries is not None and all(

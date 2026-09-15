@@ -45,10 +45,10 @@ across format versions without changing the 32-byte magic header.
 | 20+N | 4 | `u32` | `display_height_px` | Logical display height. |
 | 24+N | 4 | `u32` | `physical_width_px` | Physical LCD panel width in pixels (e.g. 11520 for a 12K display). |
 | 28+N | 4 | `u32` | `physical_height_px` | Physical LCD panel height in pixels. |
-| 32+N | 4 | `u32` | `build_width_um` | Build plate X dimension, in micrometres. |
-| 36+N | 4 | `u32` | `build_depth_um` | Build plate Y dimension, in micrometres. |
-| 40+N | 4 | `u32` | `build_height_um` | Build plate Z dimension, in micrometres. |
-| 44+N | 4 | `u32` | `layer_height_um` | Default layer thickness, in micrometres. |
+| 32+N | 4 | `u32` | `build_width_um` | Build plate X dimension, in micrometers. |
+| 36+N | 4 | `u32` | `build_depth_um` | Build plate Y dimension, in micrometers. |
+| 40+N | 4 | `u32` | `build_height_um` | Build plate Z dimension, in micrometers. |
+| 44+N | 4 | `u32` | `layer_height_um` | Default layer thickness, in micrometers. |
 | 48+N | 4 | `u32` | `total_layers` | Total layer count. |
 
 **Display readiness.** Layer masks are stored exactly as the printer must expose them.
@@ -71,8 +71,8 @@ Human-readable print parameters as a single JSON object.
 ```jsonc
 {
   "meta_version": 1,
-  "normal_exposure_sec": 2.5,
-  "bottom_exposure_sec": 30.0,
+  "normal_exposure_ms": 2500,
+  "bottom_exposure_ms": 30000,
   "bottom_layer_count": 4,
   "transition_layer_count": 8,
   "layer_height_um": 50,
@@ -103,13 +103,13 @@ Human-readable print parameters as a single JSON object.
   "bottom_retract_slow_distance_um": 4000,
   "bottom_retract_slow_speed_um_min": 120000,
 
-  // Wait/rest times (seconds)
-  "wait_time_before_cure_sec": 1.0,
-  "wait_time_after_cure_sec": 0.0,
-  "wait_time_after_lift_sec": 0.5,
-  "bottom_wait_time_before_cure_sec": 1.5,
-  "bottom_wait_time_after_cure_sec": 0.0,
-  "bottom_wait_time_after_lift_sec": 1.0,
+  // Wait/rest times (milliseconds)
+  "wait_time_before_cure_ms": 1000,
+  "wait_time_after_cure_ms": 0,
+  "wait_time_after_lift_ms": 500,
+  "bottom_wait_time_before_cure_ms": 1500,
+  "bottom_wait_time_after_cure_ms": 0,
+  "bottom_wait_time_after_lift_ms": 1000,
 
   // PWM (0–255, default 255)
   "light_pwm": 255,
@@ -161,7 +161,7 @@ Human-readable print parameters as a single JSON object.
   "scale_compensation_pct": { "x": 0.0, "y": 0.0, "z": 0.0 },
 
   // Estimates (informational)
-  "estimated_print_time_sec": 14400,
+  "estimated_print_time_ms": 14400000,
   "estimated_resin_volume_ml": 42.5,
 
   // Slicer attribution
@@ -214,13 +214,18 @@ See [§8](11-layer-timing.md#8-per-layer-settings-model) for the complete layer 
 a one-element array and sector 0 uses element 0. If `materials` is absent, material
 identity is unknown and consumers fall back to their own default.
 
-Lengths are integer micrometres and speeds integer micrometres per minute, so a reader
-compares them exactly instead of within a tolerance. An encoder holding a finer value
-rounds to the nearest unit; a length or speed below one unit is not expressible, and no
-field carries a fractional micrometre. The remaining numeric fields - exposure and wait
-times, energy densities, temperatures, percentages, densities - are ordinary JSON numbers,
-and readers must accept both integer and floating-point syntax for those. Readers must
-ignore unknown JSON keys.
+Lengths are integer micrometers, speeds integer micrometers per minute, and durations
+integer milliseconds, so a reader compares them exactly instead of within a tolerance. An
+encoder holding a finer value rounds to the nearest unit; nothing below one unit is
+expressible, and no field carries a fractional micrometer or millisecond. The remaining
+numeric fields - energy densities, temperatures, percentages and densities - are ordinary
+JSON numbers, and readers must accept both integer and floating-point syntax for those.
+Readers must ignore unknown JSON keys.
+
+Every `*_ms` field holds an integer number of milliseconds. A value with a fractional part
+(`2500.5`) is invalid, and an encoder MUST write integer syntax. A reader MAY additionally
+reject integral floating-point syntax such as `2500.0`; a file MUST NOT depend on which of
+the two a reader does, so no file may carry `2500.0` where `2500` is meant.
 
 ### 4.3 PROF - Print Profile Chunk
 
@@ -285,8 +290,8 @@ first.
   // Required: all timing and motion settings (same field names as META)
   "settings": {
     "layer_height_um": 50,
-    "normal_exposure_sec": 2.5,
-    "bottom_exposure_sec": 30.0,
+    "normal_exposure_ms": 2500,
+    "bottom_exposure_ms": 30000,
     "bottom_layer_count": 4,
     "transition_layer_count": 8,
 
@@ -309,12 +314,12 @@ first.
     "bottom_retract_slow_distance_um": 4000,
     "bottom_retract_slow_speed_um_min": 120000,
 
-    "wait_time_before_cure_sec": 1.0,
-    "wait_time_after_cure_sec": 0.0,
-    "wait_time_after_lift_sec": 0.5,
-    "bottom_wait_time_before_cure_sec": 1.5,
-    "bottom_wait_time_after_cure_sec": 0.0,
-    "bottom_wait_time_after_lift_sec": 1.0,
+    "wait_time_before_cure_ms": 1000,
+    "wait_time_after_cure_ms": 0,
+    "wait_time_after_lift_ms": 500,
+    "bottom_wait_time_before_cure_ms": 1500,
+    "bottom_wait_time_after_cure_ms": 0,
+    "bottom_wait_time_after_lift_ms": 1000,
 
     "light_pwm": 255,
     "bottom_light_pwm": 255,
@@ -379,4 +384,4 @@ first.
   PROF is the reusable template that MAY have been used to produce META, but
   META may diverge (e.g., if the user tweaked exposure for this specific print).
 - `extra` carries vendor-specific profile metadata (e.g., DragonFruit's internal
-  profile store serialisation format).
+  profile store serialization format).

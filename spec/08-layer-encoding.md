@@ -368,5 +368,5 @@ Where:
 
 **Status:** Experimental. These fields are defined for future use. Odyssey
 firmware that does not implement the cure model must fall back to the
-traditional `normal_exposure_sec` / `bottom_exposure_sec` values in META.
+traditional `normal_exposure_ms` / `bottom_exposure_ms` values in META.
 Encoders may omit `cure_curve` entirely.

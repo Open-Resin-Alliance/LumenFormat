@@ -357,7 +357,7 @@ fn require_pixels(pixels: &[u8]) -> Result<()> {
 
 /// Write the tagless binary REE stream of section 5.3 for `pixels`, mapping each
 /// pixel through `value_of` so the split encoder can threshold without
-/// materialising a second mask.
+/// materializing a second mask.
 fn write_binary_stream(
     writer: &mut Writer,
     pixels: &[u8],

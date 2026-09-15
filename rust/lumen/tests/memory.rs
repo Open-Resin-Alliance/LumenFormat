@@ -171,8 +171,8 @@ fn meta() -> Meta {
         meta_version: Some(1),
         timing: Timing {
             layer_height_um: Some(50),
-            normal_exposure_sec: Some(2.5),
-            bottom_exposure_sec: Some(30.0),
+            normal_exposure_ms: Some(2500),
+            bottom_exposure_ms: Some(30000),
             bottom_layer_count: Some(1),
             transition_layer_count: Some(1),
             lift_slow_distance_um: Some(5000),

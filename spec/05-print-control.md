@@ -18,8 +18,8 @@ Required only when `MULTI_SECTOR` flag is set. Defines a material/exposure secto
   "color_rgba": [0, 255, 0, 128],
 
   // Any timing field from META can be overridden per-sector:
-  "normal_exposure_sec": 3.0,
-  "bottom_exposure_sec": 35.0
+  "normal_exposure_ms": 3000,
+  "bottom_exposure_ms": 35000
   // ... (all META timing fields are valid here)
 }
 ```
@@ -29,7 +29,7 @@ Required only when `MULTI_SECTOR` flag is set. Defines a material/exposure secto
 - `material_index` indexes `META.materials` (or `PROF.materials`, when the profile
   supplies the library) and defaults to `0` when absent. When present, the referenced
   array MUST exist, be non-empty, and contain the index.
-- `color_rgba` is a display hint that overrides the referenced material's colour for
+- `color_rgba` is a display hint that overrides the referenced material's color for
   this sector; it does not affect exposure.
 - If a timing field is absent, the sector inherits from META defaults.
 - A single-material printer can ignore all `SECT` chunks and decode only sector 0;
@@ -52,14 +52,14 @@ than one is present, readers use the first.
   "overrides": [
     {
       "layer": 100,
-      "normal_exposure_sec": 2.8,
+      "normal_exposure_ms": 2800,
       "lift_slow_distance_um": 6000
     },
     {
       "layer_range": [200, 250],
       "sector_id": 1,
-      "normal_exposure_sec": 2.2,
-      "wait_time_before_cure_sec": 0.5
+      "normal_exposure_ms": 2200,
+      "wait_time_before_cure_ms": 500
     }
   ]
 }
