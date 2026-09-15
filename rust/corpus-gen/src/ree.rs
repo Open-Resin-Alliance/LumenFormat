@@ -28,6 +28,36 @@ pub fn varint(mut n: u64) -> Vec<u8> {
     }
 }
 
+/// `PLANES` (spec 5.3.1): the four plane lengths, then the plane bytes.
+///
+/// A varint's byte `j` - least-significant seven bits first - is appended to plane
+/// `j`, so a `k`-byte varint adds one byte to each of planes `0..k`. The four
+/// lengths are written unconditionally, an empty array costing four zero bytes.
+pub fn enc_planes(values: &[u64]) -> Vec<u8> {
+    let mut planes: [Vec<u8>; 4] = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
+    for &value in values {
+        let mut value = value;
+        let mut plane = 0;
+        loop {
+            let byte = (value & 0x7F) as u8;
+            value >>= 7;
+            planes[plane].push(if value != 0 { byte | 0x80 } else { byte });
+            if value == 0 {
+                break;
+            }
+            plane += 1;
+        }
+    }
+    let mut out = Vec::new();
+    for plane in &planes {
+        out.extend(varint(plane.len() as u64));
+    }
+    for plane in &planes {
+        out.extend_from_slice(plane);
+    }
+    out
+}
+
 /// Canonical `(length, value)` runs covering `total` pixels.
 ///
 /// Spans are `(start, end, value)`; pixels no span covers are black. Adjacent
@@ -61,7 +91,7 @@ pub fn runs_from_spans(total: usize, spans: &[Span]) -> Vec<Run> {
     out
 }
 
-/// Binary REE body: first_value, run_count, K-1 run lengths.
+/// Binary REE body: first_value, run_count, PLANES of the K-1 run lengths.
 pub fn enc_binary(runs: &[Run]) -> Vec<u8> {
     if runs.is_empty() {
         return Vec::new();
@@ -69,6 +99,7 @@ pub fn enc_binary(runs: &[Run]) -> Vec<u8> {
     if runs.len() == 1 {
         let mut out = vec![runs[0].1];
         out.extend(varint(1));
+        out.extend(enc_planes(&[]));
         return out;
     }
     let first = runs[0].1;
@@ -78,27 +109,34 @@ pub fn enc_binary(runs: &[Run]) -> Vec<u8> {
     );
     let mut out = vec![first];
     out.extend(varint(runs.len() as u64));
-    for &(length, _) in &runs[..runs.len() - 1] {
-        assert!(length >= 1);
-        out.extend(varint(length as u64));
-    }
+    let lengths: Vec<u64> = runs[..runs.len() - 1]
+        .iter()
+        .map(|&(length, _)| {
+            assert!(length >= 1);
+            length as u64
+        })
+        .collect();
+    out.extend(enc_planes(&lengths));
     out
 }
 
-/// Grayscale REE body: run_count, then (value, end_pos) per run.
+/// Grayscale REE body: run_count, the value of every run, then PLANES of the K-1
+/// run lengths. The last run ends at `total_pixels`, which the reader knows.
 pub fn enc_grayscale(runs: &[Run]) -> Vec<u8> {
     let mut out = varint(runs.len() as u64);
-    let mut pos = 0;
     for (i, &(length, value)) in runs.iter().enumerate() {
         assert!(length >= 1, "zero-length run");
         assert!(
             !(i > 0 && runs[i - 1].1 == value),
             "adjacent runs share a value"
         );
-        pos += length;
         out.push(value);
-        out.extend(varint(pos as u64));
     }
+    let lengths: Vec<u64> = runs[..runs.len() - 1]
+        .iter()
+        .map(|&(length, _)| length as u64)
+        .collect();
+    out.extend(enc_planes(&lengths));
     out
 }
 
@@ -132,10 +170,12 @@ pub fn enc_split(runs: &[Run]) -> Vec<u8> {
     let mut out = enc_binary(&thresholded);
     out.extend(varint(positions.len() as u64));
     let mut prev = 0;
+    let mut deltas: Vec<u64> = Vec::with_capacity(positions.len());
     for &position in &positions {
-        out.extend(varint((position - prev) as u64));
+        deltas.push((position - prev) as u64);
         prev = position;
     }
+    out.extend(enc_planes(&deltas));
     out.extend_from_slice(&values);
     out
 }
@@ -174,4 +214,21 @@ pub fn encode_sector(runs: &[Run], prefer_split: bool) -> Option<Vec<u8>> {
             Some(out)
         }
     }
+}
+
+/// Encoded sector body under tag 0x02 whatever the mask holds, or `None` for an
+/// empty sector.
+///
+/// [`pick_tag`] gives an all-`0x00`/`0xFF` mask tag 0x00, so this is the only way
+/// to write the one stream shape that tag cannot carry: a split whose overlay is
+/// empty, whose `aa_positions` are still `PLANES(0)` - four zero lengths. The
+/// stream is decodable and no rule refuses it, but spec 5.6's tag choice keeps it
+/// out of the canonical form; the vector that uses it says so.
+pub fn encode_sector_split(runs: &[Run]) -> Option<Vec<u8>> {
+    if runs.iter().all(|&(_, value)| value == 0) {
+        return None;
+    }
+    let mut out = vec![TAG_SPLIT];
+    out.extend(enc_split(runs));
+    Some(out)
 }

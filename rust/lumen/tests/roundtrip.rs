@@ -14,9 +14,9 @@ use lumen::container::{self, ChunkType};
 use lumen::crypto::Cipher;
 use lumen::json::{Meta, Sector, Timing};
 use lumen::reader::LumenFile;
-use lumen::ree::EncodeMode;
+use lumen::ree::{self, EncodeMode};
 use lumen::validate::{self, Level};
-use lumen::writer::{Argon2Params, Encoder, EncryptOptions, Override};
+use lumen::writer::{Argon2Params, EncodedLayer, Encoder, EncryptOptions, Override};
 
 const WIDTH: u32 = 64;
 const HEIGHT: u32 = 48;
@@ -437,6 +437,103 @@ fn multi_sector_round_trips_and_reports_its_sectors() {
         .expect("the integrity tree must verify over concatenated slices");
 }
 
+/// Section 7.3's invariant, on the streams themselves.
+///
+/// Two sectors of one layer must not expose the same pixel, and the rule is
+/// about the pixels a slice *exposes* - not the runs it stores and not the reach
+/// of its overlay. The streams are pushed as they are encoded, so the case each
+/// one makes is exact.
+#[test]
+fn two_sectors_of_one_layer_must_not_expose_the_same_pixel() {
+    /// A white block over `[from, to)` and black everywhere else.
+    fn block(from: usize, to: usize) -> Vec<u8> {
+        let mut pixels = vec![0u8; PIXELS];
+        pixels[from..to].fill(255);
+        pixels
+    }
+
+    fn binary(pixels: &[u8]) -> Vec<u8> {
+        ree::encode_binary(pixels, PIXELS as u32).expect("a binary mask")
+    }
+
+    /// One layer holding `sectors`, written out as a file.
+    fn file(sectors: Vec<(u32, Vec<u8>)>) -> Vec<u8> {
+        let mut encoder = Encoder::new(head(1), meta());
+        encoder
+            .push_encoded_layer(EncodedLayer::Sectors(sectors))
+            .expect("a pushable layer");
+        encoder.finish().expect("a writable file")
+    }
+
+    // Blocks that meet at pixel 32 expose no pixel in common.
+    let adjacent = file(vec![
+        (0, binary(&block(0, 32))),
+        (1, binary(&block(32, 64))),
+    ]);
+    validate::validate(&adjacent, Level::Strict).expect("adjacent sectors are disjoint");
+
+    // One pixel in common: the rule fires, and it is a strict one.
+    let overlapping = file(vec![
+        (0, binary(&block(0, 33))),
+        (1, binary(&block(32, 64))),
+    ]);
+    let err = validate::validate(&overlapping, Level::Strict)
+        .expect_err("pixel 32 is exposed by both sectors");
+    assert_eq!(err.check_name(), "sector.partition");
+    validate::validate(&overlapping, Level::Loose).expect("a loose read does not ask");
+
+    // A grayscale sector exposes the runs that are not black: a second sector
+    // may cover its black pixels, which its runs do reach.
+    let mut striped = vec![0u8; PIXELS];
+    striped[..16].fill(0x40);
+    let grayscale = ree::encode_grayscale(&striped, PIXELS as u32).expect("a grayscale mask");
+    let over_a_black_run = file(vec![(0, grayscale), (1, binary(&block(16, 32)))]);
+    validate::validate(&over_a_black_run, Level::Strict)
+        .expect("sector 0 exposes only pixels 0..16");
+
+    // A split sector exposes the pixel its overlay carries, which is inside a
+    // black run of its core: a sector that covers that pixel overlaps it.
+    let mut edge = vec![0u8; PIXELS];
+    edge[..32].fill(255);
+    edge[40] = 0x40;
+    let split = ree::encode_split(&edge, PIXELS as u32).expect("a split mask");
+    let overlay_in_the_dark = file(vec![(0, split.clone()), (1, binary(&block(40, 64)))]);
+    let err = validate::validate(&overlay_in_the_dark, Level::Strict)
+        .expect_err("pixel 40 is exposed by sector 0's overlay");
+    assert_eq!(err.check_name(), "sector.partition");
+
+    // And a pixel a split sector exposes twice - its core's run holds it and its
+    // overlay carries it - is still one sector's: it must not read as an overlap
+    // with the sector next to it.
+    let mut ramp = vec![0u8; PIXELS];
+    ramp[..32].fill(255);
+    ramp[16] = 0x80;
+    let split = ree::encode_split(&ramp, PIXELS as u32).expect("a split mask");
+    let twice_in_one_sector = file(vec![(0, split), (1, binary(&block(32, 64)))]);
+    validate::validate(&twice_in_one_sector, Level::Strict)
+        .expect("one sector exposing a pixel twice is not two sectors exposing it");
+
+    // The two sectors' decoded masks, for the shapes the rule was read off:
+    // what the walk says is exposed is what the masks expose.
+    let opened = LumenFile::open(&overlay_in_the_dark, Level::Loose).expect("a readable file");
+    for sector in opened.layer_sectors(0).expect("layer 0 must decode") {
+        let exposed: Vec<usize> = sector
+            .layer
+            .pixels
+            .iter()
+            .enumerate()
+            .filter(|(_, pixel)| **pixel != 0)
+            .map(|(index, _)| index)
+            .collect();
+        let expected: Vec<usize> = if sector.sector_id == 0 {
+            (0..32).chain(std::iter::once(40)).collect()
+        } else {
+            (40..64).collect()
+        };
+        assert_eq!(exposed, expected, "sector {}", sector.sector_id);
+    }
+}
+
 #[test]
 fn extensions_and_embedded_scene_round_trip() {
     let mut encoder = Encoder::new(head(1), meta());
@@ -806,9 +903,9 @@ fn explicit_encoding_modes_round_trip() {
                 }
                 // Section 5.6: a mask whose pixels are all 0x00/0xFF MUST use tag
                 // 0x00, and section 11.3 makes a strict validator reject one
-                // stored as grayscale. Forcing another tag on such a mask
-                // therefore builds a stream no strict reader accepts, which is
-                // not a property worth asserting.
+                // stored as grayscale or as split. Forcing another tag on such a
+                // mask therefore builds a stream no strict reader accepts, which
+                // is not a property worth asserting.
                 EncodeMode::Grayscale | EncodeMode::Split if binary => continue,
                 _ => {}
             }

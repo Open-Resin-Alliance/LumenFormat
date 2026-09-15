@@ -83,14 +83,26 @@ pub struct LumenFile<'a> {
 }
 
 impl<'a> LumenFile<'a> {
-    /// Open a plaintext file.
+    /// Open without checking the whole of section 11 first.
+    ///
+    /// [`LumenFile::open`] runs every check of section 11 before it returns, and
+    /// one of them walks each slice's stream. A caller that wants a single layer,
+    /// a layer preview for instance, pays for that walk without asking. This
+    /// parses the container and its chunks and checks nothing: it leaves the
+    /// streams to [`LumenFile::layer`], which reports a malformed one when it
+    /// reaches it.
+    pub fn open_unvalidated(buf: &'a [u8]) -> Result<LumenFile<'a>> {
+        LumenFile::assemble(buf, None, None)
+    }
+
+    /// Open a plaintext file, validating it against `level`.
     pub fn open(buf: &'a [u8], level: Level) -> Result<LumenFile<'a>> {
-        LumenFile::assemble(buf, level, None)
+        LumenFile::assemble(buf, Some(level), None)
     }
 
     /// Open a file whose session key is already known.
     pub fn open_with_key(buf: &'a [u8], level: Level, key: SessionKey) -> Result<LumenFile<'a>> {
-        LumenFile::assemble(buf, level, Some(key))
+        LumenFile::assemble(buf, Some(level), Some(key))
     }
 
     /// Open a password-protected file.
@@ -101,7 +113,7 @@ impl<'a> LumenFile<'a> {
     ) -> Result<LumenFile<'a>> {
         let auth = auth_of(buf)?;
         let key = crypto::unwrap_password(&auth, password)?;
-        LumenFile::assemble(buf, level, Some(key))
+        LumenFile::assemble(buf, Some(level), Some(key))
     }
 
     /// Open a machine-bound file with the recipient's X25519 private key.
@@ -112,15 +124,21 @@ impl<'a> LumenFile<'a> {
     ) -> Result<LumenFile<'a>> {
         let auth = auth_of(buf)?;
         let key = crypto::unwrap_machine(&auth, private_key)?;
-        LumenFile::assemble(buf, level, Some(key))
+        LumenFile::assemble(buf, Some(level), Some(key))
     }
 
-    fn assemble(buf: &'a [u8], level: Level, key: Option<SessionKey>) -> Result<LumenFile<'a>> {
-        let mut validator = Validator::new(level);
-        if let Some(key) = key {
-            validator = validator.with_key(key);
+    fn assemble(
+        buf: &'a [u8],
+        level: Option<Level>,
+        key: Option<SessionKey>,
+    ) -> Result<LumenFile<'a>> {
+        if let Some(level) = level {
+            let mut validator = Validator::new(level);
+            if let Some(key) = key {
+                validator = validator.with_key(key);
+            }
+            validator.validate(buf)?;
         }
-        validator.validate(buf)?;
 
         let header = FileHeader::parse(buf)?;
         let directory = container::parse_directory(buf, &header)?;
@@ -205,7 +223,9 @@ impl<'a> LumenFile<'a> {
             auth,
             cipher,
             key,
-            level,
+            // An unvalidated open has no level to carry; reading is then loose,
+            // which is what a caller that skipped validation wants anyway.
+            level: level.unwrap_or_default(),
             cache: RefCell::new(None),
         })
     }

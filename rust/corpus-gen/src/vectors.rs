@@ -1,4 +1,4 @@
-//! The corpus: the twelve valid vectors, the deliberate defects, and the manifest.
+//! The corpus: the thirteen valid vectors, the deliberate defects, and the manifest.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -335,7 +335,36 @@ can express.",
         .strict_only(),
     );
 
-    // x16: a LAYR container whose version is not 1
+    // x16: an all-binary slice stored as split REE, whose overlay is empty (strict)
+    let source = vector::build_vector(&VectorSpec {
+        name: "x-source",
+        description: "source",
+        display: (64, 48),
+        layers: vec![
+            // Layer 0 is one run of 0xFF under tag 0x02: the stream a strict
+            // reader rejects, everything else about the file conforming.
+            vec![vec![(0, 3072, 255)]],
+            vec![vec![(0, 300, 255)]],
+            vec![vec![(0, 100, 128)]],
+            vec![vec![(500, 600, 255)]],
+        ],
+        layers_per_chunk: 2,
+        force_split: vec![0],
+        ..Default::default()
+    });
+    emit(
+        &invalid_dir,
+        &mut manifest_invalid,
+        Invalid::new(
+            "split-all-binary",
+            "Layer 0 is one run of 0xFF stored as tag 0x02 with an empty overlay, where section 5.6 requires tag 0x00 for a slice whose pixels are all 0x00/0xFF: the split form has no anti-aliasing to carry and is strictly larger.",
+            "ree.split_all_binary",
+            source.raw,
+        )
+        .strict_only(),
+    );
+
+    // x17: a LAYR container whose version is not 1
     let mut b = binary_basic.raw.clone();
     container::write_u32(&mut b, layr_of(&binary_basic), 2);
     emit(
@@ -350,7 +379,7 @@ can express.",
         .base("binary-basic"),
     );
 
-    // x17: a frame that declares no decompressed size
+    // x18: a frame that declares no decompressed size
     emit(
         &invalid_dir,
         &mut manifest_invalid,
@@ -362,7 +391,7 @@ can express.",
         ),
     );
 
-    // x18: a frame whose declared size is not its output size
+    // x19: a frame whose declared size is not its output size
     let mut b = binary_basic.raw.clone();
     let off = layr_of(&binary_basic);
     let (at, width) = content_size_field(&b[off + 4..]);
@@ -381,7 +410,7 @@ can express.",
         .base("binary-basic"),
     );
 
-    // x19: a frame that will not decompress at all
+    // x20: a frame that will not decompress at all
     let mut b = binary_basic.raw.clone();
     let block_header = off + 4 + 6;
     b[block_header] |= 0x06;
@@ -397,7 +426,7 @@ can express.",
         .base("binary-basic"),
     );
 
-    // x20: frames whose dictionary id is not the ZDIC chunk's
+    // x21: frames whose dictionary id is not the ZDIC chunk's
     let zdic = dictionary.layout.offset(b"ZDIC");
     let mut b = dictionary.raw.clone();
     let dict_id = container::read_u32(&b, zdic + 4);
@@ -414,7 +443,7 @@ can express.",
         .base("dict-multi-block"),
     );
 
-    // x21: frames that name a dictionary the file does not carry
+    // x22: frames that name a dictionary the file does not carry
     emit(
         &invalid_dir,
         &mut manifest_invalid,
@@ -426,7 +455,7 @@ can express.",
         ),
     );
 
-    // x22: sealed frames bound to a unit index that is not their chunk's
+    // x23: sealed frames bound to a unit index that is not their chunk's
     let wrong_unit = vector::build_encrypted_vector(
         &VectorSpec {
             name: "x-unit-index",
@@ -455,7 +484,7 @@ can express.",
         .crypto(wrong_unit.meta["crypto"].clone()),
     );
 
-    // x23: the walk reaches fewer layers than the header declares
+    // x24: the walk reaches fewer layers than the header declares
     let mut b = multi.raw.clone();
     let layer_one = multi_ltbl + container::LTBL_HEADER_SIZE + 2 * container::LTBL_ENTRY_SIZE;
     container::write_u32(&mut b, layer_one + container::LTBL_ADDITIONAL_SECTORS, 1);
@@ -471,7 +500,7 @@ can express.",
         .base("multi-sector"),
     );
 
-    // x24: a frame that declares far more output than its slices justify
+    // x25: a frame that declares far more output than its slices justify
     let bound = allocation_bound_source();
     let mut b = bound.raw.clone();
     let frame = layr_of(&bound) + 4;
@@ -489,7 +518,7 @@ can express.",
         ),
     );
 
-    // x25: a ZDIC chunk no frame uses
+    // x26: a ZDIC chunk no frame uses
     emit(
         &invalid_dir,
         &mut manifest_invalid,
@@ -501,7 +530,7 @@ can express.",
         ),
     );
 
-    // x26: a sector list that names one sector twice
+    // x27: a sector list that names one sector twice
     emit(
         &invalid_dir,
         &mut manifest_invalid,
@@ -513,7 +542,7 @@ can express.",
         ),
     );
 
-    // x27: a sector naming a material the library does not have
+    // x28: a sector naming a material the library does not have
     emit(
         &invalid_dir,
         &mut manifest_invalid,
@@ -525,7 +554,7 @@ can express.",
         ),
     );
 
-    // x28: merkle root does not match the leaf table
+    // x29: merkle root does not match the leaf table
     let mut b = binary_basic.raw.clone();
     let lhas = binary_basic.layout.offset(b"LHAS");
     b[lhas + 6] ^= 0xFF;
@@ -541,7 +570,7 @@ can express.",
         .base("binary-basic"),
     );
 
-    // x29: layer hash does not match the layer bytes (root recomputed to stay consistent)
+    // x30: layer hash does not match the layer bytes (root recomputed to stay consistent)
     let mut b = binary_basic.raw.clone();
     let leaves_off = lhas + 38;
     let n_layers = container::read_u32(&b, lhas + 2) as usize;
@@ -570,7 +599,7 @@ can express.",
         .base("binary-basic"),
     );
 
-    // x30: the MULTI_SECTOR flag cleared in a file whose layers carry two sectors
+    // x31: the MULTI_SECTOR flag cleared in a file whose layers carry two sectors
     let mut b = multi.raw.clone();
     let flags = container::read_u32(&b, 20);
     container::write_u32(&mut b, 20, flags & !container::FLAG_MULTI_SECTOR);
@@ -586,7 +615,7 @@ can express.",
         .base("multi-sector"),
     );
 
-    // x31: the MULTI_SECTOR flag set in a file that carries one sector per layer
+    // x32: the MULTI_SECTOR flag set in a file that carries one sector per layer
     let mut b = binary_basic.raw.clone();
     let flags = container::read_u32(&b, 20);
     container::write_u32(&mut b, 20, flags | container::FLAG_MULTI_SECTOR);
@@ -602,7 +631,7 @@ can express.",
         .base("binary-basic"),
     );
 
-    // x32: corrupted trailer CRC (the only failure that is not repacked)
+    // x33: corrupted trailer CRC (the only failure that is not repacked)
     let mut b = binary_basic.raw.clone();
     b[binary_basic.layout.trailer_offset + 4] ^= 0xFF;
     emit(
@@ -617,7 +646,7 @@ can express.",
         .base("binary-basic"),
     );
 
-    // x33: a fractional duration. Durations are exact whole milliseconds, so a
+    // x34: a fractional duration. Durations are exact whole milliseconds, so a
     // value with a fractional part is not a duration the format can carry; the
     // file is otherwise valid, so the type rule is the only thing wrong with it.
     let fractional = vector::build_vector(&VectorSpec {
@@ -1116,10 +1145,11 @@ fn prune(dir: &Path, written: &BTreeSet<PathBuf>, removed: &mut usize) {
 // valid vectors
 // --------------------------------------------------------------------------
 
-/// The twelve valid vectors, in the order the manifest lists them.
+/// The thirteen valid vectors, in the order the manifest lists them.
 pub fn valid_vectors() -> Vec<Built> {
     vec![
         binary_basic(),
+        ree_degenerate_arrays(),
         dict_multi_block(),
         multi_sector(),
         sector_blend_ranges(),
@@ -1166,6 +1196,40 @@ fn binary_basic() -> Built {
             ("bottom_wait_time_after_lift_ms", Value::from(333)),
             ("bottom_light_pwm", Value::from(200)),
         ],
+        ..Default::default()
+    })
+}
+
+/// 4 layers whose run-length arrays hold no varints, no dictionary, two chunks.
+fn ree_degenerate_arrays() -> Built {
+    // 64 x 48 over one sector: 3 072 pixels per layer.
+    let layers: Vec<vector::Layer> = vec![
+        // One run of 0xFF: tag 0x00, run_count 1, no stored length.
+        vec![vec![(0, 3072, 255)]],
+        // One run of 0x80: tag 0x01, run_count 1, one value, no stored length.
+        vec![vec![(0, 3072, 128)]],
+        // Every pixel thresholds to 0xFF, so the split core is one run; the
+        // overlay is the 0xC0 band, whose first delta is 1000.
+        vec![vec![(0, 1000, 255), (1000, 1200, 192), (1200, 3072, 255)]],
+        // Every pixel thresholds to 0x00, so the core is one run of the other
+        // value; the overlay starts at pixel 0, whose delta is 0.
+        vec![vec![(0, 500, 64), (500, 3072, 0)]],
+    ];
+    vector::build_vector(&VectorSpec {
+        name: "ree-degenerate-arrays",
+        description: "Four layers over one sector, two LAYR chunks and no dictionary, pinning every run-length array that holds no varints: layer 0 is one run of 0xFF (tag 0x00, run_count 1), layer 1 one run of 0x80 (tag 0x01, run_count 1, one value byte), and layers 2 and 3 are splits whose thresholded core is a single run - one of 0xFF over a 0xC0 band at 1000..1200, whose first delta is two bytes, one of 0x00 under a 0x40 band at 0..500, whose first delta is 0. Each of those arrays carries its four plane lengths as zeros: the header is written unconditionally, and a reader that skipped it would leave those bytes unconsumed. The one degenerate form that is not canonical - a split whose overlay is empty, which section 5.6 forbids for an all-0x00/0xFF slice - is its own invalid vector, split-all-binary, because a valid vector must not carry a layer a strict reader is required to reject.",
+        features: &[
+            "binary-ree",
+            "grayscale-ree",
+            "split-ree",
+            "single-run-stream",
+            "empty-plane-array",
+            "no-dictionary",
+        ],
+        display: (64, 48),
+        layers,
+        layers_per_chunk: 2,
+        split_layers: vec![2, 3],
         ..Default::default()
     })
 }

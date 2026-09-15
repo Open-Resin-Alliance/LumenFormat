@@ -41,7 +41,7 @@ use crate::crypto::{self, Auth, Cipher, RecipientEntry, SessionKey};
 use crate::error::{Error, Result};
 use crate::io::Writer;
 use crate::json::{Meta, Profile, Sector, Timing};
-use crate::ree::{self, EncodeMode};
+use crate::ree::{self, EncodeMode, Run};
 use std::collections::HashMap;
 
 /// Argon2id parameters for password-mode encryption.
@@ -125,9 +125,9 @@ pub struct Override {
     pub timing: Timing,
 }
 
-/// One layer, already run-end encoded.
+/// A layer's encoded form, ready to store: what `push_layer` builds internally.
 #[derive(Debug, Clone)]
-enum LayerRecord {
+pub enum EncodedLayer {
     /// The empty layer: no sector carries bytes.
     Empty,
     /// `(sector_id, tag plus REE stream)`, ascending by `sector_id`, with the
@@ -135,16 +135,46 @@ enum LayerRecord {
     Sectors(Vec<(u32, Vec<u8>)>),
 }
 
-impl LayerRecord {
-    /// The pushed mask for one sector, when this layer has data for it.
-    fn mask(&self, sector_id: u32) -> Option<&[u8]> {
+impl EncodedLayer {
+    /// One sector's stream, as sector 0 of a layer.
+    ///
+    /// `stream` is exactly what [`ree::encode`] or [`ree::encode_runs`] returned:
+    /// the REE tag, then the stream. A stream with no tag cannot be stored - an
+    /// all-black sector is the empty-layer form - so it is rejected here rather
+    /// than reaching the layer table.
+    pub fn single(stream: Vec<u8>) -> Result<Self> {
+        check_stream(&stream)?;
+        Ok(EncodedLayer::Sectors(vec![(0, stream)]))
+    }
+
+    /// The pushed stream for one sector, when this layer has data for it.
+    fn stream(&self, sector_id: u32) -> Option<&[u8]> {
         match self {
-            LayerRecord::Empty => None,
-            LayerRecord::Sectors(list) => list
+            EncodedLayer::Empty => None,
+            EncodedLayer::Sectors(list) => list
                 .iter()
                 .find(|(id, _)| *id == sector_id)
-                .map(|(_, mask)| mask.as_slice()),
+                .map(|(_, stream)| stream.as_slice()),
         }
+    }
+}
+
+/// Reject a stream that does not begin with a layer encoding tag.
+///
+/// An empty stream is not degenerate but different: it is the empty-layer form,
+/// which [`EncodedLayer::Empty`] carries and no sector's data does. The messages
+/// match the reader's, so a caller sees the same words either side of the file.
+fn check_stream(stream: &[u8]) -> Result<()> {
+    match stream.first() {
+        None => Err(Error::new(
+            Check::ReeTag,
+            "layer mask data is empty: the empty-layer form carries no bytes",
+        )),
+        Some(&(ree::TAG_BINARY | ree::TAG_GRAYSCALE | ree::TAG_SPLIT)) => Ok(()),
+        Some(&tag) => Err(Error::new(
+            Check::ReeTag,
+            format!("unknown layer encoding tag 0x{tag:02X}"),
+        )),
     }
 }
 
@@ -177,7 +207,7 @@ pub struct Encoder {
     layer_hashes: bool,
     encryption: Option<EncryptOptions>,
     session: Option<SessionKey>,
-    layers: Vec<LayerRecord>,
+    layers: Vec<EncodedLayer>,
 }
 
 impl Encoder {
@@ -299,11 +329,11 @@ impl Encoder {
         let total_pixels = self.total_pixels();
         check_mask(pixels, total_pixels, "the layer")?;
         let record = match ree::encode(pixels, total_pixels, mode)? {
-            None => LayerRecord::Empty,
+            None => EncodedLayer::Empty,
             // `ree::encode` returns the mask data with its tag already in front,
             // which is exactly what a layer stores; the tag is repeated here only
             // to be dropped.
-            Some((_tag, mask)) => LayerRecord::Sectors(vec![(0, mask)]),
+            Some((_tag, mask)) => EncodedLayer::Sectors(vec![(0, mask)]),
         };
         self.layers.push(record);
         Ok(())
@@ -336,11 +366,63 @@ impl Encoder {
             }
         }
         if masks.is_empty() {
-            self.layers.push(LayerRecord::Empty);
+            self.layers.push(EncodedLayer::Empty);
         } else {
             masks.sort_by_key(|(sector_id, _)| *sector_id);
-            self.layers.push(LayerRecord::Sectors(masks));
+            self.layers.push(EncodedLayer::Sectors(masks));
         }
+        Ok(())
+    }
+
+    /// Push one layer given as runs instead of pixels, as sector 0.
+    ///
+    /// Equivalent to [`Encoder::push_layer`] on the mask the runs describe,
+    /// except that the mask is never built: a slicer's run-length rasterizer
+    /// output goes straight to the encoder. The runs must be canonical and cover
+    /// the layer, as [`ree::encode_runs`] requires.
+    pub fn push_layer_runs(&mut self, runs: &[Run], mode: EncodeMode) -> Result<()> {
+        let record = match ree::encode_runs(runs, self.total_pixels(), mode)? {
+            None => EncodedLayer::Empty,
+            // `ree::encode_runs` returns the mask data with its tag already in
+            // front, which is exactly what a layer stores; the tag is repeated
+            // here only to be dropped.
+            Some((_tag, mask)) => EncodedLayer::Sectors(vec![(0, mask)]),
+        };
+        self.layers.push(record);
+        Ok(())
+    }
+
+    /// Push a layer that is already encoded.
+    ///
+    /// This is the parallel path: workers turn one layer's runs into bytes with
+    /// [`ree::encode_runs`], and the writer stores each result in layer order
+    /// without ever seeing pixel data. The streams are checked to carry a layer
+    /// encoding tag, the sectors are sorted by id as the layer table requires,
+    /// and a layer with no sector data becomes the empty-layer form.
+    pub fn push_encoded_layer(&mut self, layer: EncodedLayer) -> Result<()> {
+        let record = match layer {
+            EncodedLayer::Empty => EncodedLayer::Empty,
+            EncodedLayer::Sectors(mut list) => {
+                for (_, stream) in &list {
+                    check_stream(stream)?;
+                }
+                list.sort_by_key(|(sector_id, _)| *sector_id);
+                for pair in list.windows(2) {
+                    if pair[0].0 == pair[1].0 {
+                        return Err(Error::new(
+                            Check::LtblSectorIdUnique,
+                            format!("sector {} appears twice in one layer", pair[0].0),
+                        ));
+                    }
+                }
+                if list.is_empty() {
+                    EncodedLayer::Empty
+                } else {
+                    EncodedLayer::Sectors(list)
+                }
+            }
+        };
+        self.layers.push(record);
         Ok(())
     }
 
@@ -416,7 +498,7 @@ impl Encoder {
                     .take(group_end)
                     .skip(group_start)
                 {
-                    if let Some(mask) = record.mask(sector) {
+                    if let Some(mask) = record.stream(sector) {
                         placed.push((index as u32, plaintext.len() as u64, mask.len() as u32));
                         plaintext.extend_from_slice(mask);
                     }
@@ -514,7 +596,7 @@ impl Encoder {
         if self
             .layers
             .iter()
-            .any(|record| matches!(record, LayerRecord::Sectors(list) if list.len() > 1))
+            .any(|record| matches!(record, EncodedLayer::Sectors(list) if list.len() > 1))
         {
             flags |= FLAG_MULTI_SECTOR;
         }
@@ -658,8 +740,8 @@ impl Encoder {
             .layers
             .iter()
             .map(|record| match record {
-                LayerRecord::Empty => Vec::new(),
-                LayerRecord::Sectors(list) => list.iter().map(|(id, _)| *id).collect(),
+                EncodedLayer::Empty => Vec::new(),
+                EncodedLayer::Sectors(list) => list.iter().map(|(id, _)| *id).collect(),
             })
             .collect();
         for over in &self.overrides {
@@ -856,4 +938,181 @@ fn split_samples(plaintext: &[u8]) -> Vec<&[u8]> {
         return Vec::new();
     }
     plaintext.chunks(WINDOW).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::json::{Meta, Timing};
+
+    const WIDTH: u32 = 8;
+    const HEIGHT: u32 = 4;
+    const PIXELS: usize = (WIDTH * HEIGHT) as usize;
+
+    fn head(layers: u32) -> Head {
+        Head {
+            head_version: 1,
+            encoder_name: "lumen writer tests".to_string(),
+            created_unix_sec: 1_750_000_000,
+            display_width_px: WIDTH,
+            display_height_px: HEIGHT,
+            physical_width_px: WIDTH,
+            physical_height_px: HEIGHT,
+            build_width_um: 40_000,
+            build_depth_um: 20_000,
+            build_height_um: 20_000,
+            layer_height_um: 50,
+            total_layers: layers,
+        }
+    }
+
+    fn meta() -> Meta {
+        let mut timing = Timing {
+            layer_height_um: Some(50),
+            ..Timing::default()
+        };
+        timing.extra.clear();
+        Meta {
+            meta_version: Some(1),
+            timing,
+            ..Meta::default()
+        }
+    }
+
+    /// The canonical runs of a mask.
+    fn runs_of(pixels: &[u8]) -> Vec<Run> {
+        let mut runs: Vec<Run> = Vec::new();
+        for &pixel in pixels {
+            match runs.last_mut() {
+                Some(last) if last.value == pixel => last.length += 1,
+                _ => runs.push(Run::new(1, pixel)),
+            }
+        }
+        runs
+    }
+
+    /// One mask per encoding, plus the empty layer: binary stripes, an
+    /// anti-aliased edge, and a mask neither tag can shrink.
+    fn masks() -> Vec<Vec<u8>> {
+        let mut stripes = vec![0u8; PIXELS];
+        for (index, pixel) in stripes.iter_mut().enumerate() {
+            if index % 3 == 0 {
+                *pixel = 255;
+            }
+        }
+        let mut edge = vec![0u8; PIXELS];
+        edge[PIXELS / 2 - 1] = 90;
+        edge[PIXELS / 2] = 200;
+        let gradient: Vec<u8> = (0..PIXELS).map(|index| (index * 8) as u8).collect();
+        vec![vec![0u8; PIXELS], stripes, edge, gradient]
+    }
+
+    /// Runs pushed with `push_layer_runs` must produce the same file plain
+    /// pixels do, and an already-encoded layer must store those same bytes.
+    #[test]
+    fn the_run_path_writes_the_same_file_as_the_pixel_path() {
+        let masks = masks();
+        let layers = masks.len() as u32;
+
+        let mut from_masks = Encoder::new(head(layers), meta());
+        let mut from_runs = Encoder::new(head(layers), meta());
+        let mut encoded = Encoder::new(head(layers), meta());
+        for pixels in &masks {
+            from_masks.push_layer(pixels).expect("a pushable mask");
+            from_runs
+                .push_layer_runs(&runs_of(pixels), EncodeMode::Auto)
+                .expect("a pushable run list");
+            let record = match ree::encode(pixels, PIXELS as u32, EncodeMode::Auto).unwrap() {
+                None => EncodedLayer::Empty,
+                Some((_tag, stream)) => EncodedLayer::single(stream).expect("a tagged stream"),
+            };
+            encoded
+                .push_encoded_layer(record)
+                .expect("a storable layer");
+        }
+
+        let expected = from_masks.finish().expect("a writable file");
+        assert_eq!(from_runs.finish().expect("a writable file"), expected);
+        assert_eq!(encoded.finish().expect("a writable file"), expected);
+    }
+
+    /// A layer's sectors are sorted by id, and a layer with no sector data is the
+    /// empty-layer form rather than a table entry per sector.
+    #[test]
+    fn an_encoded_layer_is_sorted_and_may_be_empty() {
+        let masks = masks();
+        let mut sectors = Encoder::new(head(2), meta());
+        sectors
+            .push_encoded_layer(EncodedLayer::Sectors(vec![
+                (
+                    1,
+                    ree::encode(&masks[1], PIXELS as u32, EncodeMode::Auto)
+                        .unwrap()
+                        .unwrap()
+                        .1,
+                ),
+                (
+                    0,
+                    ree::encode(&masks[2], PIXELS as u32, EncodeMode::Auto)
+                        .unwrap()
+                        .unwrap()
+                        .1,
+                ),
+            ]))
+            .expect("a storable layer");
+        sectors
+            .push_encoded_layer(EncodedLayer::Sectors(Vec::new()))
+            .expect("a storable empty layer");
+
+        let mut from_masks = Encoder::new(head(2), meta());
+        from_masks
+            .push_layer_sectors(&[(0, masks[2].clone()), (1, masks[1].clone())])
+            .expect("a pushable layer");
+        from_masks
+            .push_layer_sectors(&[])
+            .expect("a pushable empty layer");
+
+        assert_eq!(
+            sectors.finish().expect("a writable file"),
+            from_masks.finish().expect("a writable file")
+        );
+    }
+
+    /// A stream that carries no tag is not a layer, and the encoder says so
+    /// before it reaches the layer table.
+    #[test]
+    fn an_encoded_layer_is_checked_before_it_is_stored() {
+        let mut encoder = Encoder::new(head(1), meta());
+        for empty_or_unknown in [Vec::new(), vec![0x03, 0x00], vec![0xFF]] {
+            assert_eq!(
+                EncodedLayer::single(empty_or_unknown.clone())
+                    .unwrap_err()
+                    .check(),
+                Check::ReeTag
+            );
+            assert_eq!(
+                encoder
+                    .push_encoded_layer(EncodedLayer::Sectors(vec![(0, empty_or_unknown)]))
+                    .unwrap_err()
+                    .check(),
+                Check::ReeTag
+            );
+        }
+
+        // One sector id twice on a layer is not a sector list.
+        let stream = vec![ree::TAG_GRAYSCALE, 0x01, 0x00, PIXELS as u8];
+        assert_eq!(
+            encoder
+                .push_encoded_layer(EncodedLayer::Sectors(vec![
+                    (2, stream.clone()),
+                    (2, stream)
+                ]))
+                .unwrap_err()
+                .check(),
+            Check::LtblSectorIdUnique
+        );
+
+        // Nothing rejected above was pushed.
+        assert!(encoder.layers.is_empty());
+    }
 }

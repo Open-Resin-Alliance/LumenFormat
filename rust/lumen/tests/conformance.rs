@@ -923,6 +923,7 @@ fn check_by_name(name: &str) -> Option<Check> {
         ("ree.run_lengths", Check::ReeRunLengths),
         ("ree.grayscale_runs", Check::ReeGrayscaleRuns),
         ("ree.grayscale_all_binary", Check::ReeGrayscaleAllBinary),
+        ("ree.split_all_binary", Check::ReeSplitAllBinary),
         ("ree.split_threshold", Check::ReeSplitThreshold),
         ("ree.split_positions", Check::ReeSplitPositions),
         ("ree.end_positions", Check::ReeEndPositions),

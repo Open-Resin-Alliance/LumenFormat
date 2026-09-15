@@ -110,11 +110,13 @@ companion field left to contradict. What replaced them is named in the lists bel
 - [ ] Split-encoded layers (tag `0x02`): `aa_positions` values are strictly increasing and every position is `< total_pixels` (`ree.split_positions`), and `aa_values` holds exactly `aa_pixel_count` bytes.
 - [ ] For binary REE (tag `0x00`): `first_value` must be `0x00` or `0xFF` (`ree.first_value`).
 - [ ] REE streams decode to strictly increasing end positions, and the last end position equals `total_pixels` (`ree.end_positions`).
+- [ ] (Strict mode) Significance planes ([§5.3.1](08-layer-encoding.md#531-significance-planes)): a stream's four plane lengths describe planes that are prefix-closed - a non-empty plane may not follow an empty one - and the fixed bytes, the plane lengths and the planes account for exactly `data_size` (`ree.planes`, `ree.no_trailing_bytes`).
 - [ ] A slice's stored bytes and its `data_size` agree: the stream at `data_offset` consumes exactly `data_size` bytes with nothing left over (`ree.data_size`, `ree.no_trailing_bytes`), and a slice with `data_size == 0` carries no stream at all - it is an all-black `(layer, sector)` ([§5.6](08-layer-encoding.md#56-canonical-encoding)).
 - [ ] (Strict mode) No slice uses the non-canonical `run_count == 0` form (`ree.no_run_count_zero`); an all-black slice is stored with `data_size == 0` and no bytes ([§5.3](08-layer-encoding.md#53-binary-ree-no-anti-aliasing)).
 - [ ] (Strict mode) Binary REE (tag `0x00`): every stored run length is `>= 1`, the implicit final run length is `>= 1`, and the lengths sum to exactly `total_pixels` (`ree.run_lengths`).
 - [ ] (Strict mode) Grayscale REE (tag `0x01`): every run length is `>= 1` and no two adjacent runs carry the same value (`ree.grayscale_runs`).
 - [ ] (Strict mode) A slice whose pixels are all `0x00`/`0xFF` is not stored as grayscale REE; it uses tag `0x00` (`ree.grayscale_all_binary`).
+- [ ] (Strict mode) The same tag choice for split REE: a slice whose pixels are all `0x00`/`0xFF` has no anti-aliasing to overlay, so it is not stored as tag `0x02` - an empty overlay over a thresholded core is a stream a strict validator rejects (`ree.split_all_binary`).
 - [ ] (Strict mode) Split REE (tag `0x02`): the binary component thresholds at `v >= 128`, and the overlay covers exactly the pixels whose value is neither `0x00` nor `0xFF` (`ree.split_threshold`).
 - [ ] (Strict mode) The sector masks of one layer are pairwise disjoint: no pixel is exposed by two sectors of the same layer, and their union is the layer's exposed image (`sector.partition`). Two sectors of a layer live in different `LAYR` chunks, so this compares the slices the layer's entries name ([§7.3](10-sectors.md#73-sector-mask-invariant)).
 

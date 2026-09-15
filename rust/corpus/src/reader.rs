@@ -72,28 +72,32 @@ const REQUIRED_META_FIELDS: [&str; 10] = [
 /// The order the REE checks are reported in, which is not the order they are
 /// discovered: a slice's stream can break several rules at once, and the report
 /// names the first one the specification lists.
-const REE_ORDER: [&str; 12] = [
+const REE_ORDER: [&str; 14] = [
     "ree.varint",
     "ree.tag",
     "ree.split_positions",
     "ree.first_value",
     "ree.end_positions",
+    "ree.planes",
     "ree.data_size",
     "ree.no_run_count_zero",
     "ree.run_lengths",
     "ree.grayscale_runs",
     "ree.grayscale_all_binary",
+    "ree.split_all_binary",
     "ree.split_threshold",
     "ree.no_trailing_bytes",
 ];
 
 /// Checks a loose reader does not run, because they judge a file's fidelity to
 /// the canonical encoding rather than its readability.
-const STRICT_ONLY: [&str; 5] = [
+const STRICT_ONLY: [&str; 7] = [
+    "ree.planes",
     "ree.no_run_count_zero",
     "ree.run_lengths",
     "ree.grayscale_runs",
     "ree.grayscale_all_binary",
+    "ree.split_all_binary",
     "ree.split_threshold",
 ];
 
@@ -1348,7 +1352,18 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
                     }
                 },
                 0x02 => match ree::split(body, total_pixels) {
-                    Ok(decoded) => decoded,
+                    Ok((mask, end, mut violations)) => {
+                        // The overlay is already applied to this mask, so a
+                        // mask that is still all-binary is a slice with no AA
+                        // pixels to overlay: §5.6 stores it as tag 0x00.
+                        if strict && mask.iter().all(|pixel| *pixel == 0 || *pixel == 255) {
+                            violations.push(Violation {
+                                code: "ree.split_all_binary",
+                                message: Some("binary content encoded as split REE"),
+                            });
+                        }
+                        (mask, end, violations)
+                    }
                     Err(error) => {
                         truncated(&mut hits, &mut detail, &where_at(), error);
                         continue;

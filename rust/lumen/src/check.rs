@@ -221,6 +221,10 @@ pub enum Check {
     ReeTag,
     /// A varint is overlong, truncated, or longer than 10 bytes.
     ReeVarint,
+    /// The four plane lengths of a varint array describe planes that are not
+    /// prefix-closed, or that hold more bytes than the array's varints use
+    /// (strict); or a value needs more than four planes to encode.
+    ReePlanes,
     /// A binary REE `first_value` is neither `0x00` nor `0xFF`.
     ReeFirstValue,
     /// The non-canonical `run_count == 0` form (strict mode).
@@ -231,6 +235,9 @@ pub enum Check {
     ReeGrayscaleRuns,
     /// An all-`0x00`/`0xFF` layer is stored as grayscale REE (strict).
     ReeGrayscaleAllBinary,
+    /// An all-`0x00`/`0xFF` layer is stored as split REE, with no anti-aliasing
+    /// to overlay (strict).
+    ReeSplitAllBinary,
     /// The split binary component does not threshold at `v >= 128` (strict).
     ReeSplitThreshold,
     /// Split overlay positions are not strictly increasing, or out of range.
@@ -364,11 +371,13 @@ impl Check {
             LhasLeafMatch => "lhas.leaf_match",
             ReeTag => "ree.tag",
             ReeVarint => "ree.varint",
+            ReePlanes => "ree.planes",
             ReeFirstValue => "ree.first_value",
             ReeNoRunCountZero => "ree.no_run_count_zero",
             ReeRunLengths => "ree.run_lengths",
             ReeGrayscaleRuns => "ree.grayscale_runs",
             ReeGrayscaleAllBinary => "ree.grayscale_all_binary",
+            ReeSplitAllBinary => "ree.split_all_binary",
             ReeSplitThreshold => "ree.split_threshold",
             ReeSplitPositions => "ree.split_positions",
             ReeEndPositions => "ree.end_positions",
@@ -397,9 +406,11 @@ impl Check {
         matches!(
             self,
             ReeNoRunCountZero
+                | ReePlanes
                 | ReeRunLengths
                 | ReeGrayscaleRuns
                 | ReeGrayscaleAllBinary
+                | ReeSplitAllBinary
                 | ReeSplitThreshold
                 | SectorPartition
                 | LhasLeafMatch
