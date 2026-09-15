@@ -25,7 +25,7 @@
 use crate::check::Check;
 use crate::chunkio;
 use crate::chunks::extd::Extension;
-use crate::chunks::hdr::Hdr;
+use crate::chunks::head::Head;
 use crate::chunks::lhas::{self, LayerHashes};
 use crate::chunks::ltbl::{LayerEntry, LayerTable};
 use crate::chunks::preview::Preview;
@@ -65,7 +65,7 @@ pub struct LumenFile<'a> {
     buf: &'a [u8],
     header: FileHeader,
     directory: Directory,
-    hdr: Hdr,
+    head: Head,
     meta: Meta,
     profile: Option<Profile>,
     previews: Vec<Preview>,
@@ -136,7 +136,7 @@ impl<'a> LumenFile<'a> {
             key: key.as_ref(),
         };
 
-        let hdr = Hdr::parse(&parts.required(ChunkType::HDR)?)?;
+        let head = Head::parse(&parts.required(ChunkType::HEAD)?)?;
         let meta = json_chunks::parse_meta(&parts.required(ChunkType::META)?)?;
         let profile = match parts.optional_required(ChunkType::PROF)? {
             None => None,
@@ -192,7 +192,7 @@ impl<'a> LumenFile<'a> {
             buf,
             header,
             directory,
-            hdr,
+            head,
             meta,
             profile,
             previews,
@@ -243,9 +243,9 @@ impl<'a> LumenFile<'a> {
         &self.directory
     }
 
-    /// The `HDR` chunk.
-    pub fn hdr(&self) -> &Hdr {
-        &self.hdr
+    /// The `HEAD` chunk.
+    pub fn head(&self) -> &Head {
+        &self.head
     }
 
     /// The `META` chunk.
@@ -307,16 +307,16 @@ impl<'a> LumenFile<'a> {
 
     /// The layer count.
     pub fn layer_count(&self) -> u32 {
-        self.hdr.total_layers
+        self.head.total_layers
     }
 
     /// Pixels in one layer mask.
     pub fn total_pixels(&self) -> u32 {
-        self.hdr.total_pixels()
+        self.head.total_pixels()
     }
 
     /// Whether the file declares sector-based layer encoding, i.e. whether some
-    /// layer carries more than one sector (`hdr.multi_sector_flag`).
+    /// layer carries more than one sector (`head.multi_sector_flag`).
     ///
     /// This is informational: which sectors a layer carries is read from its
     /// `LTBL` entries, not from this flag.

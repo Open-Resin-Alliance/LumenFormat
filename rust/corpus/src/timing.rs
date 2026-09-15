@@ -27,7 +27,7 @@ use serde_json::Value;
 /// the sample of points is bounded by: the chunks the reader parsed, standing in
 /// for the file they came from.
 pub struct TimingInputs {
-    /// `HDR`'s layer count (§4.1), which bounds every sampled layer.
+    /// `HEAD`'s layer count (§4.1), which bounds every sampled layer.
     pub total_layers: u32,
     /// `META`, the base for every field and the home of the sector definitions
     /// (§4.2).

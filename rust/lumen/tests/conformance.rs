@@ -415,17 +415,17 @@ fn valid_vectors_pass_and_match_golden_data() {
             "{name}: trailer CRC-32C"
         );
         assert_eq!(
-            file.hdr().display_width_px,
+            file.head().display_width_px,
             entry.display_width_px,
             "{name}: width"
         );
         assert_eq!(
-            file.hdr().display_height_px,
+            file.head().display_height_px,
             entry.display_height_px,
             "{name}: height"
         );
         assert_eq!(
-            file.hdr().layer_height_um,
+            file.head().layer_height_um,
             entry.layer_height_um,
             "{name}: layer height"
         );
@@ -904,7 +904,7 @@ fn check_by_name(name: &str) -> Option<Check> {
         ("layr.allocation_bound", Check::LayrAllocationBound),
         ("layr.dict_id_match", Check::LayrDictIdMatch),
         ("layr.dict_id_absent", Check::LayrDictIdAbsent),
-        ("hdr.multi_sector_flag", Check::HdrMultiSectorFlag),
+        ("head.multi_sector_flag", Check::HeadMultiSectorFlag),
         ("zdic.dict_size", Check::ZdicDictSize),
         ("zdic.dict_id_match", Check::ZdicDictIdMatch),
         ("zdic.single", Check::ZdicSingle),

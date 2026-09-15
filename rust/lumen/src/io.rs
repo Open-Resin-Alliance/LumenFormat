@@ -2,7 +2,7 @@
 //!
 //! Every read is checked against the buffer, and every failure carries the
 //! [`Check`] the caller attached to the reader, so a truncated payload in a
-//! `HDR` chunk reports `hdr.*` rather than a generic parse error.
+//! `HEAD` chunk reports `head.*` rather than a generic parse error.
 
 use crate::check::Check;
 use crate::error::{Error, Result};

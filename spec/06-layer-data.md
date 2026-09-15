@@ -18,7 +18,7 @@ layer carries, and in which order.
 | Offset | Size | Type | Field | Description |
 |--------|------|------|-------|-------------|
 | 0 | 4 | `u32` | `table_version` | Layout version. `1` for this spec. |
-| 4 | 4 | `u32` | `layer_count` | Must equal `HDR.total_layers`. |
+| 4 | 4 | `u32` | `layer_count` | Must equal `HEAD.total_layers`. |
 | 8 | 4 | `u32` | `entry_size` | Bytes per entry. `28` for v1. Readers must stride by this value. |
 | 12 | 4 | `u32` | `entry_count` | Total entries: the sum, over every layer's first entry, of `1 + additional_sector_count`. The table ends exactly there. |
 | 16 | N | - | `entries` | `entry_count` × `entry_size` bytes. |
@@ -29,7 +29,7 @@ within a layer, a layer's first entry being sector 0's:
 | Offset | Size | Type | Field | Description |
 |--------|------|------|-------|-------------|
 | 0 | 4 | `u32` | `data_size` | Bytes of this layer's data for this sector; `0` = none. |
-| 4 | 4 | `u32` | `first_lrov` | Directory index of this `(layer, sector)`'s `LROV` chunk; `0` = no overrides (index 0 is `HDR`, so `0` is safely NULL). |
+| 4 | 4 | `u32` | `first_lrov` | Directory index of this `(layer, sector)`'s `LROV` chunk; `0` = no overrides (index 0 is `HEAD`, so `0` is safely NULL). |
 | 8 | 4 | `u32` | `first_layr` | Directory index of the `LAYR` chunk holding this sector's run. |
 | 12 | 4 | `u32` | `additional_sector_count` | Further entries for this layer, ascending `sector_id`; non-zero only on the layer's first entry. |
 | 16 | 8 | `u64` | `data_offset` | Offset of this layer's slice inside `first_layr`'s decompressed output. |
@@ -196,7 +196,7 @@ verification. This enables:
 |--------|------|------|-------|-------------|
 | 0 | 1 | `u8` | `hash_algorithm` | `0x01` = SHA-256. |
 | 1 | 1 | `u8` | `hash_size` | `32` for SHA-256. |
-| 2 | 4 | `u32` | `layer_count` | Must equal `HDR.total_layers`. |
+| 2 | 4 | `u32` | `layer_count` | Must equal `HEAD.total_layers`. |
 | 6 | 32 | `[u8; 32]` | `merkle_root` | Root hash of the Merkle tree over all layer hashes. |
 | 38 | N | - | `layer_hashes` | `layer_count × hash_size` bytes. `layer_hashes[i]` is the leaf hash `SHA-256(0x00 \|\| d)`, where `d` is layer `i`'s data: the slices its `LTBL` entries describe, concatenated in ascending `sector_id`, each byte range `[data_offset, + data_size)` taken from its `LAYR` chunk's decompressed output. An empty layer stores `SHA-256(0x00)`. |
 

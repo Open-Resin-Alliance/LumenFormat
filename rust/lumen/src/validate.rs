@@ -23,7 +23,7 @@
 //!   deserialization would produce.
 //!
 //! A sealed file validated without a key is checked as far as its plaintext
-//! allows. The directory, `HDR`, `AUTH`, `LTBL`, the `LAYR` version fields and
+//! allows. The directory, `HEAD`, `AUTH`, `LTBL`, the `LAYR` version fields and
 //! `LHAS` are plaintext by construction (section 9.1), so those checks all run;
 //! the ones that need decrypted content are skipped rather than guessed at.
 //! Supply the key with [`Validator::with_key`] to run them.
@@ -31,7 +31,7 @@
 use crate::check::Check;
 use crate::chunkio;
 use crate::chunks::extd::{Extension, CRITICAL_BIT, EXTD_RESERVED_MASK};
-use crate::chunks::hdr::Hdr;
+use crate::chunks::head::Head;
 use crate::chunks::layr;
 use crate::chunks::lhas::{self, LayerHashes};
 use crate::chunks::ltbl::{LayerEntry, LayerTable};
@@ -95,7 +95,7 @@ const CONTENT_CHUNKS: &[Tag] = &[
 
 /// The chunk types that must never be sealed, because a reader needs them
 /// before it has a key.
-const CLEARTEXT_CHUNKS: &[Tag] = &[Tag::HDR, Tag::AUTH, Tag::LTBL, Tag::LHAS];
+const CLEARTEXT_CHUNKS: &[Tag] = &[Tag::HEAD, Tag::AUTH, Tag::LTBL, Tag::LHAS];
 
 /// How thoroughly to validate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -162,8 +162,8 @@ impl Validator {
         ctx.check_framing()?;
         ctx.check_chunk_flags()?;
 
-        let hdr = ctx.read_hdr()?;
-        check_hdr(&hdr)?;
+        let head = ctx.read_hdr()?;
+        check_hdr(&head)?;
 
         let auth = ctx.read_auth()?;
         ctx.cipher = auth.as_ref().map(|a| a.cipher);
@@ -185,8 +185,8 @@ impl Validator {
 
         let ltbl = ctx.read_ltbl()?;
         let zdic = ctx.read_zdic()?;
-        ctx.check_layer_data(&hdr, &ltbl, &zdic)?;
-        let hashes = ctx.check_hashes(&hdr)?;
+        ctx.check_layer_data(&head, &ltbl, &zdic)?;
+        let hashes = ctx.check_hashes(&head)?;
         if let Some(hashes) = hashes.as_ref() {
             ctx.check_leaves(&ltbl, &zdic, hashes)?;
         }
@@ -311,12 +311,17 @@ impl<'a> Ctx<'a> {
             }
         }
 
-        if self.dir.find(Tag::HDR).is_none() {
-            return Err(Error::new(Check::PresenceHdr, "no HDR chunk"));
+        if self.dir.find(Tag::HEAD).is_none() {
+            return Err(Error::new(Check::PresenceHead, "no HEAD chunk"));
         }
         match self.dir.first_entry_index() {
-            Some(i) if self.dir.descriptors[i].chunk_type == Tag::HDR => {}
-            _ => return Err(Error::new(Check::DirHdrFirst, "the first chunk is not HDR")),
+            Some(i) if self.dir.descriptors[i].chunk_type == Tag::HEAD => {}
+            _ => {
+                return Err(Error::new(
+                    Check::DirHeadFirst,
+                    "the first chunk is not HEAD",
+                ))
+            }
         }
         if self.dir.find(Tag::META).is_none() {
             return Err(Error::new(Check::PresenceMeta, "no META chunk"));
@@ -375,12 +380,12 @@ impl<'a> Ctx<'a> {
 
     // -- phase 2: the plaintext chunks -------------------------------------
 
-    fn read_hdr(&self) -> Result<Hdr> {
-        let d = self.dir.find(Tag::HDR).expect("presence checked");
+    fn read_hdr(&self) -> Result<Head> {
+        let d = self.dir.find(Tag::HEAD).expect("presence checked");
         let payload = self
             .plaintext(d)?
-            .expect("HDR is never sealed, so it is always readable");
-        Hdr::parse(&payload)
+            .expect("HEAD is never sealed, so it is always readable");
+        Head::parse(&payload)
     }
 
     fn read_auth(&self) -> Result<Option<crypto::Auth>> {
@@ -668,22 +673,22 @@ impl<'a> Ctx<'a> {
     /// layer sits is reported before anything is decompressed.
     fn check_layer_data(
         &self,
-        hdr: &Hdr,
+        head: &Head,
         ltbl: &Option<LayerTable>,
         zdic: &Option<ZstdDictionary>,
     ) -> Result<()> {
         let Some(ltbl) = ltbl.as_ref() else {
             return Ok(());
         };
-        let total_layers = hdr.total_layers;
-        let total_pixels = hdr.total_pixels();
+        let total_layers = head.total_layers;
+        let total_pixels = head.total_pixels();
         let dict_bytes = zdic.as_ref().map(|z| z.dict_bytes.as_slice());
 
         if ltbl.layer_count != total_layers {
             return Err(Error::new(
                 Check::LtblLayerCount,
                 format!(
-                    "LTBL describes {} layers, HDR says {total_layers}",
+                    "LTBL describes {} layers, HEAD says {total_layers}",
                     ltbl.layer_count
                 ),
             ));
@@ -694,7 +699,7 @@ impl<'a> Ctx<'a> {
         // way round.
         if self.header.multi_sector() != ltbl.is_multi_sector() {
             return Err(Error::new(
-                Check::HdrMultiSectorFlag,
+                Check::HeadMultiSectorFlag,
                 if self.header.multi_sector() {
                     "MULTI_SECTOR is set but no layer carries more than one sector".to_string()
                 } else {
@@ -1042,7 +1047,7 @@ impl<'a> Ctx<'a> {
     }
 
     /// `LHAS`: the Merkle root always, and every leaf in strict mode.
-    fn check_hashes(&self, hdr: &Hdr) -> Result<Option<LayerHashes>> {
+    fn check_hashes(&self, head: &Head) -> Result<Option<LayerHashes>> {
         let Some(d) = self.dir.find(Tag::LHAS) else {
             return Ok(None);
         };
@@ -1050,12 +1055,12 @@ impl<'a> Ctx<'a> {
             .plaintext(d)?
             .expect("LHAS is never sealed, so it is always readable");
         let hashes = LayerHashes::parse(&payload)?;
-        if hashes.layer_count != hdr.total_layers {
+        if hashes.layer_count != head.total_layers {
             return Err(Error::new(
                 Check::LhasLayerCount,
                 format!(
-                    "LHAS covers {} layers, HDR says {}",
-                    hashes.layer_count, hdr.total_layers
+                    "LHAS covers {} layers, HEAD says {}",
+                    hashes.layer_count, head.total_layers
                 ),
             ));
         }
@@ -1161,32 +1166,41 @@ fn check_integer_durations<'a>(
     Ok(())
 }
 
-/// `HDR` rules from sections 11.1 and 11.2.
-fn check_hdr(hdr: &Hdr) -> Result<()> {
-    if hdr.total_layers == 0 {
-        return Err(Error::new(Check::HdrTotalLayers, "HDR declares no layers"));
-    }
-    if hdr.layer_height_um == 0 {
-        return Err(Error::new(Check::HdrLayerHeight, "layer_height_um is zero"));
-    }
-    if hdr.build_width_um == 0 || hdr.build_depth_um == 0 || hdr.build_height_um == 0 {
-        return Err(Error::new(Check::HdrBuildDims, "a build dimension is zero"));
-    }
-    if hdr.total_pixels() == 0 {
+/// `HEAD` rules from sections 11.1 and 11.2.
+fn check_hdr(head: &Head) -> Result<()> {
+    if head.total_layers == 0 {
         return Err(Error::new(
-            Check::HdrDisplayPixels,
+            Check::HeadTotalLayers,
+            "HEAD declares no layers",
+        ));
+    }
+    if head.layer_height_um == 0 {
+        return Err(Error::new(
+            Check::HeadLayerHeight,
+            "layer_height_um is zero",
+        ));
+    }
+    if head.build_width_um == 0 || head.build_depth_um == 0 || head.build_height_um == 0 {
+        return Err(Error::new(
+            Check::HeadBuildDims,
+            "a build dimension is zero",
+        ));
+    }
+    if head.total_pixels() == 0 {
+        return Err(Error::new(
+            Check::HeadDisplayPixels,
             "the display has no pixels",
         ));
     }
-    if hdr.display_width_px != 0 && hdr.physical_width_px % hdr.display_width_px != 0 {
+    if head.display_width_px != 0 && head.physical_width_px % head.display_width_px != 0 {
         return Err(Error::new(
-            Check::HdrPhysicalMultiple,
+            Check::HeadPhysicalMultiple,
             "physical_width_px is not a multiple of display_width_px",
         ));
     }
-    if hdr.display_height_px != 0 && hdr.physical_height_px % hdr.display_height_px != 0 {
+    if head.display_height_px != 0 && head.physical_height_px % head.display_height_px != 0 {
         return Err(Error::new(
-            Check::HdrPhysicalMultiple,
+            Check::HeadPhysicalMultiple,
             "physical_height_px is not a multiple of display_height_px",
         ));
     }

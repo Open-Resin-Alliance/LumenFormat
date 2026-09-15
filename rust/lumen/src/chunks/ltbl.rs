@@ -25,7 +25,7 @@ pub struct LayerEntry {
     /// Bytes of this layer's data for this sector; `0` means none.
     pub data_size: u32,
     /// Directory index of this (layer, sector)'s `LROV` chunk; `0` means no
-    /// overrides. Index 0 is `HDR`, so `0` is a safe null.
+    /// overrides. Index 0 is `HEAD`, so `0` is a safe null.
     pub first_lrov: u32,
     /// Directory index of the `LAYR` chunk holding this sector's run.
     pub first_layr: u32,
@@ -50,7 +50,7 @@ impl LayerEntry {
 pub struct LayerTable {
     /// Layout version. `1` for this specification.
     pub table_version: u32,
-    /// Layers the table describes, which must equal `HDR.total_layers`.
+    /// Layers the table describes, which must equal `HEAD.total_layers`.
     pub layer_count: u32,
     /// Bytes per entry; readers stride by this and skip unknown trailing fields.
     pub entry_size: u32,

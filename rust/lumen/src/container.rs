@@ -50,8 +50,8 @@ mod crc_tests {
 pub struct ChunkType(pub [u8; 4]);
 
 impl ChunkType {
-    /// `HDR\0` - display dimensions, layer count, encoder identity.
-    pub const HDR: ChunkType = ChunkType(*b"HDR\0");
+    /// `HEAD` - display dimensions, layer count, encoder identity.
+    pub const HEAD: ChunkType = ChunkType(*b"HEAD");
     /// `META` - print parameters as JSON.
     pub const META: ChunkType = ChunkType(*b"META");
     /// `PROF` - reusable named print profile.
@@ -77,7 +77,7 @@ impl ChunkType {
 
     /// Every chunk type this specification defines.
     pub const ALL: [ChunkType; 12] = [
-        ChunkType::HDR,
+        ChunkType::HEAD,
         ChunkType::META,
         ChunkType::PROF,
         ChunkType::AUTH,
@@ -116,7 +116,7 @@ impl ChunkType {
         )
     }
 
-    /// The tag as a display string, with `HDR\0` rendered as `HDR`.
+    /// The tag as a display string, with `HEAD` rendered as `HEAD`.
     pub fn tag(&self) -> String {
         let trimmed: Vec<u8> = self.0.iter().copied().take_while(|b| *b != 0).collect();
         String::from_utf8_lossy(&trimmed).into_owned()

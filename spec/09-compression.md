@@ -74,7 +74,7 @@ reader whether a chunk payload carries a zstd frame. The levels are recommendati
 
 | Chunk | Compression | Rationale |
 |-------|------------|-----------|
-| HDR | None | Tiny (~50 bytes); read before decompressor init. |
+| HEAD | None | Tiny (~50 bytes); read before decompressor init. |
 | AUTH | None | Tiny (~few hundred bytes); read before decompressor init. |
 | META | zstd level 3 | Small payload; speed matters. |
 | PROF | zstd level 3 | Reusable profile; small payload. |

@@ -47,7 +47,7 @@ let bytes = std::fs::read("print.lumen")?;
 let file = LumenFile::open(&bytes, Level::Loose)?;
 
 println!("{} layers of {}x{}", file.layer_count(),
-         file.hdr().display_width_px, file.hdr().display_height_px);
+         file.head().display_width_px, file.head().display_height_px);
 let meta = file.meta();
 println!("normal exposure {} ms", meta.timing.normal_exposure_ms.unwrap_or(0));
 
@@ -94,13 +94,13 @@ let file = LumenFile::open_with_password(&bytes, Level::Loose, "hunter2")?;
 ## Writing
 
 ```no_run
-use lumen::chunks::hdr::Hdr;
+use lumen::chunks::head::Head;
 use lumen::json::Meta;
 use lumen::writer::Encoder;
-# let (hdr, meta): (Hdr, Meta) = todo!();
+# let (head, meta): (Head, Meta) = todo!();
 # let layers: Vec<Vec<u8>> = Vec::new();
 
-let mut encoder = Encoder::new(hdr, meta);
+let mut encoder = Encoder::new(head, meta);
 encoder.set_block_layers(64);
 encoder.set_zstd_level(6);
 for mask in &layers {

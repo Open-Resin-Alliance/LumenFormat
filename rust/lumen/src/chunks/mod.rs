@@ -7,7 +7,7 @@
 //! of its descriptor.
 
 pub mod extd;
-pub mod hdr;
+pub mod head;
 pub mod json_chunks;
 pub mod layr;
 pub mod lhas;
@@ -17,7 +17,7 @@ pub mod voxl;
 pub mod zdic;
 
 pub use extd::Extension;
-pub use hdr::Hdr;
+pub use head::Head;
 pub use lhas::LayerHashes;
 pub use ltbl::{LayerEntry, LayerTable};
 pub use preview::{Preview, PreviewRole};

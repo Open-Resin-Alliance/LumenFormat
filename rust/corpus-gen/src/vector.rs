@@ -13,7 +13,7 @@ use crate::ree;
 use crate::timing;
 use crate::ZSTD_LAYER_LEVEL;
 
-/// The encoder name every HDR payload carries.
+/// The encoder name every HEAD payload carries.
 const ENCODER_NAME: &str = "LumenFormat test vectors 1.0";
 
 /// One span of a sector: start, end (exclusive) and the value its pixels carry.
@@ -452,8 +452,8 @@ pub fn content_chunks(spec: &VectorSpec, enc: &Layers, auth: Option<Chunk>) -> C
     let (w, h) = spec.display;
     let mut chunks = vec![
         Chunk::new(
-            b"HDR\0",
-            payload::hdr(&payload::Header {
+            b"HEAD",
+            payload::head(&payload::Header {
                 encoder_name: ENCODER_NAME,
                 display_w: w as u32,
                 display_h: h as u32,

@@ -12,7 +12,7 @@
 use std::path::PathBuf;
 
 use lumen::chunks::extd::Extension;
-use lumen::chunks::hdr::Hdr;
+use lumen::chunks::head::Head;
 use lumen::chunks::preview::PreviewRole;
 use lumen::crypto::Cipher;
 use lumen::json::{AntiAliasing, Material, Meta, Printer, Profile, Timing};
@@ -164,9 +164,9 @@ fn layers() -> Vec<Vec<u8>> {
     out
 }
 
-fn hdr(layer_count: u32) -> Hdr {
-    Hdr {
-        hdr_version: 1,
+fn head(layer_count: u32) -> Head {
+    Head {
+        head_version: 1,
         encoder_name: "lumen-format example 0.1".to_string(),
         created_unix_sec: 1_767_000_000,
         display_width_px: WIDTH,
@@ -245,7 +245,7 @@ fn meta() -> Meta {
 
 fn build(encryption: Option<EncryptOptions>, layer_hashes: bool) -> Vec<u8> {
     let masks = layers();
-    let mut encoder = Encoder::new(hdr(masks.len() as u32), meta());
+    let mut encoder = Encoder::new(head(masks.len() as u32), meta());
     for mask in &masks {
         encoder.push_layer(mask).expect("a pushable layer");
     }
@@ -337,14 +337,14 @@ fn describe(bytes: &[u8], password: Option<&str>) {
         file.header().total_uncompressed_size
     );
     println!(
-        "HDR: encoder {:?}, {}x{} px, physical {}x{}, {} layers of {} um",
-        file.hdr().encoder_name,
-        file.hdr().display_width_px,
-        file.hdr().display_height_px,
-        file.hdr().physical_width_px,
-        file.hdr().physical_height_px,
-        file.hdr().total_layers,
-        file.hdr().layer_height_um
+        "HEAD: encoder {:?}, {}x{} px, physical {}x{}, {} layers of {} um",
+        file.head().encoder_name,
+        file.head().display_width_px,
+        file.head().display_height_px,
+        file.head().physical_width_px,
+        file.head().physical_height_px,
+        file.head().total_layers,
+        file.head().layer_height_um
     );
 
     println!("\nchunks, in file order:");

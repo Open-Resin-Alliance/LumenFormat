@@ -1,4 +1,4 @@
-//! Chunk payload builders: the bytes of HDR, META, PROF, LROV, LTBL, LHAS,
+//! Chunk payload builders: the bytes of HEAD, META, PROF, LROV, LTBL, LHAS,
 //! ZDIC, LAYR, VOXL and EXTD before any of it is compressed or sealed.
 
 use std::collections::BTreeMap;
@@ -63,7 +63,7 @@ impl Default for Header<'_> {
 }
 
 /// The file header (spec 3.1).
-pub fn hdr(header: &Header) -> Vec<u8> {
+pub fn head(header: &Header) -> Vec<u8> {
     let mut out = Vec::with_capacity(32);
     out.extend_from_slice(&1u32.to_le_bytes());
     out.extend_from_slice(&(header.encoder_name.len() as u32).to_le_bytes());

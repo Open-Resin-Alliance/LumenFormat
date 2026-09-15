@@ -28,7 +28,7 @@ Encoders MUST emit the canonical byte stream for the tag they choose; [§5.6](#5
 canonical form of each tag and the rules for choosing one.
 
 `total_pixels`, used throughout this section, is the number of pixels in a layer
-mask: `HDR.display_width_px × HDR.display_height_px`. The panel's own dimensions
+mask: `HEAD.display_width_px × HEAD.display_height_px`. The panel's own dimensions
 (`physical_width_px`, `physical_height_px`) may be integer multiples of those and do
 not change the mask grid.
 
@@ -354,7 +354,7 @@ Where:
   appropriate for the given layer height.
 
   **Adaptive layer height is not available in v1.** It needs per-layer heights in the
-  file, and v1 has nowhere to put them: `HDR.layer_height_um` is a single default, and
+  file, and v1 has nowhere to put them: `HEAD.layer_height_um` is a single default, and
   the `VLYR` extension is non-critical ([§4.13](07-scene-chunks.md#413-extd---extension-chunk)), so a conforming reader may skip it and
   print at the wrong Z. A future core mechanism - most likely an `LTBL` field - is
   required first. Until then encoders MUST NOT emit variable-height `.lumen` files, and

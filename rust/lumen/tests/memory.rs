@@ -20,7 +20,7 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use lumen::chunks::hdr::Hdr;
+use lumen::chunks::head::Head;
 use lumen::json::{Meta, Timing};
 use lumen::reader::LumenFile;
 use lumen::validate::{self, Level};
@@ -136,7 +136,7 @@ fn validation_peak_memory_does_not_grow_with_the_file() {
 }
 
 fn build() -> Vec<u8> {
-    let mut encoder = Encoder::new(hdr(), meta());
+    let mut encoder = Encoder::new(head(), meta());
     encoder.set_layers_per_chunk(LAYERS_PER_CHUNK);
     encoder.set_dictionary(false);
     encoder.set_layer_hashes(true);
@@ -150,9 +150,9 @@ fn build() -> Vec<u8> {
     encoder.finish().expect("a writable file")
 }
 
-fn hdr() -> Hdr {
-    Hdr {
-        hdr_version: 1,
+fn head() -> Head {
+    Head {
+        head_version: 1,
         encoder_name: "peak-memory".to_string(),
         created_unix_sec: 0,
         display_width_px: WIDTH,

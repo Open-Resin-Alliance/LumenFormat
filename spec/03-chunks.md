@@ -10,7 +10,7 @@ the file's capabilities at a glance; detailed binary layouts follow.
 
 | Tag | Name | Required | Reader support | Encrypted | Purpose |
 |-----|------|----------|----------------|-----------|---------|
-| `HDR\0` | Header | Yes | Required | No | Display dimensions, layer count, encoder identity |
+| `HEAD` | Header | Yes | Required | No | Display dimensions, layer count, encoder identity |
 | `META` | Metadata | Yes | Required | Yes | Print parameters as JSON (exposure, lift, motion) |
 | `PROF` | Print Profile | No | Optional | Yes | Named, versioned, reusable profile for Odyssey import |
 | `AUTH` | Authentication | No | Required when the file is encrypted | No | Encryption metadata, key wrapping, machine binding |
@@ -27,13 +27,13 @@ The **Required** column is about presence in a file: what an encoder must write.
 support** is the separate obligation on the other side, and the two do not line up - a
 chunk may be optional to write and still mandatory to honor. An entry that says *Required*
 means a reader that cannot meet it MUST refuse the file rather than print an approximation
-of it. The chunks that carry the print itself - `HDR`, `META`, `LTBL`, `LAYR` - are joined
+of it. The chunks that carry the print itself - `HEAD`, `META`, `LTBL`, `LAYR` - are joined
 there by `LROV`, because a printer that ignores overrides prints those layers at the wrong
 exposure, and nothing in the file says so afterwards.
 
-### 4.1 HDR - File Header Chunk
+### 4.1 HEAD - File Header Chunk
 
-**Type tag:** `HDR\0` (`0x48 0x44 0x52 0x00`). Required. Must be the first chunk.
+**Type tag:** `HEAD` (`0x48 0x45 0x41 0x44`). Required. Must be the first chunk.
 
 **Flags:** uncompressed, unencrypted.
 
@@ -42,7 +42,7 @@ across format versions without changing the 32-byte magic header.
 
 | Offset | Size | Type | Field | Description |
 |--------|------|------|-------|-------------|
-| 0 | 4 | `u32` | `hdr_version` | Layout version. `1` for this spec. |
+| 0 | 4 | `u32` | `head_version` | Layout version. `1` for this spec. |
 | 4 | 4 | `u32` | `encoder_name_len` | Byte length of `encoder_name`. |
 | 8 | N | `[u8; N]` | `encoder_name` | UTF-8. e.g. `"DragonFruit 1.0"`. |
 | 8+N | 8 | `u64` | `created_unix_sec` | Unix timestamp (seconds). |

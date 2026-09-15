@@ -88,7 +88,7 @@ chunk group can be read on its own.
 |------|----------|--------|
 | [`01-overview.md`](spec/01-overview.md) | §1-2 | Design philosophy, core conventions, what LUMEN is not |
 | [`02-file-structure.md`](spec/02-file-structure.md) | §3 | Header, chunk directory at the end of the file, trailer |
-| [`03-chunks.md`](spec/03-chunks.md) | §4, §4.1-4.3 | Chunk type summary, `HDR`, `META`, `PROF` |
+| [`03-chunks.md`](spec/03-chunks.md) | §4, §4.1-4.3 | Chunk type summary, `HEAD`, `META`, `PROF` |
 | [`04-chunk-auth.md`](spec/04-chunk-auth.md) | §4.4 | `AUTH`, password and machine-binding sections |
 | [`05-print-control.md`](spec/05-print-control.md) | §4.5-4.7 | `SECT` (withdrawn), `LROV`, `PREV` |
 | [`06-layer-data.md`](spec/06-layer-data.md) | §4.8-4.11 | `LTBL`, `ZDIC`, `LAYR`, `LHAS` |
@@ -180,7 +180,7 @@ not 0, because the run proves less than it claims, and not 1, which means a chec
 The corpus fixes what the specification leaves open, and is explicit about what it cannot
 pin: compressed payload bytes depend on the zstd version and level, so the manifest records
 the version, level, each frame's dictionary ID and declared content size and the validator
-asserts those rather than byte equality. Everything uncompressed - the header, `HDR`, `AUTH`,
+asserts those rather than byte equality. Everything uncompressed - the header, `HEAD`, `AUTH`,
 the `LTBL` header and its 28-byte entries, each `LAYR` chunk's version field, every REE
 stream, the directory and the trailer - is exact.
 [`test-vectors/README.md`](test-vectors/README.md) has the per-vector table and the check

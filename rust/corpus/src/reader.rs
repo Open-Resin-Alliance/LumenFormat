@@ -317,15 +317,15 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
         .map(|(index, entry)| Chunk { index, entry })
         .collect();
 
-    // §4.1: `HDR` is present, and the first chunk - at the offset immediately
+    // §4.1: `HEAD` is present, and the first chunk - at the offset immediately
     // after the fixed header. The two are separate rules, so they are separate
     // verdicts.
-    let hdr_first = first(&real, b"HDR\0");
-    checks.check("presence.hdr", hdr_first.is_some());
+    let hdr_first = first(&real, b"HEAD");
+    checks.check("presence.head", hdr_first.is_some());
     checks.check(
-        "dir.hdr_first",
+        "dir.head_first",
         real.first()
-            .is_some_and(|chunk| chunk.entry.ctype == *b"HDR\0" && chunk.entry.offset == 32),
+            .is_some_and(|chunk| chunk.entry.ctype == *b"HEAD" && chunk.entry.offset == 32),
     );
     let mut extents: Vec<(u128, u128)> = real
         .iter()
@@ -372,47 +372,47 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
     let encrypted_flag = flags & ENCRYPTED_FLAG != 0;
     let crypto_engaged = encrypted_flag || !auth_entries.is_empty() || crypto.is_some();
 
-    // ---- HDR ------------------------------------------------------------
-    let Some(hdr_chunk) = first(&real, b"HDR\0") else {
+    // ---- HEAD ------------------------------------------------------------
+    let Some(hdr_chunk) = first(&real, b"HEAD") else {
         return checks;
     };
-    let hdr = stored(raw, hdr_chunk.entry);
-    let (Some(hdr_version), Some(name_len)) = (u32_at(hdr, 0), u32_at(hdr, 4)) else {
+    let head = stored(raw, hdr_chunk.entry);
+    let (Some(head_version), Some(name_len)) = (u32_at(head, 0), u32_at(head, 4)) else {
         return checks;
     };
-    checks.check("hdr.version", hdr_version == 1);
+    checks.check("head.version", head_version == 1);
     checks.check(
-        "hdr.frame",
-        hdr.len() >= 52 + name_len as usize && name_len <= 256,
+        "head.frame",
+        head.len() >= 52 + name_len as usize && name_len <= 256,
     );
     let name_len = name_len as usize;
     let (Some(_created), Some(display_w), Some(display_h), Some(physical_w), Some(physical_h)) = (
-        u64_at(hdr, 8 + name_len),
-        u32_at(hdr, 16 + name_len),
-        u32_at(hdr, 20 + name_len),
-        u32_at(hdr, 24 + name_len),
-        u32_at(hdr, 28 + name_len),
+        u64_at(head, 8 + name_len),
+        u32_at(head, 16 + name_len),
+        u32_at(head, 20 + name_len),
+        u32_at(head, 24 + name_len),
+        u32_at(head, 28 + name_len),
     ) else {
         return checks;
     };
     let (Some(build_w), Some(build_d), Some(build_h), Some(layer_h), Some(total_layers)) = (
-        u32_at(hdr, 32 + name_len),
-        u32_at(hdr, 36 + name_len),
-        u32_at(hdr, 40 + name_len),
-        u32_at(hdr, 44 + name_len),
-        u32_at(hdr, 48 + name_len),
+        u32_at(head, 32 + name_len),
+        u32_at(head, 36 + name_len),
+        u32_at(head, 40 + name_len),
+        u32_at(head, 44 + name_len),
+        u32_at(head, 48 + name_len),
     ) else {
         return checks;
     };
-    checks.check("hdr.total_layers", total_layers > 0);
-    checks.check("hdr.layer_height", layer_h > 0);
-    checks.check("hdr.build_dims", build_w > 0 && build_d > 0 && build_h > 0);
+    checks.check("head.total_layers", total_layers > 0);
+    checks.check("head.layer_height", layer_h > 0);
+    checks.check("head.build_dims", build_w > 0 && build_d > 0 && build_h > 0);
     checks.check(
-        "hdr.display_pixels",
+        "head.display_pixels",
         display_w as usize * display_h as usize > 0,
     );
     checks.check(
-        "hdr.physical_multiple",
+        "head.physical_multiple",
         display_w != 0
             && display_h != 0
             && physical_w % display_w == 0
@@ -540,7 +540,7 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
     // §4.1: `MULTI_SECTOR` is set exactly when at least one layer carries more
     // than one sector - the flag is the file's claim about its own layer table.
     checks.check(
-        "hdr.multi_sector_flag",
+        "head.multi_sector_flag",
         (flags & 0x02 != 0) == spans.iter().any(|span| span.len() > 1),
     );
 

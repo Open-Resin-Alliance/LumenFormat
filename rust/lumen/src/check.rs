@@ -36,12 +36,12 @@ pub enum Check {
     DirOverlap,
     /// A chunk's stored extent lies outside the file, or inside the directory.
     DirChunkExtent,
-    /// The first chunk is not `HDR`.
-    DirHdrFirst,
+    /// The first chunk is not `HEAD`.
+    DirHeadFirst,
 
     // -- group: presence (section 3, section 4) ----------------------------
     /// A required chunk is missing.
-    PresenceHdr,
+    PresenceHead,
     /// `META` is missing.
     PresenceMeta,
     /// `LTBL` is missing.
@@ -53,24 +53,24 @@ pub enum Check {
     /// Exactly one `ZDIC` is required (or forbidden) by the `LAYR` frames.
     PresenceZdic,
 
-    // -- group: hdr (section 4.1) ------------------------------------------
-    /// `hdr_version` is not recognized.
-    HdrVersion,
+    // -- group: head (section 4.1) ------------------------------------------
+    /// `head_version` is not recognized.
+    HeadVersion,
     /// `encoder_name_len` exceeds 256, or the chunk is too short for its fields.
-    HdrFrame,
+    HeadFrame,
     /// `total_layers == 0`, or disagrees with `LTBL.layer_count`.
-    HdrTotalLayers,
+    HeadTotalLayers,
     /// `layer_height_um == 0`.
-    HdrLayerHeight,
+    HeadLayerHeight,
     /// A build dimension is zero.
-    HdrBuildDims,
+    HeadBuildDims,
     /// `display_width_px * display_height_px == 0`.
-    HdrDisplayPixels,
+    HeadDisplayPixels,
     /// `MULTI_SECTOR` is set without a layer carrying more than one sector, or
     /// clear while one does.
-    HdrMultiSectorFlag,
+    HeadMultiSectorFlag,
     /// A physical dimension is not an integer multiple of the display dimension.
-    HdrPhysicalMultiple,
+    HeadPhysicalMultiple,
 
     // -- group: auth (section 4.4) -----------------------------------------
     /// `auth_version` is not recognized.
@@ -153,7 +153,7 @@ pub enum Check {
     // -- group: ltbl (section 4.8) -----------------------------------------
     /// `table_version` is not recognized.
     LtblVersion,
-    /// `layer_count` disagrees with `HDR.total_layers`.
+    /// `layer_count` disagrees with `HEAD.total_layers`.
     LtblLayerCount,
     /// `entry_size < 28`, or the entries do not fit the chunk.
     LtblEntrySize,
@@ -209,7 +209,7 @@ pub enum Check {
     LhasFrame,
     /// `hash_algorithm` is not `0x01` (SHA-256).
     LhasHashAlgorithm,
-    /// `layer_count` disagrees with `HDR.total_layers`.
+    /// `layer_count` disagrees with `HEAD.total_layers`.
     LhasLayerCount,
     /// The recomputed Merkle root differs from the stored one.
     LhasRootRecompute,
@@ -287,21 +287,21 @@ impl Check {
             DirDescriptor => "dir.descriptor",
             DirOverlap => "dir.overlap",
             DirChunkExtent => "dir.chunk_extent",
-            DirHdrFirst => "dir.hdr_first",
-            PresenceHdr => "presence.hdr",
+            DirHeadFirst => "dir.head_first",
+            PresenceHead => "presence.head",
             PresenceMeta => "presence.meta",
             PresenceLtbl => "presence.ltbl",
             PresenceLayr => "presence.layr",
             PresenceAuth => "presence.auth",
             PresenceZdic => "presence.zdic",
-            HdrVersion => "hdr.version",
-            HdrFrame => "hdr.frame",
-            HdrTotalLayers => "hdr.total_layers",
-            HdrLayerHeight => "hdr.layer_height",
-            HdrBuildDims => "hdr.build_dims",
-            HdrDisplayPixels => "hdr.display_pixels",
-            HdrMultiSectorFlag => "hdr.multi_sector_flag",
-            HdrPhysicalMultiple => "hdr.physical_multiple",
+            HeadVersion => "head.version",
+            HeadFrame => "head.frame",
+            HeadTotalLayers => "head.total_layers",
+            HeadLayerHeight => "head.layer_height",
+            HeadBuildDims => "head.build_dims",
+            HeadDisplayPixels => "head.display_pixels",
+            HeadMultiSectorFlag => "head.multi_sector_flag",
+            HeadPhysicalMultiple => "head.physical_multiple",
             AuthVersion => "auth.version",
             AuthCipherKnown => "auth.cipher_known",
             AuthFrame => "auth.frame",

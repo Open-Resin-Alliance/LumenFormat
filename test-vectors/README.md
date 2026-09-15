@@ -55,7 +55,7 @@ levels or builds.
 
 So this corpus pins:
 
-- **Exactly** - the file header, `HDR`, `AUTH`, the `LTBL` header and every 28-byte entry,
+- **Exactly** - the file header, `HEAD`, `AUTH`, the `LTBL` header and every 28-byte entry,
   each `LAYR` chunk's version field, `LHAS`, every REE stream, the chunk directory and the
   trailer CRC-32C, plus the decompressed bytes of every layer, the Merkle root over them,
   every sealed unit (nonce, ciphertext and tag, whose associated data binds a `LAYR` frame to
@@ -155,8 +155,8 @@ layer 2 and sector 1's own ends at layer 5.
 | `meta-sector-material-index` | META.sectors[0].material_index is 3 while META.materials holds one entry, so the sector names a material that is not there. | `meta.sector_material_index` |
 | `merkle-root-mismatch` | One byte of merkle_root is flipped, so recomputation from layer_hashes disagrees. | `lhas.root_recompute` |
 | `layer-hash-mismatch` | Layer 0's stored leaf hash is altered and merkle_root recomputed to match, so only hashing the actual bytes catches it. | `lhas.leaf_match` *(strict)* |
-| `multi-sector-flag-clear` | The file's layers carry two sectors but the header does not set MULTI_SECTOR, so a reader that trusts the flag prints one sector per layer and never notices the rest. | `hdr.multi_sector_flag` |
-| `multi-sector-flag-set` | No layer of the file carries more than one sector, but the header sets MULTI_SECTOR, so the flag promises a structure the file does not have. | `hdr.multi_sector_flag` |
+| `multi-sector-flag-clear` | The file's layers carry two sectors but the header does not set MULTI_SECTOR, so a reader that trusts the flag prints one sector per layer and never notices the rest. | `head.multi_sector_flag` |
+| `multi-sector-flag-set` | No layer of the file carries more than one sector, but the header sets MULTI_SECTOR, so the flag promises a structure the file does not have. | `head.multi_sector_flag` |
 | `trailer-crc-mismatch` | The trailer CRC-32C does not match the file bytes. | `trailer.crc32c` |
 | `meta-exposure-fractional` | META carries normal_exposure_ms = 2500.5. Durations are exact whole milliseconds, so a fractional value is not a duration this format can express. | `meta.time_integer` |
 | `encrypted-flag-without-auth` | The file header sets ENCRYPTED but there is no AUTH chunk, so no session key can ever be derived. | `presence.auth` |
@@ -186,7 +186,7 @@ layer 2 and sector 1's own ends at layer 5.
 ## Check names
 
 Checks are named `<group>.<rule>`, mirroring section 11:
-`trailer.*`, `header.*`, `dir.*`, `presence.*`, `hdr.*`, `auth.*`,
+`trailer.*`, `header.*`, `dir.*`, `presence.*`, `head.*`, `auth.*`,
 `meta.*`, `prof.*`, `lrov.*`, `prev.*`, `voxl.*`, `extd.*`, `ltbl.*`,
 `layr.*`, `zdic.*`, `lhas.*`, `ree.*`, `sector.*`, `crypt.*`.
 

@@ -7,7 +7,7 @@
 //! password encryption.
 
 use lumen::chunks::extd::Extension;
-use lumen::chunks::hdr::Hdr;
+use lumen::chunks::head::Head;
 use lumen::chunks::ltbl::LayerTable;
 use lumen::chunks::preview::PreviewRole;
 use lumen::container::{self, ChunkType};
@@ -22,9 +22,9 @@ const WIDTH: u32 = 64;
 const HEIGHT: u32 = 48;
 const PIXELS: usize = (WIDTH * HEIGHT) as usize;
 
-fn hdr(layers: u32) -> Hdr {
-    Hdr {
-        hdr_version: 1,
+fn head(layers: u32) -> Head {
+    Head {
+        head_version: 1,
         encoder_name: "lumen-format tests".to_string(),
         created_unix_sec: 1_750_000_000,
         display_width_px: WIDTH,
@@ -127,7 +127,7 @@ fn masks() -> Vec<Vec<u8>> {
 /// Encode the masks and return the file.
 fn encode(encrypt: Option<EncryptOptions>, layers_per_chunk: u32) -> Vec<u8> {
     let layer_masks = masks();
-    let mut encoder = Encoder::new(hdr(layer_masks.len() as u32), meta());
+    let mut encoder = Encoder::new(head(layer_masks.len() as u32), meta());
     encoder.set_layers_per_chunk(layers_per_chunk);
     encoder.set_zstd_level(6);
     encoder.set_dictionary(true);
@@ -302,7 +302,7 @@ fn machine_binding_round_trips() {
 
 #[test]
 fn multi_sector_round_trips_and_reports_its_sectors() {
-    let mut encoder = Encoder::new(hdr(3), meta());
+    let mut encoder = Encoder::new(head(3), meta());
     encoder.set_sectors(vec![Sector {
         sector_id: 1,
         name: Some("supports".to_string()),
@@ -439,7 +439,7 @@ fn multi_sector_round_trips_and_reports_its_sectors() {
 
 #[test]
 fn extensions_and_embedded_scene_round_trip() {
-    let mut encoder = Encoder::new(hdr(1), meta());
+    let mut encoder = Encoder::new(head(1), meta());
     encoder.set_voxl(b"{\"voxl\":1}".to_vec());
     encoder.add_extension(Extension {
         ext_version: 1,
@@ -472,7 +472,7 @@ fn extensions_and_embedded_scene_round_trip() {
 fn the_encoder_refuses_a_malformed_sector_table() {
     // META's own shape rules, enforced where the file is assembled, so the
     // encoder cannot write something its validator would reject.
-    let mut encoder = Encoder::new(hdr(1), meta());
+    let mut encoder = Encoder::new(head(1), meta());
     encoder.set_sectors(vec![Sector {
         sector_id: 0,
         ..Sector::default()
@@ -483,7 +483,7 @@ fn the_encoder_refuses_a_malformed_sector_table() {
     let error = encoder.finish().expect_err("sector 0 is implicit");
     assert_eq!(error.check_name(), "meta.sectors_shape");
 
-    let mut encoder = Encoder::new(hdr(1), meta());
+    let mut encoder = Encoder::new(head(1), meta());
     encoder.set_sectors(vec![
         Sector {
             sector_id: 2,
@@ -511,7 +511,7 @@ fn the_encoder_refuses_a_malformed_sector_table() {
 /// reader holding the key must report the binding rather than the tag.
 #[test]
 fn a_layer_frame_is_bound_to_its_directory_index() {
-    let mut encoder = Encoder::new(hdr(masks().len() as u32), meta());
+    let mut encoder = Encoder::new(head(masks().len() as u32), meta());
     encoder.set_layers_per_chunk(2);
     encoder.set_encryption(EncryptOptions::password("correct horse"));
     for mask in &masks() {
@@ -574,7 +574,7 @@ type Mutation = (&'static str, fn(&[u8]) -> Vec<u8>);
 /// slices of one chunk that overlap, and an `LROV` chunk no entry points at.
 #[test]
 fn a_layer_table_that_lies_is_rejected() {
-    let mut encoder = Encoder::new(hdr(4), meta());
+    let mut encoder = Encoder::new(head(4), meta());
     encoder.set_layers_per_chunk(2);
     encoder.set_sectors(vec![Sector {
         sector_id: 1,
@@ -618,7 +618,7 @@ fn a_layer_table_that_lies_is_rejected() {
         ("ltbl.first_layr_in_range", mutate_first_layr_to_zero),
         ("ltbl.slices_disjoint", overlap_two_slices),
         ("ltbl.first_lrov_null", drop_the_override_reference),
-        ("hdr.multi_sector_flag", clear_multi_sector),
+        ("head.multi_sector_flag", clear_multi_sector),
     ];
     for (expected, mutate) in cases {
         let mutated = mutate(&bytes);
@@ -651,7 +651,7 @@ fn edit_layer_table(bytes: &[u8], edit: impl FnOnce(&mut LayerTable)) -> Vec<u8>
     mutated
 }
 
-/// Name the primary sector's own chunk as HDR's index, which no entry may.
+/// Name the primary sector's own chunk as HEAD's index, which no entry may.
 fn mutate_first_layr_to_zero(bytes: &[u8]) -> Vec<u8> {
     edit_layer_table(bytes, |table| {
         assert!(!table.entries[0].is_empty());
@@ -747,7 +747,7 @@ fn padding_after_a_layer_stream_is_rejected() {
 /// table cannot also trip the leaf hashes.
 fn encode_without_hashes() -> Vec<u8> {
     let layer_masks = masks();
-    let mut encoder = Encoder::new(hdr(layer_masks.len() as u32), meta());
+    let mut encoder = Encoder::new(head(layer_masks.len() as u32), meta());
     encoder.set_dictionary(false);
     encoder.set_layer_hashes(false);
     for mask in &layer_masks {
@@ -797,7 +797,7 @@ fn explicit_encoding_modes_round_trip() {
                 EncodeMode::Binary if !binary => {
                     // Binary REE cannot represent an anti-aliased mask: the
                     // encoder must refuse it rather than re-quantise the pixels.
-                    let mut probe = Encoder::new(hdr(1), meta());
+                    let mut probe = Encoder::new(head(1), meta());
                     let err = probe
                         .push_layer_with_mode(mask, mode)
                         .expect_err("binary REE must reject an anti-aliased mask");
@@ -819,7 +819,7 @@ fn explicit_encoding_modes_round_trip() {
         }
         assert!(!selected.is_empty(), "each mode has masks to encode");
 
-        let mut encoder = Encoder::new(hdr(selected.len() as u32), meta());
+        let mut encoder = Encoder::new(head(selected.len() as u32), meta());
         for mask in &selected {
             encoder
                 .push_layer_with_mode(mask, mode)

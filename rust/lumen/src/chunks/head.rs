@@ -1,20 +1,20 @@
-//! The `HDR` chunk: display dimensions, layer count and encoder identity
+//! The `HEAD` chunk: display dimensions, layer count and encoder identity
 //! ([`spec/03-chunks.md`] section 4.1).
 
 use crate::check::Check;
 use crate::error::{Error, Result};
 use crate::io::{Reader, Writer};
 
-/// Bytes of `HDR` other than `encoder_name`: 4 before it and 48 after.
-pub const HDR_FIXED_LEN: usize = 52;
+/// Bytes of `HEAD` other than `encoder_name`: 4 before it and 48 after.
+pub const HEAD_FIXED_LEN: usize = 52;
 /// Longest permitted `encoder_name`.
 pub const ENCODER_NAME_MAX: usize = 256;
 
-/// The `HDR` chunk body.
+/// The `HEAD` chunk body.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Hdr {
+pub struct Head {
     /// Layout version. `1` for this specification.
-    pub hdr_version: u32,
+    pub head_version: u32,
     /// UTF-8 encoder identity, e.g. `DragonFruit 1.0`.
     pub encoder_name: String,
     /// Creation timestamp in Unix seconds.
@@ -39,21 +39,21 @@ pub struct Hdr {
     pub total_layers: u32,
 }
 
-impl Hdr {
+impl Head {
     /// Parse the chunk payload.
-    pub fn parse(payload: &[u8]) -> Result<Hdr> {
-        let mut r = Reader::checked(payload, Check::HdrFrame);
-        let hdr_version = r.u32()?;
-        if hdr_version != 1 {
+    pub fn parse(payload: &[u8]) -> Result<Head> {
+        let mut r = Reader::checked(payload, Check::HeadFrame);
+        let head_version = r.u32()?;
+        if head_version != 1 {
             return Err(Error::new(
-                Check::HdrVersion,
-                format!("unsupported hdr_version {hdr_version}"),
+                Check::HeadVersion,
+                format!("unsupported head_version {head_version}"),
             ));
         }
         let encoder_name_len = r.u32()?;
         if encoder_name_len as usize > ENCODER_NAME_MAX {
             return Err(Error::new(
-                Check::HdrFrame,
+                Check::HeadFrame,
                 format!(
                     "encoder_name_len {encoder_name_len} exceeds the {ENCODER_NAME_MAX} byte limit"
                 ),
@@ -70,8 +70,8 @@ impl Hdr {
         let build_height_um = r.u32()?;
         let layer_height_um = r.u32()?;
         let total_layers = r.u32()?;
-        Ok(Hdr {
-            hdr_version,
+        Ok(Head {
+            head_version,
             encoder_name,
             created_unix_sec,
             display_width_px,
@@ -88,8 +88,8 @@ impl Hdr {
 
     /// Serialize the chunk payload.
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut w = Writer::with_capacity(HDR_FIXED_LEN + self.encoder_name.len());
-        w.u32(self.hdr_version);
+        let mut w = Writer::with_capacity(HEAD_FIXED_LEN + self.encoder_name.len());
+        w.u32(self.head_version);
         w.u32(self.encoder_name.len() as u32);
         w.bytes(self.encoder_name.as_bytes());
         w.u64(self.created_unix_sec);
@@ -115,9 +115,9 @@ impl Hdr {
 mod tests {
     use super::*;
 
-    fn sample(name: &str) -> Hdr {
-        Hdr {
-            hdr_version: 1,
+    fn sample(name: &str) -> Head {
+        Head {
+            head_version: 1,
             encoder_name: name.to_owned(),
             created_unix_sec: 1_710_000_000,
             display_width_px: 64,
@@ -134,44 +134,44 @@ mod tests {
 
     #[test]
     fn hdr_round_trips_with_a_multibyte_name() {
-        let hdr = sample("DragonFruit 1.0 \u{2713}");
-        let bytes = hdr.to_bytes();
+        let head = sample("DragonFruit 1.0 \u{2713}");
+        let bytes = head.to_bytes();
         // `encoder_name_len` counts bytes, not characters: the check mark is three.
-        assert_eq!(bytes.len(), HDR_FIXED_LEN + hdr.encoder_name.len());
+        assert_eq!(bytes.len(), HEAD_FIXED_LEN + head.encoder_name.len());
         assert_eq!(
             u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize,
-            hdr.encoder_name.len()
+            head.encoder_name.len()
         );
-        let parsed = Hdr::parse(&bytes).unwrap();
-        assert_eq!(parsed, hdr);
+        let parsed = Head::parse(&bytes).unwrap();
+        assert_eq!(parsed, head);
     }
 
     #[test]
     fn hdr_rejects_a_length_measured_in_characters() {
-        let hdr = sample("DragonFruit \u{2713}");
-        let mut bytes = hdr.to_bytes();
+        let head = sample("DragonFruit \u{2713}");
+        let mut bytes = head.to_bytes();
         // A writer that confused characters for bytes declares too few bytes,
         // so the name no longer decodes as UTF-8.
-        let chars = hdr.encoder_name.chars().count() as u32;
+        let chars = head.encoder_name.chars().count() as u32;
         bytes[4..8].copy_from_slice(&chars.to_le_bytes());
-        let err = Hdr::parse(&bytes).unwrap_err();
-        assert_eq!(err.check(), Check::HdrFrame);
+        let err = Head::parse(&bytes).unwrap_err();
+        assert_eq!(err.check(), Check::HeadFrame);
     }
 
     #[test]
     fn hdr_rejects_an_oversized_or_truncated_frame() {
         let mut bytes = sample("DragonFruit 1.0").to_bytes();
         bytes[4..8].copy_from_slice(&(ENCODER_NAME_MAX as u32 + 1).to_le_bytes());
-        assert_eq!(Hdr::parse(&bytes).unwrap_err().check(), Check::HdrFrame);
+        assert_eq!(Head::parse(&bytes).unwrap_err().check(), Check::HeadFrame);
 
         let bytes = sample("DragonFruit 1.0").to_bytes();
         assert_eq!(
-            Hdr::parse(&bytes[..bytes.len() - 1]).unwrap_err().check(),
-            Check::HdrFrame
+            Head::parse(&bytes[..bytes.len() - 1]).unwrap_err().check(),
+            Check::HeadFrame
         );
         assert_eq!(
-            Hdr::parse(&bytes[..4]).unwrap_err().check(),
-            Check::HdrFrame
+            Head::parse(&bytes[..4]).unwrap_err().check(),
+            Check::HeadFrame
         );
     }
 
@@ -179,10 +179,10 @@ mod tests {
     fn hdr_rejects_unknown_versions_but_tolerates_trailing_bytes() {
         let mut bytes = sample("X").to_bytes();
         bytes[0..4].copy_from_slice(&2u32.to_le_bytes());
-        assert_eq!(Hdr::parse(&bytes).unwrap_err().check(), Check::HdrVersion);
+        assert_eq!(Head::parse(&bytes).unwrap_err().check(), Check::HeadVersion);
 
         let mut bytes = sample("X").to_bytes();
         bytes.push(0);
-        assert_eq!(Hdr::parse(&bytes).unwrap(), sample("X"));
+        assert_eq!(Head::parse(&bytes).unwrap(), sample("X"));
     }
 }

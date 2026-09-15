@@ -24,7 +24,7 @@ pub struct LayerHashes {
     pub hash_algorithm: u8,
     /// Digest length. `32` for SHA-256.
     pub hash_size: u8,
-    /// Layer count, which must equal `HDR.total_layers`.
+    /// Layer count, which must equal `HEAD.total_layers`.
     pub layer_count: u32,
     /// Root of the Merkle tree over `layer_hashes`.
     pub merkle_root: [u8; 32],

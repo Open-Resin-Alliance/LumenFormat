@@ -553,7 +553,7 @@ mod tests {
     const LAYER_BINARY: &str = "00000364c801";
     const LAYER_GRAYSCALE: &str = "01050064807800dc01ffc002008018";
     const LAYER_SPLIT: &str = "020005641e14321e640101010101010101010101010101010101010101010101010101010101c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8";
-    /// `HDR.display_width_px * HDR.display_height_px` for that file.
+    /// `HEAD.display_width_px * HEAD.display_height_px` for that file.
     const TOTAL: u32 = 64 * 48;
 
     /// Expand `(value, length)` runs into a mask.

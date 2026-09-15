@@ -37,36 +37,36 @@ companion field left to contradict. What replaced them is named in the lists bel
   `size_compressed == 0`. Exception: null descriptors (`offset == 0`). A `LAYR` chunk's
   extent follows the same rule: its `size_uncompressed` is the container's byte length, and a
   sealed container's is `size_compressed` ([§4.10](06-layer-data.md#410-layr---layer-data-chunk)).
-- [ ] `HDR` chunk present (`presence.hdr`) and is the first chunk, at the offset immediately
-  after the 32-byte header (`dir.hdr_first`).
+- [ ] `HEAD` chunk present (`presence.head`) and is the first chunk, at the offset immediately
+  after the 32-byte header (`dir.head_first`).
 - [ ] `META` chunk present (`presence.meta`).
 - [ ] `LTBL` chunk present, and at most one (`presence.ltbl`).
 - [ ] At least one `LAYR` chunk present (`presence.layr`); each is at least 4 bytes (its
   `layr_version`) and holds exactly one frame after that field.
-- [ ] `HDR.hdr_version` (`hdr.version`), `LTBL.table_version` (`ltbl.version`), `ZDIC.zdic_version` (`zdic.version`), `AUTH.auth_version` (`auth.version`) and `META.meta_version` (`meta.version`) are recognized, and so is the `layr_version` of every `LAYR` chunk - the field is per chunk, so one unrecognized value is enough (`layr.version`).
+- [ ] `HEAD.head_version` (`head.version`), `LTBL.table_version` (`ltbl.version`), `ZDIC.zdic_version` (`zdic.version`), `AUTH.auth_version` (`auth.version`) and `META.meta_version` (`meta.version`) are recognized, and so is the `layr_version` of every `LAYR` chunk - the field is per chunk, so one unrecognized value is enough (`layr.version`).
 - [ ] The `AUTH` payload is long enough for the sections it declares (`auth.frame`).
 - [ ] `ZDIC`, when present, is well formed: `dict_size` does not exceed 112 640 bytes and the chunk holds that many bytes (`zdic.dict_size`), and no more than one non-null `ZDIC` chunk is present (`zdic.single`).
 - [ ] A dictionary is present exactly when the `LAYR` frames use one (`presence.zdic`): if any frame references a zstd dictionary (dictionary ID `!= 0`), exactly one `ZDIC` chunk is present and every frame that references a dictionary references *that* one (`layr.dict_id_match`, `zdic.dict_id_match`); if no frame references a dictionary, no `ZDIC` chunk is present and every frame's dictionary ID is `0` (`layr.dict_id_absent`). An encoder may compress one frame without the dictionary another frame uses, so a frame that reports none is not a mismatch - "the file carries a dictionary nothing uses" is this rule's own failure, reported as `presence.zdic`, and it is reported after the frames' half so a file that breaks both is named by the frames' rule.
-- [ ] If `LHAS` chunk present, its payload is long enough for its header and hashes (`lhas.frame`), `hash_algorithm` is `0x01` (`lhas.hash_algorithm`), and `layer_count` equals `HDR.total_layers` (`lhas.layer_count`).
+- [ ] If `LHAS` chunk present, its payload is long enough for its header and hashes (`lhas.frame`), `hash_algorithm` is `0x01` (`lhas.hash_algorithm`), and `layer_count` equals `HEAD.total_layers` (`lhas.layer_count`).
 
 ### 11.2 Semantic Validation
 
-- [ ] `HDR.total_layers > 0` and `HDR.total_layers == LTBL.layer_count` (`hdr.total_layers`, `ltbl.layer_count`).
+- [ ] `HEAD.total_layers > 0` and `HEAD.total_layers == LTBL.layer_count` (`head.total_layers`, `ltbl.layer_count`).
 - [ ] `LTBL.entry_size >= 28` (`ltbl.entry_size`). The entry layout is fixed through offset 28; future versions may append fields after offset 28, and readers stride by `entry_size` to skip unknown trailing fields.
 - [ ] `LTBL.entry_count` equals the sum of `1 + additional_sector_count` over each layer's first entry, the table holds exactly that many entries and **ends exactly there** - a payload shorter or longer than `entry_count` entries is this check's failure, not `ltbl.entry_size` - and `additional_sector_count` is `0` on every non-first entry (`ltbl.entry_count`).
-- [ ] The entries describe every layer the header declares and no other: walking the table from layer 0 reaches layer `HDR.total_layers-1` and stops, and no entry names a layer outside that range (`ltbl.layer_index_range`).
+- [ ] The entries describe every layer the header declares and no other: walking the table from layer 0 reaches layer `HEAD.total_layers-1` and stops, and no entry names a layer outside that range (`ltbl.layer_index_range`).
 - [ ] Within a layer, `sector_id` ascends (`ltbl.sector_ids_ascending`) and no two entries carry the same `sector_id` (`ltbl.sector_id_unique`).
 - [ ] A layer's first entry is sector 0's: its `sector_id` is `0` (`ltbl.first_entry_is_sector_zero`).
 - [ ] Every `LTBL` entry's `first_layr` is a directory index whose chunk is a `LAYR` chunk (`ltbl.first_layr_in_range`).
 - [ ] For every `LTBL` entry, `data_offset + data_size` is at most the decompressed length of the frame that `first_layr` names (`ltbl.offset_within_chunk`).
 - [ ] No two entries that name the same `LAYR` chunk describe overlapping byte ranges (`ltbl.slices_disjoint`).
 - [ ] `first_lrov` is `0` or a directory index whose chunk is an `LROV` chunk (`ltbl.first_lrov_in_range`). `0` says that `(layer, sector)` has no overrides; what contradicts it is an `LROV` chunk no entry names whose payload no named chunk also carries - a set of overrides that can never be applied to anything, which is a `0` that lies (`ltbl.first_lrov_null`). A chunk that no entry names but whose payload *is* carried by a named chunk contradicts nothing: those values are applied at the pair that names their twin, so that file is the orphan case, not this one. Every `LROV` chunk named by exactly one entry is the third rule (`lrov.orphan`).
-- [ ] The `MULTI_SECTOR` flag (header bit 1) is set exactly when some layer carries more than one sector (`hdr.multi_sector_flag`).
-- [ ] `HDR.layer_height_um > 0` (`hdr.layer_height`).
-- [ ] `HDR.build_width_um > 0`, `HDR.build_depth_um > 0`, `HDR.build_height_um > 0` (`hdr.build_dims`).
-- [ ] `HDR.encoder_name_len <= 256`, and `HDR.size_uncompressed >= 52 + encoder_name_len` (`hdr.frame`) - the fixed fields before and after the name total 52 bytes, so a v1 `HDR` chunk is exactly `52 + encoder_name_len` bytes.
-- [ ] `HDR.display_width_px × display_height_px > 0` (`hdr.display_pixels`).
-- [ ] `HDR.physical_width_px` is an integer multiple of `display_width_px`, and `physical_height_px` is an integer multiple of `display_height_px` (`hdr.physical_multiple`). A ratio of 1 means one display pixel per physical pixel.
+- [ ] The `MULTI_SECTOR` flag (header bit 1) is set exactly when some layer carries more than one sector (`head.multi_sector_flag`).
+- [ ] `HEAD.layer_height_um > 0` (`head.layer_height`).
+- [ ] `HEAD.build_width_um > 0`, `HEAD.build_depth_um > 0`, `HEAD.build_height_um > 0` (`head.build_dims`).
+- [ ] `HEAD.encoder_name_len <= 256`, and `HEAD.size_uncompressed >= 52 + encoder_name_len` (`head.frame`) - the fixed fields before and after the name total 52 bytes, so a v1 `HEAD` chunk is exactly `52 + encoder_name_len` bytes.
+- [ ] `HEAD.display_width_px × display_height_px > 0` (`head.display_pixels`).
+- [ ] `HEAD.physical_width_px` is an integer multiple of `display_width_px`, and `physical_height_px` is an integer multiple of `display_height_px` (`head.physical_multiple`). A ratio of 1 means one display pixel per physical pixel.
 - [ ] The META payload is a JSON object (`meta.json`).
 - [ ] META JSON contains all required fields (`meta.required_fields`): `meta_version`, `normal_exposure_ms`, `bottom_exposure_ms`, `bottom_layer_count`, `transition_layer_count`, `layer_height_um`, `lift_slow_distance_um`, `lift_slow_speed_um_min`, `retract_fast_distance_um`, `retract_fast_speed_um_min`.
 - [ ] Every `*_ms` field in META, and `estimated_print_time_sec`, is a JSON integer (`meta.time_integer`). A value with a fractional part such as `2500.5` is invalid; the rule covers the timing fields of META's `sectors` entries too, since they are META's fields. See [§4.2](03-chunks.md#42-meta---metadata-chunk) for the encoders' and readers' obligations.
@@ -121,7 +121,7 @@ companion field left to contradict. What replaced them is named in the lists bel
 ### 11.4 Encryption Validation
 
 - [ ] If `ENCRYPTED` flag set, all `LAYR`/`META`/`PROF`/`LROV`/`VOXL`/`ZDIC` chunks have the encrypted flag set (`crypt.chunk_flags`), every `LAYR` frame is at least 28 bytes (one sealed unit), and every `LAYR` frame is individually sealed ([§9.3](12-encryption.md#93-encryption-format)).
-- [ ] If `ENCRYPTED` flag set, `HDR`, `AUTH` and `LTBL` do **not** have the encrypted flag set, and a `LAYR` chunk's 4-byte version field is plaintext inside its sealed chunk ([§9.1](12-encryption.md#91-design-principles)).
+- [ ] If `ENCRYPTED` flag set, `HEAD`, `AUTH` and `LTBL` do **not** have the encrypted flag set, and a `LAYR` chunk's 4-byte version field is plaintext inside its sealed chunk ([§9.1](12-encryption.md#91-design-principles)).
 - [ ] If the `ENCRYPTED` flag is clear, no chunk descriptor sets the encrypted bit: there is no key in the file that could open such a chunk (`crypt.no_key`, [§9.1](12-encryption.md#91-design-principles)).
 - [ ] Each sealed unit opens with `associated_data = chunk_type || 0x00 || unit_index_le_u32`, where `unit_index` is `0` for a single-unit chunk and the `LAYR` chunk's directory index for a `LAYR` chunk (`crypt.unit_index_binding`). A sealed frame presented at another `LAYR` chunk's directory index therefore fails its tag check: an implementation that opens it anyway has not bound the unit to its identity.
 - [ ] Auth tag verifies for each encrypted chunk (decryption integrity check, `crypt.tag_verify`).
@@ -160,7 +160,7 @@ choice, and no file may rely on either answer.
 The repository carries byte-exact test vectors and an independent validator under
 [`test-vectors/`](test-vectors/). Implementations SHOULD validate against them. Each
 valid vector pins the uncompressed structures it contains exactly - the file header,
-`HDR`, `META` with its `sectors` entries, `AUTH`, `LTBL`, every `LAYR` chunk's
+`HEAD`, `META` with its `sectors` entries, `AUTH`, `LTBL`, every `LAYR` chunk's
 `layr_version` and the decompressed output of its frame, `LHAS`, every REE stream, the
 chunk directory and the trailer - and each invalid vector fails exactly one named check
 from this section. Each valid vector also records the settings a conforming reader must

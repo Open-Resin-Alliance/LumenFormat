@@ -16,7 +16,7 @@ use crate::{FORMAT_REVISION, ZSTD_LAYER_LEVEL, ZSTD_SMALL_LEVEL};
 
 /// What the manifest says about the bytes an implementer can and cannot rely on.
 const NOTE: &str = "Compressed payload bytes depend on the zstd version and level. \
-Uncompressed structures (HDR, AUTH, LTBL, LAYR's version field, LHAS, REE \
+Uncompressed structures (HEAD, AUTH, LTBL, LAYR's version field, LHAS, REE \
 streams, directory, trailer) are exact. Sealed units are exact too: every nonce, \
 salt and key is derived from a fixed SHAKE-256 seed, so regeneration is \
 deterministic. Those values are public test data; real encoders must draw them from \
@@ -580,7 +580,7 @@ can express.",
         Invalid::new(
             "multi-sector-flag-clear",
             "The file's layers carry two sectors but the header does not set MULTI_SECTOR, so a reader that trusts the flag prints one sector per layer and never notices the rest.",
-            "hdr.multi_sector_flag",
+            "head.multi_sector_flag",
             container::repack(&b, &multi.layout),
         )
         .base("multi-sector"),
@@ -596,7 +596,7 @@ can express.",
         Invalid::new(
             "multi-sector-flag-set",
             "No layer of the file carries more than one sector, but the header sets MULTI_SECTOR, so the flag promises a structure the file does not have.",
-            "hdr.multi_sector_flag",
+            "head.multi_sector_flag",
             container::repack(&b, &binary_basic.layout),
         )
         .base("binary-basic"),

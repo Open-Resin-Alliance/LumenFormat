@@ -93,7 +93,7 @@ impl Chunk {
     /// The chunk's name without its NUL padding.
     pub fn name(&self) -> &'static str {
         match &self.ctype {
-            b"HDR\0" => "HDR",
+            b"HEAD" => "HEAD",
             b"META" => "META",
             b"PROF" => "PROF",
             b"LROV" => "LROV",
@@ -141,7 +141,7 @@ impl Layout {
 
 /// Assemble `chunks`, in file order, into a complete file.
 ///
-/// HDR must be first, which places its payload at offset 32. The gaps that
+/// HEAD must be first, which places its payload at offset 32. The gaps that
 /// alignment leaves are free because the directory carries explicit offsets.
 pub fn build_file(chunks: &[Chunk], header_flags: u32) -> (Vec<u8>, Layout) {
     let mut compressor = zstd::bulk::Compressor::new(ZSTD_SMALL_LEVEL).expect("zstd compressor");

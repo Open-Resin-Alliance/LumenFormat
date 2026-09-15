@@ -9,7 +9,7 @@
 | Level | Field | Description |
 |-------|-------|-------------|
 | File | `header.version` | Breaking changes to the binary container. |
-| HDR chunk | `hdr_version` | New fields added to HDR; compatible across file versions. |
+| HEAD chunk | `head_version` | New fields added to HEAD; compatible across file versions. |
 | META chunk | `meta_version` | Additive changes to the META JSON schema. `LROV` and `PROF.settings` carry META's field names and units. |
 | LTBL chunk | `table_version` | Changes to the layer table's header or entry layout. |
 | AUTH chunk | `auth_version` | Changes to encryption metadata layout. |
@@ -38,8 +38,8 @@ before that ([§10.3](#103-change-control)).
 2. **Unknown chunk flags:** Ignore within known types.
 3. **Unknown JSON keys:** Ignore in the JSON payloads this specification defines - META,
    `PROF` and `LROV`. An added key is how an additive change reaches a reader that predates it.
-4. **New HDR fields:** Parse the layout for the `hdr_version` present. An unrecognized
-   `hdr_version` is rejected - forward striding is impossible when the new fields'
+4. **New HEAD fields:** Parse the layout for the `head_version` present. An unrecognized
+   `head_version` is rejected - forward striding is impossible when the new fields'
    widths are unknown.
 5. **New LTBL fields:** Stride using `entry_size`.
 6. **Unknown EXTD with `critical = 1`:** Refuse file.

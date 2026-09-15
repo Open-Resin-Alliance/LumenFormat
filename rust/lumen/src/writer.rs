@@ -13,12 +13,12 @@
 //! chunk holds the layer's run, where in that chunk's decompressed output the
 //! run sits, and which `LROV` chunk carries the (layer, sector)'s overrides.
 //!
-//! `finish` produces the container in the order section 3 recommends: `HDR`,
+//! `finish` produces the container in the order section 3 recommends: `HEAD`,
 //! `META`, the optional chunks, `LTBL`, `LAYR`, and the directory at the end.
 //! Payloads are 8-byte aligned, as section 3.2 prefers, and the trailer's
 //! CRC-32C covers every preceding byte.
 //!
-//! Encryption follows section 9.1 exactly: `HDR`, `AUTH`, `LTBL`, `LHAS` and the
+//! Encryption follows section 9.1 exactly: `HEAD`, `AUTH`, `LTBL`, `LHAS` and the
 //! `LAYR` version fields stay plaintext; `META`, `PROF`, `LROV`, `VOXL` and
 //! `ZDIC` are sealed as single units; each `LAYR` frame is its own unit, bound by
 //! its associated data to the chunk's directory index. `PREV` and `EXTD` are
@@ -27,7 +27,7 @@
 
 use crate::check::Check;
 use crate::chunks::extd::Extension;
-use crate::chunks::hdr::Hdr;
+use crate::chunks::head::Head;
 use crate::chunks::lhas::{self, LayerHashes};
 use crate::chunks::ltbl::{LayerEntry, LayerTable};
 use crate::chunks::preview::PreviewRole;
@@ -164,7 +164,7 @@ struct Pending {
 /// Builds a `.lumen` file.
 #[derive(Debug)]
 pub struct Encoder {
-    hdr: Hdr,
+    head: Head,
     meta: Meta,
     profile: Option<Profile>,
     overrides: Vec<Override>,
@@ -181,12 +181,12 @@ pub struct Encoder {
 }
 
 impl Encoder {
-    /// Start a file with the given `HDR` and `META`.
+    /// Start a file with the given `HEAD` and `META`.
     ///
-    /// `hdr.total_layers` must equal the number of layers pushed.
-    pub fn new(hdr: Hdr, meta: Meta) -> Encoder {
+    /// `head.total_layers` must equal the number of layers pushed.
+    pub fn new(head: Head, meta: Meta) -> Encoder {
         Encoder {
-            hdr,
+            head,
             meta,
             profile: None,
             overrides: Vec::new(),
@@ -345,20 +345,20 @@ impl Encoder {
     }
 
     fn total_pixels(&self) -> u32 {
-        self.hdr.total_pixels()
+        self.head.total_pixels()
     }
 
     /// Assemble the container.
     ///
-    /// Fails if the number of pushed layers disagrees with `hdr.total_layers`.
+    /// Fails if the number of pushed layers disagrees with `head.total_layers`.
     pub fn finish(self) -> Result<Vec<u8>> {
         let pushed = self.layers.len() as u32;
-        if pushed != self.hdr.total_layers {
+        if pushed != self.head.total_layers {
             return Err(Error::new(
-                Check::HdrTotalLayers,
+                Check::HeadTotalLayers,
                 format!(
-                    "HDR declares {} layers but {pushed} were pushed",
-                    self.hdr.total_layers
+                    "HEAD declares {} layers but {pushed} were pushed",
+                    self.head.total_layers
                 ),
             ));
         }
@@ -524,7 +524,7 @@ impl Encoder {
         }
 
         let mut pending = Vec::new();
-        pending.push(Pending::raw(ChunkType::HDR, self.hdr.to_bytes()));
+        pending.push(Pending::raw(ChunkType::HEAD, self.head.to_bytes()));
         pending.push(self.seal_if_needed(
             ChunkType::META,
             json_chunks::meta_to_bytes(&self.meta)?,
