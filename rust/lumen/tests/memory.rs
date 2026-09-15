@@ -1,6 +1,6 @@
 //! Peak memory of validating a file, measured rather than reasoned about.
 //!
-//! Section 4.11 asks a memory-constrained reader to verify one chunk at a time -
+//! Section 4.10 asks a memory-constrained reader to verify one chunk at a time -
 //! "peak memory is one chunk plus the leaf hash table, never the whole layer
 //! stream". That is a property of *this* implementation too, and an easy one to
 //! lose: collecting every decompressed chunk before checking any of them gives

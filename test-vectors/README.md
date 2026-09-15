@@ -76,7 +76,7 @@ nonce, salt and key is derived from a fixed seed (see *Test credentials*).
 
 Bytes are not the whole contract. §8 resolves one `(layer, sector)` pair's settings from META,
 that sector's `META.sectors` entry, the bottom/transition blend and the pair's own `LROV`
-chunk, and §4.6 makes applying overrides mandatory for a reader: a printer that ignores them
+chunk, and §4.5 makes applying overrides mandatory for a reader: a printer that ignores them
 prints those layers at the wrong exposure, and nothing in the file says so afterwards. So
 every valid vector also carries `resolved_timing` in the manifest - for a sample of
 `(layer, sector)` points, the settings a conforming reader must resolve, field for field, as
@@ -144,7 +144,7 @@ layer 2 and sector 1's own ends at layer 5.
 | `run-count-zero-all-black` | Layer 0 stores all-black as tag 0x00 with run_count 0 instead of the empty-layer form. | `ree.no_run_count_zero` *(strict)* |
 | `split-all-binary` | Layer 0 is one run of 0xFF stored as tag 0x02 with an empty overlay, where §5.6 requires tag 0x00 for a slice whose pixels are all 0x00/0xFF: a split of a purely binary slice has no anti-aliasing to overlay and is strictly larger than the binary stream it duplicates. A loose reader accepts it - the stream is a legal tag 0x02 stream - and a strict validator rejects it, the same way it rejects the grayscale form of the same mistake. | `ree.split_all_binary` *(strict)* |
 | `layr-container-version` | A LAYR container declares version 2, which no reader implements; the frame behind it is well formed, so only the version refuses the file. | `layr.version` |
-| `layr-content-size-absent` | The LAYR frames are compressed without their content size. A writer MUST declare it (spec 4.10), because the descriptor's size_uncompressed is the container's length and the reader has nothing else to size the frame's output from. | `layr.content_size_present` |
+| `layr-content-size-absent` | The LAYR frames are compressed without their content size. A writer MUST declare it (spec 4.9), because the descriptor's size_uncompressed is the container's length and the reader has nothing else to size the frame's output from. | `layr.content_size_present` |
 | `layr-frame-size-lie` | The first LAYR frame's header declares one byte more than the frame decompresses to, so its output cannot be allocated or checked against the declaration. | `layr.frame_decompressed_size` |
 | `layr-frame-corrupt` | The first block header of the first LAYR frame is rewritten to the reserved block type 3, so the frame cannot be decompressed. | `layr.frame_decompressed_size` |
 | `layr-dict-id-mismatch` | ZDIC.dict_id is rewritten while the frames keep the id of the dictionary they were compressed with, so every LAYR frame disagrees with the file's dictionary. | `layr.dict_id_match` |

@@ -1,4 +1,4 @@
-//! SHA-256, the layer tree (spec 4.11) and hex rendering.
+//! SHA-256, the layer tree (spec 4.10) and hex rendering.
 
 use sha2::{Digest, Sha256};
 

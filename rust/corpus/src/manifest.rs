@@ -40,11 +40,11 @@ pub struct Valid {
     pub header_flags: u32,
     pub total_uncompressed_size: u64,
     pub trailer_crc32c: String,
-    /// One record per `LAYR` chunk, in directory order (§4.10).
+    /// One record per `LAYR` chunk, in directory order (§4.9).
     pub layr_chunks: Vec<LayrChunkRecord>,
-    /// One record per `LTBL` entry, in table order (§4.8).
+    /// One record per `LTBL` entry, in table order (§4.7).
     pub ltbl: Vec<LtblRecord>,
-    /// One record per layer, in layer order (§4.11).
+    /// One record per layer, in layer order (§4.10).
     pub layers: Vec<LayerRecord>,
     pub merkle_root: String,
     #[serde(default)]
@@ -76,7 +76,7 @@ pub struct Invalid {
     pub crypto: Option<CryptoBlock>,
 }
 
-/// One `LAYR` chunk as the manifest records it (§4.10).
+/// One `LAYR` chunk as the manifest records it (§4.9).
 ///
 /// There is no block table any more, so this record *is* the chunk: the frame's
 /// header, the descriptor's sizes, and the `(sector, layer group)` the chunk
@@ -101,7 +101,7 @@ pub struct LayrChunkRecord {
     pub sealed: bool,
 }
 
-/// One `LTBL` record as the manifest records it (§4.8), in table order.
+/// One `LTBL` record as the manifest records it (§4.7), in table order.
 #[derive(Deserialize)]
 pub struct LtblRecord {
     pub entry_index: u32,
@@ -116,7 +116,7 @@ pub struct LtblRecord {
     pub data_offset: u64,
 }
 
-/// One layer as the manifest records it (§4.11).
+/// One layer as the manifest records it (§4.10).
 #[derive(Deserialize)]
 pub struct LayerRecord {
     pub index: u32,
@@ -256,7 +256,7 @@ fn check_golden_values(
 
     // ---- LAYR chunks ----------------------------------------------------
     // One chunk per (sector, layer group), and no block table: the descriptor
-    // and the frame header are the whole record (§4.10). What the chunk *holds*
+    // and the frame header are the whole record (§4.9). What the chunk *holds*
     // is not in the chunk at all - only `LTBL` says which points at it - so the
     // two records are checked against each other as well as against the bytes.
     let layr_chunk_count = records
@@ -406,7 +406,7 @@ fn check_golden_values(
     // ---- layers ---------------------------------------------------------
     // Each layer's bytes are its sectors' slices concatenated in ascending
     // `sector_id`; the tags are the first byte of each slice, and a slice of no
-    // bytes carries no tag (§4.11).
+    // bytes carries no tag (§4.10).
     if valid.layers.len() != layer_count as usize {
         bad.push("manifest.layers".to_string());
     }

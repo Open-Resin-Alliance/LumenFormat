@@ -179,7 +179,7 @@
     },
     {
       "base_vector": null,
-      "description": "The LAYR frames are compressed without their content size. A writer MUST declare it (spec 4.10), because the descriptor's size_uncompressed is the container's length and the reader has nothing else to size the frame's output from.",
+      "description": "The LAYR frames are compressed without their content size. A writer MUST declare it (spec 4.9), because the descriptor's size_uncompressed is the container's length and the reader has nothing else to size the frame's output from.",
       "expected_failure": "layr.content_size_present",
       "file": "invalid/layr-content-size-absent.lumen",
       "file_sha256": "c28a22a6e42a94f20b945c2e958f6bf62605cf58e546d4ba40948bc4f9b6551d",

@@ -3,7 +3,7 @@
 //! The manifest records, for a sample of `(layer, sector)` points, the numbers a
 //! conforming reader must resolve for them, so a third-party implementation has
 //! something to agree with. This module is the validator's own reading of that
-//! pipeline - written from §8, §4.2 and §4.6 rather than shared with the
+//! pipeline - written from §8, §4.2 and §4.5 rather than shared with the
 //! generator - so agreement between the two is evidence about the specification
 //! rather than one implementation restated.
 //!
@@ -17,7 +17,7 @@
 //! `META.sectors` entry rather than a `SECT` chunk, field by field over META's
 //! base (§4.2); an override set belongs to exactly one `(layer, sector)`, which
 //! is what `LTBL.first_lrov` says, rather than to a layer or a layer range that
-//! a reader has to match against (§4.6). One place, one answer.
+//! a reader has to match against (§4.5). One place, one answer.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -34,7 +34,7 @@ pub struct TimingInputs {
     pub meta: Value,
     /// Each `(layer, sector)`'s override set, keyed by the point it belongs to.
     /// A point with no overrides has no entry; there is no empty delta, because
-    /// `LTBL.first_lrov` is `0` exactly then (§4.8).
+    /// `LTBL.first_lrov` is `0` exactly then (§4.7).
     pub overrides: BTreeMap<(u32, u32), Value>,
 }
 

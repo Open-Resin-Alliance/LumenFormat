@@ -11,7 +11,7 @@ use crate::json;
 use crate::obj;
 use crate::CREATED_UNIX_SEC;
 
-/// One entry of the layer table (spec 4.9): one `(layer, sector)`'s slice.
+/// One entry of the layer table (spec 4.8): one `(layer, sector)`'s slice.
 #[derive(Clone, Copy)]
 pub struct LayerEntry {
     /// The layer this entry belongs to.
@@ -123,7 +123,7 @@ pub fn sector_value(sector_id: u32, name: &str, exposure_ms: u32) -> Value {
     ]
 }
 
-/// LTBL (spec 4.9): the header, then one 28-byte entry per `(layer, sector)`, the
+/// LTBL (spec 4.8): the header, then one 28-byte entry per `(layer, sector)`, the
 /// entries of a layer adjacent and that layer's first entry naming sector 0.
 pub fn ltbl(entries: &[LayerEntry], layer_count: u32) -> Vec<u8> {
     let mut out = Vec::with_capacity(16 + entries.len() * LTBL_ENTRY_SIZE);
@@ -142,7 +142,7 @@ pub fn ltbl(entries: &[LayerEntry], layer_count: u32) -> Vec<u8> {
     out
 }
 
-/// LHAS (spec 4.11): the root, then every leaf.
+/// LHAS (spec 4.10): the root, then every leaf.
 pub fn lhas(leaves: &[[u8; 32]]) -> Vec<u8> {
     let mut out = Vec::with_capacity(38 + leaves.len() * 32);
     out.push(0x01);
@@ -155,7 +155,7 @@ pub fn lhas(leaves: &[[u8; 32]]) -> Vec<u8> {
     out
 }
 
-/// ZDIC (spec 4.8).
+/// ZDIC (spec 4.7).
 pub fn zdic(dict_bytes: &[u8], dict_id: u32) -> Vec<u8> {
     let mut out = Vec::with_capacity(12 + dict_bytes.len());
     out.extend_from_slice(&1u32.to_le_bytes());
@@ -165,7 +165,7 @@ pub fn zdic(dict_bytes: &[u8], dict_id: u32) -> Vec<u8> {
     out
 }
 
-/// LAYR (spec 4.10): the version field, then the chunk's single zstd frame.
+/// LAYR (spec 4.9): the version field, then the chunk's single zstd frame.
 ///
 /// One chunk carries one frame - the concatenation of a sector's layer data for
 /// one group of layers - so the container is the version field and the frame and
@@ -286,7 +286,7 @@ pub fn prof(settings_extra: ProfSettings, overrides: ProfOverrides) -> Vec<u8> {
     json::dumps(&profile)
 }
 
-/// LROV (spec 4.6): one `(layer, sector)`'s timing deltas, as the JSON object the
+/// LROV (spec 4.5): one `(layer, sector)`'s timing deltas, as the JSON object the
 /// chunk carries.
 ///
 /// The point the chunk belongs to is not in the payload: the entry that names
@@ -296,7 +296,7 @@ pub fn lrov(fields: &[(&str, Value)]) -> Vec<u8> {
     json::dumps(&json::obj(fields.to_vec()))
 }
 
-/// VOXL (spec 4.12): a minimal V1 scene document.
+/// VOXL (spec 4.11): a minimal V1 scene document.
 ///
 /// A V1 document starts with `{`, which is how a reader recognizes the generation
 /// without knowing anything else about VOXL.
@@ -311,7 +311,7 @@ pub fn voxl() -> Vec<u8> {
     ])
 }
 
-/// An EXTD chunk (spec 4.13) and the descriptor flags that carry its vendor id and
+/// An EXTD chunk (spec 4.12) and the descriptor flags that carry its vendor id and
 /// critical bit.
 #[derive(Clone, Copy)]
 pub struct Extd<'a> {

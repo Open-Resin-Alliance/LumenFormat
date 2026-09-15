@@ -72,7 +72,7 @@ fn main() -> ExitCode {
         .unwrap_or_else(|| "target".to_string());
     let cases = [
         ("sample.lumen", None),
-        // No LHAS: §4.11 makes it optional and §10.3 forbids requiring an
+        // No LHAS: §4.10 makes it optional and §10.3 forbids requiring an
         // optional mechanism, so the reference reader must accept it.
         ("sample-no-lhas.lumen", None),
         ("sample-encrypted.lumen", Some("lumen-example")),

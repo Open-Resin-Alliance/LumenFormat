@@ -122,7 +122,7 @@ pub enum Check {
     /// Profile materials are malformed.
     ProfMaterialsShape,
 
-    // -- group: lrov (section 4.6) -----------------------------------------
+    // -- group: lrov (section 4.5) -----------------------------------------
     /// The payload is not a JSON object.
     LrovJson,
     /// An overridden duration is not an integer number of milliseconds.
@@ -130,17 +130,17 @@ pub enum Check {
     /// An `LROV` chunk is referenced by no entry, or by more than one.
     LrovOrphan,
 
-    // -- group: prev (section 4.7) -----------------------------------------
+    // -- group: prev (section 4.6) -----------------------------------------
     /// A reserved flag bit is set, or the role is outside 0-3.
     PrevFlags,
     /// The payload does not begin with the PNG signature (strict mode).
     PrevPngSignature,
 
-    // -- group: voxl (section 4.12) ----------------------------------------
+    // -- group: voxl (section 4.11) ----------------------------------------
     /// The payload is neither VOXL V2 nor a VOXL V1 document (strict mode).
     VoxlSignature,
 
-    // -- group: extd (section 4.13) ----------------------------------------
+    // -- group: extd (section 4.12) ----------------------------------------
     /// The payload is shorter than the 8-byte frame.
     ExtdFrame,
     /// `ext_type` is not four ASCII characters.
@@ -150,7 +150,7 @@ pub enum Check {
     /// An unimplemented extension carries `critical = 1`.
     ExtdCritical,
 
-    // -- group: ltbl (section 4.8) -----------------------------------------
+    // -- group: ltbl (section 4.7) -----------------------------------------
     /// `table_version` is not recognized.
     LtblVersion,
     /// `layer_count` disagrees with `HEAD.total_layers`.
@@ -180,7 +180,7 @@ pub enum Check {
     /// Two slices of one `LAYR` chunk overlap.
     LtblSlicesDisjoint,
 
-    // -- group: layr (section 4.10) ----------------------------------------
+    // -- group: layr (section 4.9) ----------------------------------------
     /// `layr_version` is not recognized.
     LayrVersion,
     /// A frame carries no content size, so a reader cannot size its output.
@@ -194,7 +194,7 @@ pub enum Check {
     /// A frame reports no dictionary while the file carries `ZDIC`.
     LayrDictIdAbsent,
 
-    // -- group: zdic (section 4.9) -----------------------------------------
+    // -- group: zdic (section 4.8) -----------------------------------------
     /// `zdic_version` is not recognized.
     ZdicVersion,
     /// `dict_size` exceeds `ZDIC_DICTSIZE_MAX`, or the bytes are missing.
@@ -204,7 +204,7 @@ pub enum Check {
     /// More than one non-null `ZDIC` chunk is present.
     ZdicSingle,
 
-    // -- group: lhas (section 4.11) ----------------------------------------
+    // -- group: lhas (section 4.10) ----------------------------------------
     /// The payload is too short for its header and hashes.
     LhasFrame,
     /// `hash_algorithm` is not `0x01` (SHA-256).

@@ -14,7 +14,7 @@ the file's capabilities at a glance; detailed binary layouts follow.
 | `META` | Metadata | Yes | Required | Yes | Print parameters as JSON (exposure, lift, motion) |
 | `PROF` | Print Profile | No | Optional | Yes | Named, versioned, reusable profile for Odyssey import |
 | `AUTH` | Authentication | No | Required when the file is encrypted | No | Encryption metadata, key wrapping, machine binding |
-| `LROV` | Layer Override | No | **Required** - refuse a file you cannot honor ([§4.6](05-print-control.md#46-lrov---layer-override-chunk)) | Yes | Timing overrides for one `(layer, sector)` pair |
+| `LROV` | Layer Override | No | **Required** - refuse a file you cannot honor ([§4.5](05-print-control.md#45-lrov---layer-override-chunk)) | Yes | Timing overrides for one `(layer, sector)` pair |
 | `PREV` | Preview Image | No | Optional | Optional | PNG preview images, multiple roles supported |
 | `LTBL` | Layer Table | Yes | Required | No | Per-`(layer, sector)` chunk index and slice offsets, for random access |
 | `ZDIC` | Zstd Dictionary | No | Required when present | Yes | Trained dictionary shared by every LAYR frame |
@@ -224,7 +224,7 @@ to `0`. The `bottom_*` fields follow the same model.
 
 1. Start with META's values as defaults for all layers. For a sector `>= 1`, its entry in `META.sectors` replaces META's value for every field it carries, so a sector resolves field by field; a sector with no entry, sector 0 included, resolves from META alone.
 2. Apply bottom/transition blending over the ranges that sector resolves with: layers in its bottom range use bottom-prefixed values; layers in its transition range interpolate between bottom and normal values ([§8](11-layer-timing.md#8-per-layer-settings-model) defines the formula and which fields participate).
-3. If the `(layer, sector)` pair's layer table entry carries a non-zero `first_lrov`, apply the fields that `LROV` chunk holds ([§4.6](05-print-control.md#46-lrov---layer-override-chunk)).
+3. If the `(layer, sector)` pair's layer table entry carries a non-zero `first_lrov`, apply the fields that `LROV` chunk holds ([§4.5](05-print-control.md#45-lrov---layer-override-chunk)).
 4. **Absent fields.** A field META does not carry, that the sector's `META.sectors` entry does not supply for the sector and that the pair's `LROV` chunk does not override, resolves to `0` for a distance, speed or duration - a segment or a pause that is not performed - and to `255` for `light_pwm`. Absent does not mean "whatever the implementation usually does": two readers must resolve the same file to the same numbers, so an encoder that leaves a field out is asking for zero. A field with no meaning to zero is not in this class, and is absent rather than zero when META does not carry it: `chamber_temperature_c` and `vat_temperature_c` are targets the printer uses or does not, and the `cure_curve` is either present or not.
 
 See [§8](11-layer-timing.md#8-per-layer-settings-model) for the complete layer timing pipeline.

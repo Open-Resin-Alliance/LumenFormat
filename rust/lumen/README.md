@@ -66,7 +66,7 @@ materializing it. See [`LumenFile::block`] for the block-level interface and
 [`LumenFile::verify_layer`] for bounded integrity verification.
 
 **On size.** [`LumenFile`] borrows the container's bytes. Opening validates, which
-walks the layer data once - one block at a time, per section 4.11's design note for
+walks the layer data once - one block at a time, per section 4.10's design note for
 memory-constrained readers - and after that each [`LumenFile::layer`] call touches
 only the block that holds it. The peak is therefore one block rather than the file.
 Measured on a 7.3 MB print of eight 1 MB blocks (`tests/memory.rs`, which asserts
@@ -162,7 +162,7 @@ three separate claims:
    of the same files.
 3. **Pipeline agreement.** The settings a conforming reader must resolve for a sample
    of `(layer, sector)` points - base values, the bottom and transition blend, the
-   absent-field defaults, the `LROV` overrides that §4.6 requires a reader to apply -
+   absent-field defaults, the `LROV` overrides that §4.5 requires a reader to apply -
    are compared against the manifest's `resolved_timing` for every valid vector. This
    crate did not write those expectations, so agreeing with them is evidence about the
    pipeline rather than a restatement of it.
@@ -209,10 +209,10 @@ password wrapping and X25519 machine binding (§9), and the checks of §11.
 
 Deliberately not implemented, with reasons:
 
-- **VOXL parsing.** A `VOXL` payload is opaque to LUMEN (§4.12) and is carried
+- **VOXL parsing.** A `VOXL` payload is opaque to LUMEN (§4.11) and is carried
   through byte for byte. A strict read checks only that it is recognizably VOXL.
 - **Extension payloads.** `EXTD` is vendor-defined and copied through, never
-  interpreted (§4.13). No extension is implemented, so any extension claiming
+  interpreted (§4.12). No extension is implemented, so any extension claiming
   `critical` is refused, as the specification requires.
 - **Signatures.** `EXTD`/`SIGN` is optional in v1 and not part of this crate.
 

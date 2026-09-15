@@ -88,7 +88,7 @@ pub fn frame_dict_id(frame: &[u8]) -> Option<u32> {
     Some(zstd_safe::get_dict_id_from_frame(frame).map_or(0, NonZeroU32::get))
 }
 
-/// What a frame header says about its output size (§4.10).
+/// What a frame header says about its output size (§4.9).
 ///
 /// The outer `None` is "these bytes are not a frame header at all"; the inner
 /// one is "the frame leaves its content size implicit", which a writer is not

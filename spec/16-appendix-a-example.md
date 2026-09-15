@@ -124,7 +124,7 @@ the rest of the resolved value standing.
 
 Chunks 3 to 5 are one *range* of three layers, and it is three chunks because an
 `LROV` chunk belongs to exactly one `(layer, sector)` - the layer table entry that
-names it is what places it ([§4.6](05-print-control.md#46-lrov---layer-override-chunk)).
+names it is what places it ([§4.5](05-print-control.md#45-lrov---layer-override-chunk)).
 A slicer that adjusts a 500-layer range writes 500 small chunks, each a handful of
 bytes of JSON; that is the cost of having no range form in the payload.
 

@@ -1,5 +1,5 @@
 //! The `PREV` chunk: a PNG preview, with its role in the descriptor flags
-//! ([`spec/05-print-control.md`] section 4.7).
+//! ([`spec/05-print-control.md`] section 4.6).
 
 use crate::check::Check;
 use crate::container::CHUNK_FLAG_ENCRYPTED;
@@ -28,7 +28,7 @@ pub enum PreviewRole {
 impl PreviewRole {
     /// Decode the role from a descriptor's flags.
     pub fn from_flags(flags: u32) -> Result<PreviewRole> {
-        // Bit 4 is the descriptor's ENCRYPTED flag, not reserved (section 4.7):
+        // Bit 4 is the descriptor's ENCRYPTED flag, not reserved (section 4.6):
         // a sealed preview still names its role.
         let reserved = !(PREVIEW_ROLE_MASK | CHUNK_FLAG_ENCRYPTED);
         if flags & reserved != 0 {

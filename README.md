@@ -91,9 +91,9 @@ chunk group can be read on its own.
 | [`02-file-structure.md`](spec/02-file-structure.md) | §3 | Header, chunk directory at the end of the file, trailer |
 | [`03-chunks.md`](spec/03-chunks.md) | §4, §4.1-4.3 | Chunk type summary, `HEAD`, `META`, `PROF` |
 | [`04-chunk-auth.md`](spec/04-chunk-auth.md) | §4.4 | `AUTH`, password and machine-binding sections |
-| [`05-print-control.md`](spec/05-print-control.md) | §4.5-4.7 | `SECT` (withdrawn), `LROV`, `PREV` |
-| [`06-layer-data.md`](spec/06-layer-data.md) | §4.8-4.11 | `LTBL`, `ZDIC`, `LAYR`, `LHAS` |
-| [`07-scene-chunks.md`](spec/07-scene-chunks.md) | §4.12-4.13 | `VOXL` embedded scene, `EXTD` extensions |
+| [`05-print-control.md`](spec/05-print-control.md) | §4.5-4.6 | `LROV`, `PREV` |
+| [`06-layer-data.md`](spec/06-layer-data.md) | §4.7-4.10 | `LTBL`, `ZDIC`, `LAYR`, `LHAS` |
+| [`07-scene-chunks.md`](spec/07-scene-chunks.md) | §4.11-4.12 | `VOXL` embedded scene, `EXTD` extensions |
 | [`08-layer-encoding.md`](spec/08-layer-encoding.md) | §5 | Run-end encoding: binary, grayscale and split REE |
 | [`09-compression.md`](spec/09-compression.md) | §6 | zstd block framing and the shared trained dictionary |
 | [`10-sectors.md`](spec/10-sectors.md) | §7 | Multi-material sectors and the sector mask invariant |
@@ -164,7 +164,7 @@ them, which pins the loose/strict distinction itself.
 The manifest also records the settings a conforming reader must resolve for a sample of
 `(layer, sector)` points, so the §8 pipeline - base values, bottom/transition blending, the
 overrides - is checkable by any implementation and not only by this crate's own tests. That
-is what makes §4.6's mandatory handling of per-layer overrides enforceable rather than
+is what makes §4.5's mandatory handling of per-layer overrides enforceable rather than
 prose.
 
 ```sh

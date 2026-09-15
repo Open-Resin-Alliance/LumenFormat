@@ -33,7 +33,7 @@ impl Entry {
 /// A live chunk as the directory lists it: its record, and its **directory
 /// index** - the position among all `chunk_count` records, which is what
 /// `LTBL`'s `first_layr` and `first_lrov` count and what a sealed `LAYR`
-/// frame's AAD binds (§4.8, §9.3).
+/// frame's AAD binds (§4.7, §9.3).
 #[derive(Clone, Copy)]
 pub struct Chunk<'a> {
     pub index: usize,
@@ -51,7 +51,7 @@ pub const SEALED_FLAG: u32 = 0x10;
 /// §9.3: `nonce[12]` followed by `tag[16]`.
 pub const AEAD_OVERHEAD: usize = 28;
 
-/// §4.10: the plaintext `layr_version` field a `LAYR` chunk's frame follows.
+/// §4.9: the plaintext `layr_version` field a `LAYR` chunk's frame follows.
 ///
 /// The frame is the sealed unit when the file is encrypted, so this many bytes
 /// of the container stay in the clear - and a reader slicing a frame off a

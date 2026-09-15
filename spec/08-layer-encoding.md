@@ -325,7 +325,7 @@ complexity, AA settings, and zstd dictionary effectiveness.
 
 ### 5.6 Canonical Encoding
 
-`LHAS` ([§4.11](06-layer-data.md#411-lhas---layer-hash-chunk)) hashes the decompressed bytes of each layer, so a stream that is legal
+`LHAS` ([§4.10](06-layer-data.md#410-lhas---layer-hash-chunk)) hashes the decompressed bytes of each layer, so a stream that is legal
 but not canonical yields a different hash for identical pixel content. This section
 defines the canonical form for each tag, and the one choice left to the encoder.
 
@@ -395,7 +395,7 @@ Where:
   exposure to use for a given layer height, but changing the layer height
   requires re-slicing the source geometry - you cannot derive 30 μm layers from
   fixed 50 μm layer data. When a `.lumen` file includes both a `VOXL` chunk
-  ([§4.12](07-scene-chunks.md#412-voxl---embedded-scene-chunk)) and `cure_curve` parameters, Odyssey can re-slice the scene using the
+  ([§4.11](07-scene-chunks.md#411-voxl---embedded-scene-chunk)) and `cure_curve` parameters, Odyssey can re-slice the scene using the
   `dragonfruit-slicing-engine` Rust crate (the same engine that produced the
   original file), then compute the correct exposure from the curve:  
   `E_new = Ec × exp(Cd_new / Dp)`. No guesswork, no test prints. Without the
@@ -404,7 +404,7 @@ Where:
 
   **Adaptive layer height is not available in v1.** It needs per-layer heights in the
   file, and v1 has nowhere to put them: `HEAD.layer_height_um` is a single default, and
-  the `VLYR` extension is non-critical ([§4.13](07-scene-chunks.md#413-extd---extension-chunk)), so a conforming reader may skip it and
+  the `VLYR` extension is non-critical ([§4.12](07-scene-chunks.md#412-extd---extension-chunk)), so a conforming reader may skip it and
   print at the wrong Z. A future core mechanism - most likely an `LTBL` field - is
   required first. Until then encoders MUST NOT emit variable-height `.lumen` files, and
   the cure curve's v1 role is limited to validating the exposure for the fixed layer

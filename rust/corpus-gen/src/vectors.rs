@@ -385,7 +385,7 @@ can express.",
         &mut manifest_invalid,
         Invalid::new(
             "layr-content-size-absent",
-            "The LAYR frames are compressed without their content size. A writer MUST declare it (spec 4.10), because the descriptor's size_uncompressed is the container's length and the reader has nothing else to size the frame's output from.",
+            "The LAYR frames are compressed without their content size. A writer MUST declare it (spec 4.9), because the descriptor's size_uncompressed is the container's length and the reader has nothing else to size the frame's output from.",
             "layr.content_size_present",
             frame_without_content_size(),
         ),
@@ -1901,7 +1901,7 @@ fn two_sector_layers() -> Vec<vector::Layer> {
 }
 
 /// Where the frame's content-size field sits inside `frame`, read off the frame
-/// header, and how wide it is (spec 4.10, zstd's frame format).
+/// header, and how wide it is (spec 4.9, zstd's frame format).
 ///
 /// The invalid vectors that lie about the size patch the field in place, so they
 /// need its position rather than a hard-coded offset: the header carries an

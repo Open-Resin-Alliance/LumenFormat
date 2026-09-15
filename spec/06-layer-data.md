@@ -2,7 +2,7 @@
 
 <!-- Part of the LUMEN Format Specification. Section numbers (`§3.1`) are stable anchors across the parts. -->
 
-## 4.8 LTBL - Layer Table Chunk
+## 4.7 LTBL - Layer Table Chunk
 
 **Type tag:** `LTBL` (`0x4C 0x54 0x42 0x4C`). Required. Exactly one per file.
 
@@ -56,7 +56,7 @@ they carry.
 - `first_lrov` is `0` or an `LROV` chunk directory index; it is `0` only when that
   `(layer, sector)` has no overrides, and every `LROV` chunk in the file is named by exactly
   one entry - no two entries share one, and none is left unreferenced
-  ([§4.6](05-print-control.md#46-lrov---layer-override-chunk)).
+  ([§4.5](05-print-control.md#45-lrov---layer-override-chunk)).
 - A layer whose every entry has `data_size == 0` is the empty layer, all black.
 
 **Sectors and the `MULTI_SECTOR` flag.** `MULTI_SECTOR` is set exactly when at least one layer
@@ -65,7 +65,7 @@ file has one entry per layer, all with `sector_id == 0` and
 `additional_sector_count == 0`, and is laid out like any other: there is no second layout for
 the single-sector case.
 
-## 4.9 ZDIC - Zstd Dictionary Chunk
+## 4.8 ZDIC - Zstd Dictionary Chunk
 
 **Type tag:** `ZDIC` (`0x5A 0x44 0x49 0x43`). Optional.
 
@@ -102,7 +102,7 @@ encrypted alongside the other content chunks when `AUTH` is present.
   Files that need full-artifact integrity rely on the `CRC-32C` trailer or an
   `EXTD`/`SIGN` signature.
 
-## 4.10 LAYR - Layer Data Chunk
+## 4.9 LAYR - Layer Data Chunk
 
 **Type tag:** `LAYR` (`0x4C 0x41 0x59 0x52`). Required. One chunk per `(sector, layer
 group)`.
@@ -148,7 +148,7 @@ data back to back, and the layer table is what says where each slice begins and 
 - The frame MUST declare its content size, and decompressing it MUST yield exactly that many
   bytes. The content size is the length of the concatenation above; a reader sizes its
   decode buffer from it, so it never trusts a second field to agree with a first.
-- A frame with a non-zero zstd dictionary ID requires a `ZDIC` chunk ([§4.9](#49-zdic---zstd-dictionary-chunk))
+- A frame with a non-zero zstd dictionary ID requires a `ZDIC` chunk ([§4.8](#48-zdic---zstd-dictionary-chunk))
   whose `dict_id` matches, and every `LAYR` frame in the file agrees with `ZDIC.dict_id`.
 - For every entry that names this chunk, `data_offset + data_size` is at most the frame's
   decompressed length, and the byte ranges those entries describe do not overlap.
@@ -176,7 +176,7 @@ A `(layer, sector)` with no exposed pixels has `data_size == 0` and stores no by
 byte and no mask. That is the canonical encoding for an all-black slice, and it is the same
 form whether the layer as a whole is empty or only this sector is.
 
-## 4.11 LHAS - Layer Hash Chunk
+## 4.10 LHAS - Layer Hash Chunk
 
 **Type tag:** `LHAS` (`0x4C 0x48 0x41 0x53`). Optional.
 
@@ -188,7 +188,7 @@ verification. This enables:
 - **Resume-after-power-loss:** verify which layers are intact on restart.
 - **Silent corruption detection:** network transfer errors, bit rot on storage.
 - **Bounded verification:** verify any single layer by decompressing only the `LAYR`
-  chunks that hold its slices ([§4.10](#410-layr---layer-data-chunk)), not the whole file.
+  chunks that hold its slices ([§4.9](#49-layr---layer-data-chunk)), not the whole file.
 
 **Payload:**
 

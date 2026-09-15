@@ -58,8 +58,8 @@ use std::cell::{Cell, RefCell};
 const HEADER_MUST_BE_ZERO: u32 = (1 << 0) | (1 << 2) | (1 << 4);
 
 /// The durations the timing namespace defines, in whole milliseconds: META
-/// (section 4.2), a `META.sectors` entry (4.5), a `PROF`'s `settings` block
-/// (4.3) and an `LROV` payload (4.6) all draw on these keys.
+/// (section 4.2, its `sectors` entries included), a `PROF`'s `settings` block
+/// (4.3) and an `LROV` payload (4.5) all draw on these keys.
 ///
 /// They are listed rather than taken from [`Timing`] because the rule is checked
 /// against the raw JSON, before the typed parse: a `*_ms` key the namespace does
@@ -780,7 +780,7 @@ impl<'a> Ctx<'a> {
             ));
         }
 
-        // Section 4.10: MULTI_SECTOR is set exactly when some layer carries more
+        // Section 4.9: MULTI_SECTOR is set exactly when some layer carries more
         // than one sector with data, so the flag and the table must agree either
         // way round.
         if self.header.multi_sector() != ltbl.is_multi_sector() {
@@ -889,7 +889,7 @@ impl<'a> Ctx<'a> {
         let mut references: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
         for (i, entry) in ltbl.entries.iter().enumerate() {
             // Every entry names a `LAYR` chunk, the ones with no run included:
-            // section 4.10 has no null convention for this field, unlike
+            // section 4.9 has no null convention for this field, unlike
             // `first_lrov`.
             if self.layr_descriptor(entry.first_layr).is_err() {
                 return Err(Error::new(
@@ -940,7 +940,7 @@ impl<'a> Ctx<'a> {
             }
         }
 
-        // Slices of one chunk do not overlap (section 4.10).
+        // Slices of one chunk do not overlap (section 4.9).
         slices.sort_unstable();
         for pair in slices.windows(2) {
             if pair[0].0 == pair[1].0 && pair[1].1 < pair[0].2 {
@@ -1163,7 +1163,7 @@ impl<'a> Ctx<'a> {
     /// Section 11.3's strict rule that each layer hashes to its stored leaf.
     ///
     /// A layer's leaf covers its sectors' slices concatenated in ascending
-    /// `sector_id` (section 4.11), which is what a reader reconstructs. This is a
+    /// `sector_id` (section 4.10), which is what a reader reconstructs. This is a
     /// second pass over the chunks, so that the REE checks keep their place in the
     /// check order.
     fn check_leaves(
@@ -1515,7 +1515,7 @@ fn is_uuid(text: &str) -> bool {
     true
 }
 
-/// `EXTD` rules from sections 11.2 and 4.13.
+/// `EXTD` rules from sections 11.2 and 4.12.
 fn check_extension(ext: &Extension) -> Result<()> {
     if ext.critical && !ext.is_implemented() {
         return Err(Error::new(

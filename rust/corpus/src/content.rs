@@ -1,5 +1,5 @@
 //! The content predicates the `META`, `PROF`, `LROV` and `PREV` checks are
-//! built from (§4.2, §4.3, §4.6, §4.7, §11.2).
+//! built from (§4.2, §4.3, §4.5, §4.6, §11.2).
 //!
 //! Each one answers a question the specification asks of a decoded chunk, so
 //! they are kept apart from the reader that walks the container: the checks
@@ -223,7 +223,7 @@ pub fn temperature_range_ok(meta: &Value) -> bool {
         })
 }
 
-/// §4.7 / §11.2 (strict): PNG signature followed by a well-formed IHDR.
+/// §4.6 / §11.2 (strict): PNG signature followed by a well-formed IHDR.
 ///
 /// Only the leading IHDR is inspected: the signature must be present, its
 /// declared length must be at least the 13 bytes of the fixed IHDR layout, and

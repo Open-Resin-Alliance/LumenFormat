@@ -35,7 +35,7 @@ pub struct Slice {
 }
 
 /// One `LAYR` chunk's frame: the sector it carries, the layers it covers, and the
-/// frame itself (spec 4.10).
+/// frame itself (spec 4.9).
 pub struct Frame {
     pub sector_id: u32,
     pub first_layer: u32,
@@ -76,7 +76,7 @@ pub struct LayerOptions<'a> {
     /// whose split overlay is empty (spec 5.5, 5.6).
     pub force_split: &'a [usize],
     /// Compress the frames without declaring their content size, which
-    /// `layr.content_size_present` refuses (spec 4.10).
+    /// `layr.content_size_present` refuses (spec 4.9).
     pub omit_content_size: bool,
     /// Train and publish a dictionary but compress the frames without it, so the
     /// file carries a `ZDIC` chunk no frame uses (`presence.zdic`).
@@ -87,7 +87,7 @@ pub struct LayerOptions<'a> {
 /// frame.
 enum Compressor {
     /// The bulk compressor, which declares each frame's decompressed size in its
-    /// header, as a writer MUST (spec 4.10).
+    /// header, as a writer MUST (spec 4.9).
     Declared(zstd::bulk::Compressor<'static>),
     /// A raw context with the content size flag cleared, for the one vector that
     /// pins what a reader does with a frame that declares nothing.
@@ -135,7 +135,7 @@ impl Compressor {
 ///
 /// The layer data is grouped twice. A slice is one `(layer, sector)`'s bytes, and
 /// the `LTBL` entry indexes it; a frame is one sector's data for one group of
-/// layers, and the `LAYR` chunk carries it (spec 4.9, 4.10). Sector 0 is primary
+/// layers, and the `LAYR` chunk carries it (spec 4.8, 4.9). Sector 0 is primary
 /// and implicitly present on every layer with data, so a layer that carries
 /// nothing anywhere still has one entry, for sector 0, with `data_size` 0.
 pub fn encode_layers(display: (usize, usize), layers: &[Layer], options: &LayerOptions) -> Layers {
@@ -248,7 +248,7 @@ pub fn encode_layers(display: (usize, usize), layers: &[Layer], options: &LayerO
         }
     }
 
-    // A writer MUST NOT suppress the dictionary id (spec 4.9), so each frame's
+    // A writer MUST NOT suppress the dictionary id (spec 4.8), so each frame's
     // header records what it was compressed with: check the vector's intent
     // against the frames rather than trusting the knobs.
     let wanted = if options.use_dict && !options.unused_zdic {
@@ -317,7 +317,7 @@ pub fn sparse_layers(count: usize, total: usize) -> Vec<Layer> {
     layers
 }
 
-/// One `LROV` chunk (spec 4.6): the timing deltas one `(layer, sector)` carries.
+/// One `LROV` chunk (spec 4.5): the timing deltas one `(layer, sector)` carries.
 ///
 /// The deltas are META's names in META's units, and the point they apply to is
 /// not in the payload at all - the entry that names the chunk places it, so a
@@ -486,7 +486,7 @@ pub fn content_chunks(spec: &VectorSpec, enc: &Layers, auth: Option<Chunk>) -> C
     }
 
     // One LROV chunk per (layer, sector) that carries overrides, ascending, so an
-    // entry can name its own chunk by directory index (spec 4.6).
+    // entry can name its own chunk by directory index (spec 4.5).
     let mut points: Vec<(u32, u32, u32)> = Vec::with_capacity(spec.overrides().len());
     for (index, over) in spec.overrides().iter().enumerate() {
         let point = (over.layer, over.sector_id);
@@ -551,7 +551,7 @@ pub fn content_chunks(spec: &VectorSpec, enc: &Layers, auth: Option<Chunk>) -> C
     Content { chunks, entries }
 }
 
-/// The layer table (spec 4.9): one 28-byte entry per `(layer, sector)`.
+/// The layer table (spec 4.8): one 28-byte entry per `(layer, sector)`.
 ///
 /// The entries of a layer are adjacent and ascending by `sector_id`, with the
 /// layer's first entry naming sector 0, which every layer with data carries.
@@ -745,7 +745,7 @@ pub fn vector_meta(
     json::obj(records)
 }
 
-/// The `LAYR` chunks exactly as stored (spec 4.10), in directory order.
+/// The `LAYR` chunks exactly as stored (spec 4.9), in directory order.
 ///
 /// The sizes come from the descriptor, so a sealed frame is described by the
 /// bytes that are actually there; the frame's own decompressed size and

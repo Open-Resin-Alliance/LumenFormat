@@ -212,7 +212,7 @@ impl Checks {
     }
 }
 
-/// One `LTBL` record (§4.8): a `(layer, sector)`'s slice of one `LAYR` chunk.
+/// One `LTBL` record (§4.7): a `(layer, sector)`'s slice of one `LAYR` chunk.
 ///
 /// The layer is not a field of the record - the table groups a layer's records
 /// together, so the layer is where the record sits rather than what it says.
@@ -312,7 +312,7 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
         });
     }
     // A record with a zero offset is unused, and every index the tables carry
-    // is an index into the whole directory rather than into this list (§4.8),
+    // is an index into the whole directory rather than into this list (§4.7),
     // so the index is kept beside the record rather than thrown away.
     let real: Vec<Chunk> = entries
         .iter()
@@ -368,7 +368,7 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
     checks.check("presence.meta", count(&real, b"META") == 1);
     checks.check("presence.ltbl", count(&real, b"LTBL") == 1);
     checks.check("presence.layr", count(&real, b"LAYR") >= 1);
-    // LHAS is optional (§4.11), and §10.3 forbids requiring an optional
+    // LHAS is optional (§4.10), and §10.3 forbids requiring an optional
     // mechanism in order to decode a file that does not use it - so its absence
     // is not a failure, and the checks over it below do not apply.
     let lhas_entries = find(&real, b"LHAS");
@@ -470,7 +470,7 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
                 spans.push(start..sectors.len());
                 break 'layers;
             };
-            // §4.8: only a layer's first entry counts further entries; a
+            // §4.7: only a layer's first entry counts further entries; a
             // non-zero count anywhere else is unaccounted-for structure.
             if offset > 0 && entry.additional_sector_count != 0 {
                 trailing_counts_null = false;
@@ -486,7 +486,7 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
     let layr_indices: HashSet<usize> = layr_chunks.iter().map(|chunk| chunk.index).collect();
     let lrov_indices: HashSet<usize> = lrov_chunks.iter().map(|chunk| chunk.index).collect();
 
-    // §4.8: the declared count, the sum over each layer's first entry, and the
+    // §4.7: the declared count, the sum over each layer's first entry, and the
     // end of the table are one number read three ways.
     let table_ends_here =
         u128::from(declared_total) * u128::from(entry_size) + 16 == ltbl.len() as u128;
@@ -498,7 +498,7 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
     // so the walk from layer 0 stops inside the table. A grouping that runs off
     // the end never reaches the last layer, whether or not the counts add up.
     checks.check("ltbl.layer_index_range", !truncated_table);
-    // §4.8: a layer's sectors ascend by id, and no id repeats within a layer.
+    // §4.7: a layer's sectors ascend by id, and no id repeats within a layer.
     // Ascending is weak here and uniqueness is the separate rule, so a swap and
     // a repeat are different defects rather than one reported twice.
     checks.check(
@@ -523,7 +523,7 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
         "ltbl.first_entry_is_sector_zero",
         spans.iter().all(|span| sectors[span.start].sector_id == 0),
     );
-    // §4.8: `first_layr` names a `LAYR` chunk, and `first_lrov` is `0` or names
+    // §4.7: `first_layr` names a `LAYR` chunk, and `first_lrov` is `0` or names
     // an `LROV` chunk. Both are directory indices - positions in the whole
     // directory, not in the live chunks - which is why [`Chunk`] carries one.
     // The rule that `0` means "no overrides" is decided in the content phase,
@@ -550,7 +550,7 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
 
     // ---- LAYR -----------------------------------------------------------
     // One chunk per (sector, layer group): a clear `layr_version`, then a single
-    // zstd frame over the group's concatenated layer data (§4.10). There is no
+    // zstd frame over the group's concatenated layer data (§4.9). There is no
     // block table: the chunk is the unit, and the frame's own header carries the
     // output size a reader allocates from.
     if layr_chunks.is_empty() {
@@ -862,7 +862,7 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
     // ---- PROF / LROV / PREV ---------------------------------------------
     // Optional content chunks. PROF and LROV go through the same
     // sealed/compressed path as META; PREV is uncompressed but may carry
-    // its own ENCRYPTED bit (§4.7), independent of the file-level flag.
+    // its own ENCRYPTED bit (§4.6), independent of the file-level flag.
     if let Some(chunk) = first(&real, b"PROF") {
         let Some(prof_plain) = content.bytes(&chunk) else {
             return checks;
@@ -926,7 +926,7 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
         payloads.insert(*b"PROF", Payload::One(prof_plain));
     }
 
-    // One `LROV` chunk per (layer, sector) that has overrides (§4.6). The
+    // One `LROV` chunk per (layer, sector) that has overrides (§4.5). The
     // payload is a pure delta: the sparse timing fields that point overrides,
     // and nothing else - a sector's identity and its base timing live in
     // `META.sectors`, once, rather than on every layer that touches it.
@@ -943,7 +943,7 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
                     lrov_bodies.insert(chunk.index, Value::Object(fields));
                 }
                 // A payload this reader cannot apply is a shape defect, not a
-                // capability statement: §4.6's refusal is prose, and the file
+                // capability statement: §4.5's refusal is prose, and the file
                 // is wrong rather than merely unreadable to one reader.
                 _ => lrov_json = false,
             }
@@ -955,7 +955,7 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
                 "lrov.time_integer",
                 lrov_bodies.values().all(time_fields_integer),
             );
-            // §4.8: each `LROV` chunk is one `(layer, sector)`'s override set.
+            // §4.7: each `LROV` chunk is one `(layer, sector)`'s override set.
             // Two rules read that, and they are different defects, so they are
             // different verdicts - each recorded here in the order the corpus
             // asserts, the "no overrides" claim first.
@@ -1049,7 +1049,7 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
     }
 
     // ---- VOXL -----------------------------------------------------------
-    // §4.12: the embedded scene is opaque to LUMEN, so §11.2 only asks a strict
+    // §4.11: the embedded scene is opaque to LUMEN, so §11.2 only asks a strict
     // reader to recognize which generation of VOXL it is holding. Whether the
     // scene is *valid* is VOXL's business: a print reader must never reject a
     // file over its embedded scene, so loose mode records nothing here.
@@ -1067,7 +1067,7 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
     }
 
     // ---- EXTD -----------------------------------------------------------
-    // §4.13: vendor or future-standard extensions, any number of them. The
+    // §4.12: vendor or future-standard extensions, any number of them. The
     // fixed frame is `ext_version (u32) || ext_type (4 bytes) || ext_data`, and
     // the payload is zstd-compressed unless the extension says otherwise. EXTD
     // is required neither to be sealed nor to be clear, and this reader
@@ -1094,7 +1094,7 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
                 })
             }),
         );
-        // Descriptor flags: bits 8-23 are `vendor_id` (§4.13), bit 24 is
+        // Descriptor flags: bits 8-23 are `vendor_id` (§4.12), bit 24 is
         // `critical`; bits 0-3, 5-7 (bit 4 is the standard ENCRYPTED flag) and
         // 25-31 are reserved and must be 0.
         checks.check(
@@ -1125,7 +1125,7 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
     let mut dict_id = 0u32;
     // A dictionary the frames may use: a `ZDIC` chunk that declares one. A
     // null `ZDIC` - one whose `dict_size` is `0` - is a placeholder rather than
-    // a dictionary, and §4.9 speaks of "more than one non-null" chunk, so it
+    // a dictionary, and §4.8 speaks of "more than one non-null" chunk, so it
     // neither supplies bytes nor demands that the frames report its id.
     let mut zdic_present = false;
     checks.check("zdic.single", zdic_entries.len() <= 1);
@@ -1141,7 +1141,7 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
         dict_id = declared_dict_id;
         dictionary = at(&zdic, 12, u128::from(dict_size)).to_vec();
         checks.check("zdic.version", version == 1);
-        // §4.9: `dict_size` is bounded by zstd's own maximum, and the chunk has
+        // §4.8: `dict_size` is bounded by zstd's own maximum, and the chunk has
         // to hold that many bytes.
         checks.check(
             "zdic.dict_size",
@@ -1154,7 +1154,7 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
     };
 
     // ---- LAYR frames ----------------------------------------------------
-    // §4.10: one frame per chunk, its dictionary id the chunk's, its declared
+    // §4.9: one frame per chunk, its dictionary id the chunk's, its declared
     // content size the reader's allocation. The clear version field is not part
     // of the sealed unit, so a frame is the container minus its four bytes.
     let frame_of = |chunk: &Chunk| -> Option<&[u8]> {
@@ -1218,7 +1218,7 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
     checks.check("layr.content_size_present", content_sizes_present);
     checks.check("layr.allocation_bound", allocation_ok);
     if zdic_present {
-        // Every frame that reports a dictionary reports *this* one: §4.9
+        // Every frame that reports a dictionary reports *this* one: §4.8
         // requires the one chunk to be the dictionary for all of them.
         //
         // A frame that reports none is not this rule's business - "no
@@ -1246,7 +1246,7 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
             dict_ids.iter().all(|id| *id == Some(0)),
         );
     }
-    // §4.9 / §11.1: a dictionary is present exactly when the frames use one.
+    // §4.8 / §11.1: a dictionary is present exactly when the frames use one.
     // Recorded after the two rules that say what each side may be, so a file
     // that breaks one of those is reported under it rather than here.
     let frames_use_dictionary = dict_ids.iter().any(|id| id.is_some_and(|id| id != 0));
@@ -1254,7 +1254,7 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
     checks.check("layr.frame_decompressed_size", frames_ok);
 
     // ---- slices ---------------------------------------------------------
-    // §4.8: a slice lies inside its chunk's decompressed output, and two slices
+    // §4.7: a slice lies inside its chunk's decompressed output, and two slices
     // of one chunk do not overlap - the chunk is shared by the layer group it
     // holds, so its slices are the only thing that tells them apart.
     checks.check(
@@ -1272,7 +1272,7 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
 
     // ---- layer data / leaf hashes ---------------------------------------
     // A layer's data is its sectors' slices concatenated in ascending
-    // `sector_id` - the order the table lists them in (§4.11).
+    // `sector_id` - the order the table lists them in (§4.10).
     let mut layers: Vec<Vec<u8>> = Vec::with_capacity(spans.len());
     for span in &spans {
         let mut data = Vec::new();
@@ -1320,7 +1320,7 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
                 u128::from(entry.data_offset),
                 u128::from(entry.data_size),
             );
-            // §4.8: a (layer, sector) with no bytes carries no tag and no mask -
+            // §4.7: a (layer, sector) with no bytes carries no tag and no mask -
             // that is the canonical encoding of "nothing here", not a defect.
             if slice.is_empty() {
                 continue;

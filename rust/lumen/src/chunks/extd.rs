@@ -1,5 +1,5 @@
 //! The `EXTD` chunk: vendor and future-standard extensions
-//! ([`spec/07-scene-chunks.md`] section 4.13).
+//! ([`spec/07-scene-chunks.md`] section 4.12).
 
 use crate::check::Check;
 use crate::container::CHUNK_FLAG_ENCRYPTED;
@@ -94,7 +94,7 @@ impl Extension {
     /// Whether this crate implements the extension.
     ///
     /// It implements none: an extension's payload is vendor-defined and is
-    /// copied through, never interpreted (section 4.13). A downstream reader
+    /// copied through, never interpreted (section 4.12). A downstream reader
     /// that does implement one overrides this.
     pub fn is_implemented(&self) -> bool {
         false

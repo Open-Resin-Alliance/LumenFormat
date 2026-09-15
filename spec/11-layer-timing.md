@@ -48,11 +48,11 @@ blended over the ranges its own sector supplies.
    taken verbatim from the base the sector resolves - META's, or a `META.sectors` entry's
    where it carries them.
 3. **LROV overrides:** the pair's layer table entry names its `LROV` chunk, or `0` for none
-   ([§4.8](06-layer-data.md#48-ltbl---layer-table-chunk)). The fields that chunk carries
+   ([§4.7](06-layer-data.md#47-ltbl---layer-table-chunk)). The fields that chunk carries
    replace the interpolated values, field by field; a field it omits keeps the value the
    sector resolved, and no second chunk competes with it. A conforming reader
    MUST apply them: a printer that cannot honor overrides refuses the file rather than
-   print these layers at the wrong exposure ([§4.6](05-print-control.md#46-lrov---layer-override-chunk)).
+   print these layers at the wrong exposure ([§4.5](05-print-control.md#45-lrov---layer-override-chunk)).
 
 This models the existing bottom/normal/transition behavior while allowing arbitrary
 per-pair overrides.

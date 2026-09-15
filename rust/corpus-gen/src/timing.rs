@@ -147,7 +147,7 @@ struct Resolved {
 }
 
 /// One `LROV` chunk's contents: the timing deltas one `(layer, sector)` carries
-/// (spec 4.6). Which point it belongs to is not in the payload; the entry that
+/// (spec 4.5). Which point it belongs to is not in the payload; the entry that
 /// names the chunk is what says so, and that is the point it is built with here.
 pub struct Override {
     pub layer: u32,
@@ -247,7 +247,7 @@ impl<'a> Pipeline<'a> {
 
         // A point has exactly one override set or none, so there is nothing to
         // fold: the entry that names the chunk is the only thing that places it
-        // (spec 4.6).
+        // (spec 4.5).
         if let Some(over) = self
             .overrides
             .iter()

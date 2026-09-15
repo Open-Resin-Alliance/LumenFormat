@@ -459,7 +459,7 @@ impl<'a> LumenFile<'a> {
     /// The stored bytes of layer `index`: its sectors' slices, concatenated in
     /// ascending `sector_id`.
     ///
-    /// This is the byte range `LHAS` hashes for the layer (section 4.11), which
+    /// This is the byte range `LHAS` hashes for the layer (section 4.10), which
     /// is why it is the concatenation rather than any one sector's data.
     fn layer_data(&self, index: u32) -> Result<Vec<u8>> {
         let entries = self.entries_of(index)?;
@@ -540,7 +540,7 @@ impl<'a> LumenFile<'a> {
     /// The returned values already carry the sector's `META.sectors` entry, the
     /// bottom and transition blend with the counts that sector carries or
     /// inherits, and the `(layer, sector)`'s own `LROV` payload. Overrides are
-    /// not opt-in ([`spec/05-print-control.md`] section 4.6): a reader that does
+    /// not opt-in ([`spec/05-print-control.md`] section 4.5): a reader that does
     /// not apply them must refuse a file that carries an `LROV` chunk, because
     /// printing the layer at META's exposure instead of its override fails
     /// quietly. This method is therefore the only supported way to read a

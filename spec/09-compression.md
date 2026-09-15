@@ -36,11 +36,11 @@ compression of REE data.
 
 1. Encode every `(layer, sector)` slice to an REE stream, in layer order within each sector.
 2. Group each sector's layers into contiguous runs, and make one frame - one `LAYR` chunk -
-   per run ([§4.10](06-layer-data.md#410-layr---layer-data-chunk)). Recommended: 32–64
+   per run ([§4.9](06-layer-data.md#49-layr---layer-data-chunk)). Recommended: 32–64
    layers per frame.
 3. Sample the first `min(256, total_layers)` layers for a training set.
 4. Train a zstd dictionary with `ZDICT_trainFromBuffer()`.
-5. Store the dictionary in a `ZDIC` chunk ([§4.9](06-layer-data.md#49-zdic---zstd-dictionary-chunk)).
+5. Store the dictionary in a `ZDIC` chunk ([§4.8](06-layer-data.md#48-zdic---zstd-dictionary-chunk)).
 6. Compress each frame independently with `ZSTD_compress_usingDict()`.
 
 The dictionary captures statistical patterns in REE data. Because adjacent layers

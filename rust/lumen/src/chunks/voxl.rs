@@ -1,5 +1,5 @@
 //! The `VOXL` chunk: an embedded scene, opaque to LUMEN
-//! ([`spec/07-scene-chunks.md`] section 4.12).
+//! ([`spec/07-scene-chunks.md`] section 4.11).
 //!
 //! Nothing here parses a scene. The transport contract is that the bytes come
 //! back out unchanged; recognizing which generation a payload is, so a slicer

@@ -2,28 +2,7 @@
 
 <!-- Part of the LUMEN Format Specification. Section numbers (`§3.1`) are stable anchors across the parts. -->
 
-## 4.5 (Withdrawn) SECT - Sector Definition Chunk
-
-Earlier drafts defined a `SECT` chunk carrying a sector's name, material and colour and
-the timing fields that sector started from. It is gone as of this revision and no
-conforming file carries one. A sector is now structural - an exposure group whose data
-is its own slice of the layer stream - so what `SECT` carried has three homes and none is
-a chunk of its own:
-
-- A sector's **base timing** and **optional identity** are META's, in its `sectors` array
-  ([§4.2](03-chunks.md#42-meta---metadata-chunk)): one entry per sector `>= 1`, carrying
-  `sector_id` and the fields that sector overrides, in META's names and units. Sector 0
-  has no entry and resolves from META alone.
-- A sector's **mask data** for a layer is a slice of the `LAYR` chunk for that
-  `(sector, layer group)` ([§4.10](06-layer-data.md#410-layr---layer-data-chunk)), which
-  the layer table addresses ([§4.8](06-layer-data.md#48-ltbl---layer-table-chunk)).
-- A sector's **per-`(layer, sector)` timing deltas** are an `LROV` chunk
-  ([§4.6](#46-lrov---layer-override-chunk)).
-
-The section number is kept so that references to §4.6 and later keep resolving, and the
-sector model itself is specified in [§7](10-sectors.md#7-multi-material--sector-model).
-
-## 4.6 LROV - Layer Override Chunk
+## 4.5 LROV - Layer Override Chunk
 
 **Type tag:** `LROV` (`0x4C 0x52 0x4F 0x56`). Optional, multiple allowed - one chunk per
 `(layer, sector)` pair that has overrides.
@@ -43,7 +22,7 @@ META's field names:
 
 Which pair the chunk belongs to is not in the payload: the pair's layer table entry carries
 `first_lrov`, either `0` (no overrides) or the directory index of the chunk holding them
-([§4.8](06-layer-data.md#48-ltbl---layer-table-chunk)). Nothing else points at the chunk, and
+([§4.7](06-layer-data.md#47-ltbl---layer-table-chunk)). Nothing else points at the chunk, and
 every `LROV` chunk is named by exactly one entry, so a chunk's values are applied to the pair
 that names it and to no other.
 
@@ -71,14 +50,14 @@ than print that pair at the values its sector resolves to on its own.
 The reason is that this is the one degradation a printer cannot notice. A layer printed at
 its sector's exposure instead of its override is a print that fails quietly: the file is
 structurally valid, every checksum still passes, and nothing in the output says a chunk was
-ignored. So the rule is the same one [§4.13](07-scene-chunks.md#413-extd---extension-chunk)
+ignored. So the rule is the same one [§4.12](07-scene-chunks.md#412-extd---extension-chunk)
 applies to an unimplemented `critical` extension, and the same principle as
 [§7.2](10-sectors.md#72-sector-0-convention-and-single-material-degradation): a capability a
 reader lacks makes a file unprintable to it, not printable with approximations. A slicer
 that knows its target cannot honor overrides should not write them; a printer that meets
 them must.
 
-## 4.7 PREV - Preview Image Chunk
+## 4.6 PREV - Preview Image Chunk
 
 **Type tag:** `PREV` (`0x50 0x52 0x45 0x56`). Optional, multiple allowed.
 

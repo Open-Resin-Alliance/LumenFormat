@@ -16,20 +16,20 @@ pub const HEADER_SIZE: usize = 32;
 pub const DESCRIPTOR_SIZE: usize = 32;
 /// Payloads are aligned to this many bytes (spec 3.2 recommends 8).
 pub const CHUNK_ALIGN: usize = 8;
-/// One LTBL entry (spec 4.9).
+/// One LTBL entry (spec 4.8).
 pub const LTBL_ENTRY_SIZE: usize = 28;
 /// One LTBL header.
 pub const LTBL_HEADER_SIZE: usize = 16;
-/// The offset of `entry_count` in the LTBL header (spec 4.9).
+/// The offset of `entry_count` in the LTBL header (spec 4.8).
 pub const LTBL_ENTRY_COUNT: usize = 12;
-/// Field offsets inside one LTBL entry (spec 4.9).
+/// Field offsets inside one LTBL entry (spec 4.8).
 pub const LTBL_DATA_SIZE: usize = 0;
 pub const LTBL_FIRST_LROV: usize = 4;
 pub const LTBL_FIRST_LAYR: usize = 8;
 pub const LTBL_ADDITIONAL_SECTORS: usize = 12;
 pub const LTBL_DATA_OFFSET: usize = 16;
 pub const LTBL_SECTOR_ID: usize = 24;
-/// The LAYR container's version field, ahead of the frame (spec 4.10).
+/// The LAYR container's version field, ahead of the frame (spec 4.9).
 pub const LAYR_VERSION: u32 = 1;
 
 pub const FLAG_MULTI_SECTOR: u32 = 0x02;
@@ -43,7 +43,7 @@ pub struct Chunk {
     pub payload: Vec<u8>,
     pub compressed: bool,
     pub flags: u32,
-    /// A PREV may be sealed even when the file itself is encrypted (spec 4.7, 9.1).
+    /// A PREV may be sealed even when the file itself is encrypted (spec 4.6, 9.1).
     pub seal: bool,
     /// A framed, encrypted unit; `size_uncompressed` is the plaintext it yields
     /// after decrypt and decompress, while the stored length includes the AEAD
@@ -223,7 +223,7 @@ pub fn build_file(chunks: &[Chunk], header_flags: u32) -> (Vec<u8>, Layout) {
     )
 }
 
-/// The LTBL exactly as written to the file (spec 4.9).
+/// The LTBL exactly as written to the file (spec 4.8).
 ///
 /// Read back rather than recomputed, so the manifest describes the bytes that are
 /// actually there. An entry does not carry its layer, so the walk takes it from

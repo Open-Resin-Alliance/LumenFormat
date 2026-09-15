@@ -34,7 +34,7 @@ pub const SEALED_CHUNK_TYPES: [&[u8; 4]; 6] =
 /// §9.1: chunk types that must stay in the clear.
 pub const CLEAR_CHUNK_TYPES: [&[u8; 4]; 3] = [b"HEAD", b"AUTH", b"LTBL"];
 
-/// PREV's sealing is optional (§4.7), so it is deliberately absent from
+/// PREV's sealing is optional (§4.6), so it is deliberately absent from
 /// [`SEALED_CHUNK_TYPES`]: a clear PREV beside a sealed one is not a defect. Its
 /// `ENCRYPTED` bit still has to be honoured when it is set, so the decrypt phase
 /// covers it too.

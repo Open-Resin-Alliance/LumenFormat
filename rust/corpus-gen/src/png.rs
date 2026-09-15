@@ -1,4 +1,4 @@
-//! The preview payloads (spec 4.7): minimal deterministic 8-bit RGB PNGs.
+//! The preview payloads (spec 4.6): minimal deterministic 8-bit RGB PNGs.
 
 use crate::deflate;
 

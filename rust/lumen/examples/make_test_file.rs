@@ -702,6 +702,6 @@ fn describe(bytes: &[u8], password: Option<&str>) {
     } else {
         // Section 10.3: a reader must not require an optional mechanism, so a
         // file without LHAS is readable and there is simply nothing to verify.
-        println!("LHAS: absent, which section 4.11 permits; nothing to verify against");
+        println!("LHAS: absent, which section 4.10 permits; nothing to verify against");
     }
 }

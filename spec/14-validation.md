@@ -11,7 +11,7 @@ rule under that name, which is also how the conformance corpus names it
 This revision made a sector structural - one `LAYR` chunk and one optional `LROV` chunk per
 `(layer, sector)`, addressed by the layer table - so the checks that named the old shapes are
 retired, and their names must not appear in a conforming validator's report: `sect.*` and
-`presence.sect` (the chunk is withdrawn, [§4.5](05-print-control.md#45-withdrawn-sect---sector-definition-chunk));
+`presence.sect` (the chunk is withdrawn);
 `sector.count_match` and the other rules over the in-band sector framing, which no longer
 exists; `layr.block_*` and the rules over the `layr_header` and its block table;
 the `ltbl.*` rules that named a `block_index` (`ltbl.block_index_in_range`) or a block's
@@ -36,7 +36,7 @@ companion field left to contradict. What replaced them is named in the lists bel
   when `size_compressed > 0`, and `[offset, offset + size_uncompressed)` when
   `size_compressed == 0`. Exception: null descriptors (`offset == 0`). A `LAYR` chunk's
   extent follows the same rule: its `size_uncompressed` is the container's byte length, and a
-  sealed container's is `size_compressed` ([§4.10](06-layer-data.md#410-layr---layer-data-chunk)).
+  sealed container's is `size_compressed` ([§4.9](06-layer-data.md#49-layr---layer-data-chunk)).
 - [ ] `HEAD` chunk present (`presence.head`) and is the first chunk, at the offset immediately
   after the 32-byte header (`dir.head_first`).
 - [ ] `META` chunk present (`presence.meta`).
@@ -88,19 +88,19 @@ companion field left to contradict. What replaced them is named in the lists bel
 - [ ] If `PROF.settings.cure_curve` present, `dp_um > 0`, `ec_mj_cm2 > 0.0`, `e0_mj_cm2 >= 0.0` (`prof.cure_curve`).
 - [ ] If `PROF` chunk present with `profile_uuid`, the UUID string is well-formed (36 characters, 8-4-4-4-12 hex pattern, `prof.profile_uuid`).
 - [ ] If `PROF.materials` is present, it satisfies the same shape rules as `META.materials` (`prof.materials_shape`).
-- [ ] If `PREV` chunk present, `preview_role` is 0–3 and reserved flag bits 5–31 are 0 (`prev.flags`, [§4.7](05-print-control.md#47-prev---preview-image-chunk)).
-- [ ] (Strict mode) If `PREV` chunk present, its payload begins with the PNG signature and its `IHDR` is well-formed (`prev.png_signature`, [§4.7](05-print-control.md#47-prev---preview-image-chunk)).
+- [ ] If `PREV` chunk present, `preview_role` is 0–3 and reserved flag bits 5–31 are 0 (`prev.flags`, [§4.6](05-print-control.md#46-prev---preview-image-chunk)).
+- [ ] (Strict mode) If `PREV` chunk present, its payload begins with the PNG signature and its `IHDR` is well-formed (`prev.png_signature`, [§4.6](05-print-control.md#46-prev---preview-image-chunk)).
 - [ ] If `LHAS` chunk present, recompute Merkle root from `layer_hashes` and verify it matches `merkle_root` (`lhas.root_recompute`).
 - [ ] (Strict mode) If `LHAS` chunk present, decompress and hash each layer; verify against `layer_hashes` (`lhas.leaf_match`).
-- [ ] (Strict mode) If `VOXL` chunk present, the payload is recognizable as VOXL: it begins with the V2 magic `VOXL` or with the V1 JSON document marker `{` (`voxl.signature`) ([§4.12](07-scene-chunks.md#412-voxl---embedded-scene-chunk)). Whether it is a *valid* VOXL file is VOXL's business, checked by whatever parses the scene; a print reader never needs to know.
-- [ ] Every `EXTD` payload is at least 8 bytes: `ext_version` and `ext_type` make up the fixed part of the frame (`extd.frame`, [§4.13](07-scene-chunks.md#413-extd---extension-chunk)).
+- [ ] (Strict mode) If `VOXL` chunk present, the payload is recognizable as VOXL: it begins with the V2 magic `VOXL` or with the V1 JSON document marker `{` (`voxl.signature`) ([§4.11](07-scene-chunks.md#411-voxl---embedded-scene-chunk)). Whether it is a *valid* VOXL file is VOXL's business, checked by whatever parses the scene; a print reader never needs to know.
+- [ ] Every `EXTD` payload is at least 8 bytes: `ext_version` and `ext_type` make up the fixed part of the frame (`extd.frame`, [§4.12](07-scene-chunks.md#412-extd---extension-chunk)).
 - [ ] `EXTD` `ext_type` is four ASCII characters (`extd.ext_type`).
-- [ ] `EXTD` reserved flag bits - 0-3, 5-7 and 25-31 - are 0 (`extd.flags`, [§4.13](07-scene-chunks.md#413-extd---extension-chunk)).
-- [ ] No `EXTD` chunk that a reader does not implement carries `critical = 1` (`extd.critical`): such a file is unprintable to that reader rather than printable with approximations ([§4.13](07-scene-chunks.md#413-extd---extension-chunk)).
+- [ ] `EXTD` reserved flag bits - 0-3, 5-7 and 25-31 - are 0 (`extd.flags`, [§4.12](07-scene-chunks.md#412-extd---extension-chunk)).
+- [ ] No `EXTD` chunk that a reader does not implement carries `critical = 1` (`extd.critical`): such a file is unprintable to that reader rather than printable with approximations ([§4.12](07-scene-chunks.md#412-extd---extension-chunk)).
 
 ### 11.3 Layer Data Validation (post-decompression)
 
-- [ ] Before decompressing, a `LAYR` frame declares its content size (`layr.content_size_present`). The descriptor does not carry the frame's output length, so a frame without one is rejected rather than allocated for ([§4.10](06-layer-data.md#410-layr---layer-data-chunk)).
+- [ ] Before decompressing, a `LAYR` frame declares its content size (`layr.content_size_present`). The descriptor does not carry the frame's output length, so a frame without one is rejected rather than allocated for ([§4.9](06-layer-data.md#49-layr---layer-data-chunk)).
 - [ ] The declared content size is at most the bound the chunk's slices justify (grayscale REE costs at most about 5 bytes per pixel plus framing per slice, `layr.allocation_bound`), so a corrupt or hostile chunk cannot force an unbounded allocation.
 - [ ] Decompressing a `LAYR` frame succeeds and yields exactly the size the frame declares, and no more (`layr.frame_decompressed_size`).
 - [ ] A frame's zstd dictionary ID equals `ZDIC.dict_id` when `ZDIC` is present (`layr.dict_id_match`, `zdic.dict_id_match`), and is `0` when it is absent (`layr.dict_id_absent`).
@@ -140,7 +140,7 @@ companion field left to contradict. What replaced them is named in the lists bel
   chunks and fields - ones this revision does not define, or that the reader has no use
   for, such as `PREV`, `PROF` or `LHAS`. Skipping never reaches a chunk the reader must act
   on: an `LROV` chunk a reader cannot honor makes the file unprintable to it, not printable
-  without overrides ([§4.6](05-print-control.md#46-lrov---layer-override-chunk)).
+  without overrides ([§4.5](05-print-control.md#45-lrov---layer-override-chunk)).
 - **Strict** (file verification tools): Enforce all semantic validations. Warn on
   non-critical issues, error on critical ones.
 
@@ -168,7 +168,7 @@ chunk directory and the trailer - and each invalid vector fails exactly one name
 from this section. Each valid vector also records the settings a conforming reader must
 resolve for a sample of `(layer, sector)` points, which pins the [§8](11-layer-timing.md#8-per-layer-settings-model)
 pipeline - base values, bottom and transition blending, absent-field defaults, and the
-`LROV` overrides a reader is required to apply ([§4.6](05-print-control.md#46-lrov---layer-override-chunk)) -
+`LROV` overrides a reader is required to apply ([§4.5](05-print-control.md#45-lrov---layer-override-chunk)) -
 rather than only the bytes. Compressed payloads are pinned by property rather than by byte,
 because zstd output is not stable across versions. The encrypted vectors carry their
 test password and recipient key in the manifest.
