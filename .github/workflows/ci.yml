@@ -28,14 +28,15 @@ env:
 
 jobs:
   # Formatting, lints, the full test suite, and the packaging path an actual
-  # release goes through. `--locked` throughout, because the committed lock is
-  # what CI reproduces and what the declared minimum version is verified against.
+  # release goes through. `--locked` throughout, because the committed workspace
+  # lock is what CI reproduces and what the declared minimum version is verified
+  # against.
   rust:
     name: Format, lint, test and package
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: rust/lumen
+        working-directory: rust
     steps:
       - uses: actions/checkout@v4
 
@@ -43,33 +44,35 @@ jobs:
         run: rustup toolchain install stable --profile minimal --component clippy --component rustfmt
 
       - name: Formatting
-        run: cargo +stable fmt --check
+        run: cargo +stable fmt --all --check
 
       # clippy carries rustc's own lints too, so this is the one gate that has to
-      # stay at zero warnings. Nothing sets RUSTFLAGS globally: that would apply
-      # to dependency builds, where another crate's warning is not our failure.
+      # stay at zero warnings - across all three crates, since the corpus tools are
+      # as load-bearing as the library. Nothing sets RUSTFLAGS globally: that would
+      # apply to dependency builds, where another crate's warning is not our failure.
       - name: Lints
-        run: cargo +stable clippy --all-targets --locked -- -D warnings
+        run: cargo +stable clippy --workspace --all-targets --locked -- -D warnings
 
       # Unit, corpus conformance, round trip and doc tests. The conformance tests
-      # read test-vectors/ beside this crate, which is why they run here.
+      # read test-vectors/ beside the workspace, which is why they run here.
       - name: Tests
-        run: cargo +stable test --locked
+        run: cargo +stable test --workspace --locked
 
       # The step that caught two real defects before the first release: a crate
       # that cannot package, or whose tests cannot run once unpacked, is not
       # publishable even when its tests pass in the working directory.
       - name: The crate packages and verifies
-        run: cargo +stable publish --dry-run --locked
+        run: cargo +stable publish -p lumen-format --dry-run --locked
 
   # The declared rust-version is a claim about consumers, so it is checked the
   # same way the stable job is checked: the whole suite, against the same lock.
+  # Only the published crate carries the claim; the corpus tools are not shipped.
   msrv:
     name: Minimum supported Rust version
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: rust/lumen
+        working-directory: rust
     steps:
       - uses: actions/checkout@v4
 
@@ -77,7 +80,7 @@ jobs:
         run: rustup toolchain install 1.85.0 --profile minimal
 
       - name: Tests on the declared floor
-        run: cargo +1.85.0 test --locked
+        run: cargo +1.85.0 test -p lumen-format --locked
 
   # DragonFruit builds this crate for its webview, so the wasm target is a real
   # consumer requirement rather than a nicety. zstd compiles C, so the host needs
@@ -87,7 +90,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: rust/lumen
+        working-directory: rust
     steps:
       - uses: actions/checkout@v4
 
@@ -100,38 +103,41 @@ jobs:
           rustup target add wasm32-unknown-unknown
 
       - name: Check the DragonFruit target
-        run: cargo +stable check --lib --locked --target wasm32-unknown-unknown
+        run: cargo +stable check -p lumen-format --lib --locked --target wasm32-unknown-unknown
 
-  # Two independent implementations, checking each other in both directions.
-  # `verify_vectors.py` and this crate share no code, so:
-  #   - the corpus itself must validate under the specification's own reader, and
-  #   - files this crate writes must pass that same reader, decrypted with the
-  #     credentials the encoder itself drew.
-  # Neither claim is provable by this crate's own tests.
-  cross-check:
-    name: Cross-implementation check
+  # Three independent readings of the specification, checked against each other.
+  # The generator, the validator and the crate share no code, so:
+  #   - the committed corpus must be exactly what the generator produces,
+  #   - that corpus must validate under the specification's own reader, and
+  #   - files the crate writes must pass that same reader.
+  # No single one of those is provable by the crate's own tests.
+  corpus:
+    name: Corpus and cross-implementation check
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rust
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
+      - name: Install the toolchain
+        run: rustup toolchain install stable --profile minimal
 
-      - name: Install the corpus validator's dependencies
-        run: python -m pip install --quiet zstandard cryptography argon2-cffi
+      # The vectors are generated artifacts, so the repository's own rule for them
+      # is the gate: regenerate, and require the tree to come back unchanged. This
+      # is what would catch a hand-edited vector, or a generator that drifted from
+      # the files it is supposed to produce.
+      - name: The committed corpus is what the generator produces
+        run: |
+          cargo +stable run --release --locked -p lumen-corpus-gen --bin make_vectors
+          git diff --exit-code -- test-vectors
 
       - name: The committed corpus validates
-        working-directory: test-vectors
-        run: python verify_vectors.py
-
-      - name: Install Rust
-        run: rustup toolchain install stable --profile minimal
+        run: cargo +stable run --release --locked -p lumen-corpus --bin verify_vectors
 
       - name: Generate a file with the crate
         run: |
-          cargo +stable run --locked --manifest-path rust/lumen/Cargo.toml \
-            --example make_test_file -- "$RUNNER_TEMP/sample"
+          cargo +stable run --locked -p lumen-format --example make_test_file -- "$RUNNER_TEMP/sample"
 
       - name: Validate the crate's output with the corpus reader
-        run: python test-vectors/cross_check.py "$RUNNER_TEMP/sample"
+        run: cargo +stable run --release --locked -p lumen-corpus --bin cross_check -- "$RUNNER_TEMP/sample"

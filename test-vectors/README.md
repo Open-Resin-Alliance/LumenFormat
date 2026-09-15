@@ -11,42 +11,40 @@ LUMEN v1.0 and are validated against it.
 | `valid/*.lumen` | Files a conforming reader must accept |
 | `invalid/*.lumen` | Files a conforming reader must reject, each failing the check its manifest entry names |
 | `manifest.json` | Golden data for every vector: sizes, offsets, block table, per-layer hashes, Merkle root, CRC-32C, and the credentials and parameters for encrypted vectors |
-| `make_vectors.py` | Reference encoder that regenerates the corpus from the specification |
-| `verify_vectors.py` | Independent reader and validator |
-| `cross_check.py` | Points that validator at files the Rust implementation wrote; see [`../rust/lumen/`](../rust/lumen/) |
+| [`../rust/corpus-gen`](../rust/corpus-gen) | `make_vectors`: the reference encoder that regenerates the corpus from the specification |
+| [`../rust/corpus`](../rust/corpus) | `verify_vectors`: the independent reader and validator. `cross_check` points that same reader at files the reference crate wrote |
 
-`verify_vectors.py` shares no code with `make_vectors.py`: the primitives and the
-reader logic are reimplemented from the spec. Agreement between them is therefore
-evidence that the specification is unambiguous, not that one module is
-self-consistent.
+`verify_vectors` shares no code with `make_vectors`, and neither depends on the
+reference crate: the primitives and the reader logic are reimplemented from the spec.
+Agreement between them is therefore evidence that the specification is unambiguous,
+not that one module is self-consistent.
 
 ## Running
 
 ```sh
-pip install zstandard cryptography argon2-cffi
-python verify_vectors.py        # validate the committed corpus
-python verify_vectors.py -v     # print every individual check
-python make_vectors.py          # regenerate valid/, invalid/ and manifest.json
+cd rust
+cargo run --release -p lumen-corpus --bin verify_vectors         # validate the committed corpus
+cargo run --release -p lumen-corpus --bin verify_vectors -- -v   # print every individual check
+cargo run --release -p lumen-corpus-gen --bin make_vectors       # regenerate valid/, invalid/ and manifest.json
 ```
 
-`cross_check.py` runs `verify_vectors.py` against a file written by the Rust
-implementation rather than against the committed corpus, which checks the
-opposite direction of the same claim - an independent reader accepting our
-writer's bytes. It needs those files first:
+`cross_check` runs the same validator against files the reference crate wrote rather
+than against the committed corpus, which checks the opposite direction of the same
+claim - an independent reader accepting our writer's bytes. It needs those files first:
 
 ```sh
-cargo run --manifest-path rust/lumen/Cargo.toml --example make_test_file -- /tmp/sample
-python cross_check.py /tmp/sample
+cargo run -p lumen-format --example make_test_file -- /tmp/sample
+cargo run --release -p lumen-corpus --bin cross_check -- /tmp/sample
 ```
 
-`verify_vectors.py` exits 0 only if every valid vector passes **and** every invalid
+`verify_vectors` exits 0 only if every valid vector passes **and** every invalid
 vector fails the check its manifest entry advertises. It also re-checks each committed
 file against the golden values in `manifest.json`.
 
-`cryptography` and `argon2-cffi` are needed only for the encrypted vectors. Without
-them the plaintext vectors still validate, every encrypted vector is reported as
-`SKIP`, and the exit status is **3**: not 0, because the run did not cover the whole
-corpus, and not 1, which means an actual check failed.
+The exit status is **3** when the run did not cover the whole corpus: not 0, because the
+run proves less than it claims, and not 1, which means an actual check failed. A vector
+is uncovered when the reader stopped before its last check, which is how a file too
+broken to parse is reported rather than crashed on.
 
 ## What is exact, and what is not
 
@@ -63,13 +61,13 @@ So this corpus pins:
   `PROF`, `LROV`, `PREV`, `VOXL` and `EXTD` chunk (`chunk_payload_sha256` in the manifest;
   `PREV` and `EXTD` are lists in file order).
 - **By property** - compressed payload bytes. The manifest records the
-  zstandard version and level, the frame's dictionary ID and the decompressed
-  size; `verify_vectors.py` asserts those instead of byte equality.
+  zstd version and level, the frame's dictionary ID and the decompressed
+  size; `verify_vectors` asserts those instead of byte equality.
 
-Re-running `make_vectors.py` under a different zstandard version may change
+Re-running `make_vectors` under a different zstd version may change
 `file_sha256`, the chunk sizes and the trailer CRC-32C. The uncompressed
 structures and all layer hashes must not change. Regeneration is deterministic
-for a fixed zstandard version, including the encrypted vectors, because every
+for a fixed zstd version, including the encrypted vectors, because every
 nonce, salt and key is derived from a fixed seed (see *Test credentials*).
 
 ## Valid vectors
@@ -99,7 +97,7 @@ present") and the chunk descriptor's bit 4 ("this payload is sealed"). `HDR`,
 to fail. For almost every vector it is the only failure. Where a defect necessarily
 unsatisfies a dependent rule as well - an `EXTD` payload too short to hold an `ext_type`
 cannot satisfy the type rule either - the advertised check still has to come first, and
-`verify_vectors.py` enforces exactly that.
+`verify_vectors` enforces exactly that.
 
 Except for `trailer-crc-mismatch`, every file carries a deliberately introduced defect
 and a recomputed trailer CRC-32C, so a reader reaches the intended check rather than
@@ -147,7 +145,7 @@ stopping at the file-completeness check first.
 
 Four vectors are marked *(strict)*: the defect is invisible to a loose-mode reader
 (section 11.5) and must only be caught by a strict-mode validator. The manifest
-records this as `strict_only`, and `verify_vectors.py` asserts that a loose-mode
+records this as `strict_only`, and `verify_vectors` asserts that a loose-mode
 reader accepts them — so the corpus pins the loose/strict distinction itself, not
 just the checks.
 
@@ -214,18 +212,18 @@ decrypt the file at all. Only entry 2 recovers the real key.
 
 ## Adding a vector
 
-1. Add a builder in `make_vectors.py` (and, for invalid vectors, a mutation plus
-   its expected check name). Encrypted vectors go through
+1. Add a builder in [`../rust/corpus-gen`](../rust/corpus-gen) (and, for invalid
+   vectors, a mutation plus its expected check name). Encrypted vectors go through
    `build_encrypted_vector`, which also records the `crypto` block.
-2. `python make_vectors.py`
-3. `python verify_vectors.py -v`
+2. `cargo run --release -p lumen-corpus-gen --bin make_vectors` (from `rust/`)
+3. `cargo run --release -p lumen-corpus --bin verify_vectors -- -v`
 4. Commit the `.lumen` files and `manifest.json` together.
 
 ## Notes
 
-- `make_vectors.py` self-tests its CRC-32C against the standard check value
+- `make_vectors` self-tests its CRC-32C against the standard check value
   (`"123456789"` → `0xE3069283`) before generating anything, and
-  `verify_vectors.py` repeats that self-test before validating. The generator also
+  `verify_vectors` repeats that self-test before validating. The generator also
   asserts that its own password section unwraps to the session key it sealed with.
 - The vectors use a 64×48 display (3 072 pixels) except `dict-multi-block` and
   `encrypted-password`, which use 256×192 (49 152 pixels) so that the zstd

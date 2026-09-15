@@ -1,3 +1,0 @@
-# Python bytecode cache. The corpus is its sources - make_vectors.py,
-# verify_vectors.py and the committed vectors - never a compiled copy of them.
-__pycache__/

@@ -1,0 +1,8 @@
+[workspace]
+# Three separate readings of the specification, in one workspace and one lockfile:
+# the reference crate, the corpus' independent validator, and the corpus'
+# independent generator. The last two deliberately depend on neither the crate nor
+# each other - agreement between them is what makes the corpus evidence about the
+# specification rather than a recording of one implementation's output.
+resolver = "2"
+members = ["corpus", "corpus-gen", "lumen"]

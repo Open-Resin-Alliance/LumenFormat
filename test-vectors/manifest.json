@@ -1,12 +1,10 @@
 {
   "generator": {
-    "argon2_cffi": "25.1.0",
-    "cryptography": "50.0.1",
+    "format_revision": "1.0",
     "note": "Compressed payload bytes depend on the zstd version and level. Uncompressed structures (HDR, AUTH, LTBL, LAYR header and block table, LHAS, REE streams, directory, trailer) are exact. Sealed units are exact too: every nonce, salt and key is derived from a fixed SHAKE-256 seed, so regeneration is deterministic. Those values are public test data; real encoders must draw them from a CSPRNG.",
-    "python": "3.11.9",
-    "zstandard": "0.25.0",
     "zstd_layer_level": 6,
-    "zstd_small_level": 3
+    "zstd_small_level": 3,
+    "zstd_version": "1.5.7"
   },
   "invalid": [
     {

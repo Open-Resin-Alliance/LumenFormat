@@ -68,6 +68,8 @@ file, a single `header.version` lineage, and no constraints kept for legacy comp
 | [`spec/`](spec/) | The normative specification, published in 19 parts ([below](#reading-the-specification)) |
 | [`test-vectors/`](test-vectors/) | Byte-exact `.lumen` conformance corpus, its manifest, and an independent validator |
 | [`rust/lumen/`](rust/lumen/) | The reference implementation: encoder, decoder and validator (crate `lumen-format`) |
+| [`rust/corpus-gen/`](rust/corpus-gen/) | `make_vectors`: regenerates the corpus from the specification, independently of the reference crate |
+| [`rust/corpus/`](rust/corpus/) | `verify_vectors` and `cross_check`: the specification's own reader, independent of both |
 | [`status.json`](status.json) | The machine-readable revision declaration: version, status, published git ref |
 | [`.github/workflows/ci.yml`](.github/workflows/ci.yml) | Runs the corpus, the crate and the cross-check on every change |
 | [`LICENSE`](LICENSE) | MIT |
@@ -149,26 +151,25 @@ independently of the specification's own encoder:
 | `valid/*.lumen` | 11 files a conforming reader must accept, each pinning the structures it contains |
 | `invalid/*.lumen` | 37 files a conforming reader must reject, each failing the check its manifest entry names - and failing it *first* |
 | `manifest.json` | Golden data for every vector: sizes, offsets, block table, per-layer hashes, Merkle root, CRC-32C, and the credentials for encrypted vectors |
-| `make_vectors.py` | Reference encoder that regenerates the corpus from the specification |
-| `verify_vectors.py` | Independent reader and validator, sharing no code with the generator |
-| `cross_check.py` | Runs that validator against files the Rust implementation wrote |
+| [`rust/corpus-gen/`](rust/corpus-gen/) | `make_vectors`: reference encoder that regenerates the corpus from the specification |
+| [`rust/corpus/`](rust/corpus/) | `verify_vectors`: independent reader and validator, sharing no code with the generator. `cross_check` runs it against files the reference crate wrote |
 
-Because the generator and the validator share no code, agreement between them is evidence
-that the specification is unambiguous rather than that one module is self-consistent. Four
-invalid vectors are marked `strict_only`: their defect is invisible to a loose-mode reader,
-and the corpus asserts that a loose read accepts them, which pins the loose/strict
-distinction itself.
+Because the generator and the validator share no code, and neither depends on the reference
+crate, agreement between them is evidence that the specification is unambiguous rather than
+that one module is self-consistent. Four invalid vectors are marked `strict_only`: their
+defect is invisible to a loose-mode reader, and the corpus asserts that a loose read accepts
+them, which pins the loose/strict distinction itself.
 
 ```sh
-pip install zstandard cryptography argon2-cffi
-python test-vectors/verify_vectors.py        # validate the committed corpus
-python test-vectors/verify_vectors.py -v     # print every individual check
+cd rust
+cargo run --release -p lumen-corpus --bin verify_vectors        # validate the committed corpus
+cargo run --release -p lumen-corpus --bin verify_vectors -- -v  # print every individual check
+cargo run --release -p lumen-corpus-gen --bin make_vectors      # regenerate the corpus
 ```
 
-`verify_vectors.py` exits 0 only if every valid vector passes and every invalid vector fails
-the check it advertises. Without the crypto dependencies the plaintext vectors still
-validate, encrypted ones are reported as `SKIP`, and the exit status is 3 - not 0, because
-the run did not cover the whole corpus, and not 1, which means a check failed.
+`verify_vectors` exits 0 only if every valid vector passes and every invalid vector fails
+the check it advertises. The exit status is 3 when the run did not cover the whole corpus -
+not 0, because the run proves less than it claims, and not 1, which means a check failed.
 
 The corpus fixes what the specification leaves open, and is explicit about what it cannot
 pin: compressed payload bytes depend on the zstd version and level, so the manifest records
@@ -219,10 +220,10 @@ to what has to keep working:
 
 | Job | Checks |
 |-----|--------|
-| Format, lint, test and package | `cargo fmt --check`, `clippy -D warnings`, the full test suite, and `cargo publish --dry-run` - a crate whose tests cannot run once unpacked is not publishable |
-| Minimum supported Rust version | The whole suite on 1.85.0 with the committed lock, so the declared floor is verified rather than estimated |
-| wasm32 build | `cargo check --target wasm32-unknown-unknown` with `clang` installed, because DragonFruit builds this crate for its webview |
-| Cross-implementation check | The committed corpus under the specification's own reader, and a file the crate wrote validated by that same reader |
+| Format, lint, test and package | `cargo fmt --all --check`, `clippy --workspace -D warnings`, the workspace test suite, and `cargo publish -p lumen-format --dry-run` - a crate whose tests cannot run once unpacked is not publishable |
+| Minimum supported Rust version | The published crate's suite on 1.85.0 with the committed lock, so the declared floor is verified rather than estimated |
+| wasm32 build | `cargo check -p lumen-format --lib --target wasm32-unknown-unknown` with `clang` installed, because DragonFruit builds this crate for its webview |
+| Corpus and cross-implementation check | The generator reproduces the committed corpus byte for byte, that corpus validates under the specification's own reader, and a file the crate wrote validates under that same reader |
 
 ## Contributing
 
@@ -233,8 +234,9 @@ implementation. That is exactly what CI checks.
 
 - A **correction** should say which part contradicts which, or which two readings are
   possible, and it ships as a patch revision.
-- New behavior needs a vector: `make_vectors.py` builds it, `verify_vectors.py` proves it,
-  and the generated files plus `manifest.json` are committed together.
+- New behavior needs a vector: `make_vectors` builds it, `verify_vectors` proves it, and the
+  generated files plus `manifest.json` are committed together. CI regenerates the corpus and
+  fails if the tree moves, so a hand-edited vector cannot slip through.
 - Vendor IDs for `EXTD` chunks are registered through the Alliance to avoid collisions
   between independent implementations (§19). These conventions are voluntary; coordination
   keeps the ecosystem interoperable, but the license lets you implement, extend and fork
