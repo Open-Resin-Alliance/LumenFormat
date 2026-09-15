@@ -3,6 +3,12 @@
 //! Three tags are defined: binary REE (`0x00`), grayscale REE (`0x01`) and split
 //! REE (`0x02`). A layer whose pixels are all zero has no stream at all - the
 //! empty-layer form lives in the `LTBL` entry, not in the layer data.
+//!
+//! Every run-length or position array is stored as four significance planes
+//! ([`spec/08-layer-encoding.md`] section 5.3.1): the four plane lengths, then the
+//! bytes of plane 0, plane 1, plane 2 and plane 3. A varint's byte `j` belongs to
+//! plane `j`, so a length's high byte stops sitting between two noisy low bytes and
+//! the compressor can see that it is nearly constant along a scanline.
 
 use crate::check::Check;
 use crate::error::{Error, Result};
@@ -161,6 +167,127 @@ fn fill(mask: &mut [u8], start: u64, end: u64, value: u8) {
     mask[start as usize..end as usize].fill(value);
 }
 
+/// How many significance planes a varint array is stored in (section 5.3.1).
+const PLANES: usize = 4;
+
+/// The significance planes of a varint array (section 5.3.1), read in step.
+///
+/// Byte `j` of a varint - least-significant seven bits first - is stored in plane
+/// `j`, so reading a varint takes one byte from plane 0, another from plane 1
+/// while the continuation bit is set, and so on. A `k`-byte varint therefore
+/// occupies planes `0..k`, and the four plane lengths are what let a reader find
+/// each plane's end without being told how many varints the array holds.
+struct Planes<'a> {
+    planes: [&'a [u8]; PLANES],
+    at: [usize; PLANES],
+}
+
+impl<'a> Planes<'a> {
+    /// Read `PLANES(n)`: four plane lengths, then the planes they describe.
+    ///
+    /// The four lengths are written unconditionally, so a stream whose array is
+    /// empty still carries them as four zero bytes.
+    fn read(reader: &mut Reader<'a>, strict: bool) -> Result<Planes<'a>> {
+        let mut lengths = [0usize; PLANES];
+        for (plane, length) in lengths.iter_mut().enumerate() {
+            let value = reader.varint()?;
+            *length = usize::try_from(value).map_err(|_| {
+                Error::new(
+                    Check::ReePlanes,
+                    format!("plane {plane} length {value} does not fit in memory"),
+                )
+            })?;
+        }
+        if strict {
+            // Prefix-closure: a varint that reaches plane `j` also occupies every
+            // plane below it, so a non-empty plane may not follow an empty one.
+            for plane in 1..PLANES {
+                if lengths[plane] > 0 && lengths[plane - 1] == 0 {
+                    return Err(Error::new(
+                        Check::ReePlanes,
+                        format!(
+                            "plane {plane} holds {} bytes after empty plane {}: the planes are \
+                             not prefix-closed",
+                            lengths[plane],
+                            plane - 1
+                        ),
+                    ));
+                }
+            }
+        }
+        let mut planes = [&[][..]; PLANES];
+        for (plane, length) in planes.iter_mut().zip(lengths) {
+            *plane = reader.bytes(length)?;
+        }
+        Ok(Planes {
+            planes,
+            at: [0; PLANES],
+        })
+    }
+
+    /// The next varint, or `None` once plane 0 is exhausted.
+    ///
+    /// A varint always takes its first byte from plane 0, so plane 0's length is
+    /// the number of varints the array holds.
+    fn next(&mut self) -> Result<Option<u64>> {
+        if self.at[0] == self.planes[0].len() {
+            return Ok(None);
+        }
+        let mut value = 0u64;
+        for plane in 0..PLANES {
+            let Some(&byte) = self.planes[plane].get(self.at[plane]) else {
+                return Err(Error::new(
+                    Check::ReeVarint,
+                    format!("a varint continues into plane {plane}, which holds no more bytes"),
+                ));
+            };
+            self.at[plane] += 1;
+            value |= u64::from(byte & 0x7F) << (7 * plane);
+            if byte & 0x80 == 0 {
+                if plane > 0 && byte == 0 {
+                    return Err(Error::new(
+                        Check::ReeVarint,
+                        "a varint crossing planes is not minimally encoded",
+                    ));
+                }
+                return Ok(Some(value));
+            }
+        }
+        Err(Error::new(
+            Check::ReeVarint,
+            "a varint continues past plane 3, which is the last plane",
+        ))
+    }
+
+    /// The next varint of an array the stream's own count says holds another one.
+    fn varint(&mut self) -> Result<u64> {
+        self.next()?.ok_or_else(|| {
+            Error::new(
+                Check::ReeVarint,
+                "the planes hold fewer varints than the stream's count",
+            )
+        })
+    }
+
+    /// In strict mode the planes must hold exactly the varints read from them: a
+    /// leftover byte describes no varint (section 5.3.1).
+    fn check_consumed(&self) -> Result<()> {
+        for plane in 0..PLANES {
+            let len = self.planes[plane].len();
+            if self.at[plane] != len {
+                return Err(Error::new(
+                    Check::ReePlanes,
+                    format!(
+                        "plane {plane} holds {len} bytes, {} of which describe a varint",
+                        self.at[plane]
+                    ),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Decode the binary REE stream of section 5.3. The helper is shared with the
 /// split tag, whose binary component is a tagless binary stream.
 fn decode_binary(reader: &mut Reader<'_>, total_pixels: u32, strict: bool) -> Result<Vec<u8>> {
@@ -182,26 +309,18 @@ fn decode_binary(reader: &mut Reader<'_>, total_pixels: u32, strict: bool) -> Re
         }
         return Ok(vec![0u8; total_pixels as usize]);
     }
-    if run_count == 1 {
-        return Ok(vec![first_value; total_pixels as usize]);
-    }
 
+    // The first `run_count - 1` run lengths; the last run ends at `total_pixels`.
+    let mut planes = Planes::read(reader, strict)?;
     let mut mask = vec![0u8; total_pixels as usize];
     let mut value = first_value;
     let mut start = 0u64;
-    let mut cumulative = 0u64;
     let mut empty_run = false;
-    for i in 0..run_count {
-        let end = if i + 1 == run_count {
-            // The last run's length is implicit: it ends at total_pixels.
-            total
-        } else {
-            let delta = reader.varint()?;
-            cumulative = cumulative.checked_add(delta).ok_or_else(|| {
-                Error::new(Check::ReeEndPositions, "binary REE run lengths overflow")
-            })?;
-            cumulative
-        };
+    for i in 0..run_count - 1 {
+        let delta = planes.varint()?;
+        let end = start
+            .checked_add(delta)
+            .ok_or_else(|| Error::new(Check::ReeEndPositions, "binary REE run lengths overflow"))?;
         if end > total {
             return Err(Error::new(
                 Check::ReeEndPositions,
@@ -213,16 +332,22 @@ fn decode_binary(reader: &mut Reader<'_>, total_pixels: u32, strict: bool) -> Re
         value = 255 - value;
         start = end;
     }
-    if strict && empty_run {
-        return Err(Error::new(
-            Check::ReeRunLengths,
-            "binary REE stores an empty run",
-        ));
+    empty_run |= start == total;
+    fill(&mut mask, start, total, value);
+    if strict {
+        if empty_run {
+            return Err(Error::new(
+                Check::ReeRunLengths,
+                "binary REE stores an empty run",
+            ));
+        }
+        planes.check_consumed()?;
     }
     Ok(mask)
 }
 
-/// Decode the grayscale REE stream of section 5.4.
+/// Decode the grayscale REE stream of section 5.4: the run count, every run's
+/// value, then the planes of every length but the last.
 fn decode_grayscale(reader: &mut Reader<'_>, total_pixels: u32, strict: bool) -> Result<Vec<u8>> {
     let total = u64::from(total_pixels);
     let run_count = read_run_count(reader, total)?;
@@ -236,33 +361,24 @@ fn decode_grayscale(reader: &mut Reader<'_>, total_pixels: u32, strict: bool) ->
         return Ok(vec![0u8; total_pixels as usize]);
     }
 
+    // The values are hoisted out of the run loop, one byte per run.
+    let values = reader.bytes(run_count as usize)?;
+    // The first `run_count - 1` run lengths; the last run ends at `total_pixels`.
+    let mut planes = Planes::read(reader, strict)?;
     let mut mask = vec![0u8; total_pixels as usize];
     let mut start = 0u64;
     let mut previous: Option<u8> = None;
-    for _ in 0..run_count {
-        let value = reader.u8()?;
-        let end = reader.varint()?;
+    let mut empty_run = false;
+    for (i, &value) in values[..values.len() - 1].iter().enumerate() {
+        let length = planes.varint()?;
+        empty_run |= length == 0;
+        let end = start.checked_add(length).ok_or_else(|| {
+            Error::new(Check::ReeEndPositions, "grayscale REE run lengths overflow")
+        })?;
         if end > total {
             return Err(Error::new(
                 Check::ReeEndPositions,
-                format!("grayscale REE end position {end} is past total_pixels {total}"),
-            ));
-        }
-        if end < start {
-            // Out of order: loose mode still requires non-decreasing positions.
-            return Err(Error::new(
-                if strict {
-                    Check::ReeGrayscaleRuns
-                } else {
-                    Check::ReeEndPositions
-                },
-                format!("grayscale REE end position {end} follows {start}"),
-            ));
-        }
-        if strict && end == start {
-            return Err(Error::new(
-                Check::ReeGrayscaleRuns,
-                "grayscale REE stores a zero-length run",
+                format!("grayscale REE run {i} ends at {end}, past total_pixels {total}"),
             ));
         }
         if strict && previous == Some(value) {
@@ -275,17 +391,30 @@ fn decode_grayscale(reader: &mut Reader<'_>, total_pixels: u32, strict: bool) ->
         previous = Some(value);
         start = end;
     }
-    if start != total {
+
+    let value = values[values.len() - 1];
+    empty_run |= start == total;
+    if strict && previous == Some(value) {
         return Err(Error::new(
-            Check::ReeEndPositions,
-            format!("grayscale REE ends at {start}, not total_pixels {total}"),
+            Check::ReeGrayscaleRuns,
+            format!("grayscale REE repeats value 0x{value:02X} in adjacent runs"),
         ));
     }
-    if strict && mask.iter().all(|p| *p == 0x00 || *p == 0xFF) {
-        return Err(Error::new(
-            Check::ReeGrayscaleAllBinary,
-            "grayscale REE holds only 0x00/0xFF pixels; such a layer must use tag 0x00",
-        ));
+    fill(&mut mask, start, total, value);
+    if strict {
+        if empty_run {
+            return Err(Error::new(
+                Check::ReeGrayscaleRuns,
+                "grayscale REE stores a zero-length run",
+            ));
+        }
+        planes.check_consumed()?;
+        if mask.iter().all(|p| *p == 0x00 || *p == 0xFF) {
+            return Err(Error::new(
+                Check::ReeGrayscaleAllBinary,
+                "grayscale REE holds only 0x00/0xFF pixels; such a layer must use tag 0x00",
+            ));
+        }
     }
     Ok(mask)
 }
@@ -304,15 +433,15 @@ fn decode_split(reader: &mut Reader<'_>, total_pixels: u32, strict: bool) -> Res
             format!("aa_pixel_count {aa_count} exceeds total_pixels + 1 ({bound})"),
         ));
     }
-    if aa_count == 0 {
-        return Ok(mask);
-    }
-
+    // The positions are stored as planes, then the values as one byte each.
+    let mut planes = Planes::read(reader, strict)?;
     let count = aa_count as usize;
+    let values = reader.bytes(count)?;
+
     let mut positions: Vec<u32> = Vec::with_capacity(count);
     let mut position = 0u64;
     for i in 0..count {
-        let delta = reader.varint()?;
+        let delta = planes.varint()?;
         position = position.checked_add(delta).ok_or_else(|| {
             Error::new(Check::ReeSplitPositions, "split overlay positions overflow")
         })?;
@@ -330,9 +459,8 @@ fn decode_split(reader: &mut Reader<'_>, total_pixels: u32, strict: bool) -> Res
         }
         positions.push(position as u32);
     }
-
-    let values = reader.bytes(count)?;
     if strict {
+        planes.check_consumed()?;
         for (i, &pixel) in positions.iter().enumerate() {
             let value = values[i];
             let binary = mask[pixel as usize];
@@ -498,6 +626,72 @@ impl RunSource<'_> {
     }
 }
 
+/// The byte lengths of the four significance planes of a varint array.
+#[derive(Debug, Default, Clone, Copy)]
+struct PlaneSizes([u64; PLANES]);
+
+impl PlaneSizes {
+    /// Account for one varint: a `k`-byte varint adds one byte to planes `0..k`.
+    ///
+    /// A value needing more than [`PLANES`] bytes is out of bounds here and is
+    /// reported by [`write_plane_byte`] when the plane it would need is written,
+    /// so this only has to keep the count in range.
+    fn add(&mut self, value: u64) {
+        let len = crate::varint::encoded_len(value).min(PLANES);
+        for size in &mut self.0[..len] {
+            *size += 1;
+        }
+    }
+
+    /// Write the four lengths ahead of the planes.
+    fn write(&self, writer: &mut Writer) {
+        for size in self.0 {
+            writer.varint(size);
+        }
+    }
+}
+
+/// Append byte `plane` of `value`'s varint, if the varint reaches that plane.
+///
+/// A value needing more than [`PLANES`] bytes has no representation in the
+/// format, so the encoder reports it rather than writing a varint whose top byte
+/// is missing.
+fn write_plane_byte(writer: &mut Writer, value: u64, plane: usize) -> Result<()> {
+    let shifted = value >> (7 * plane);
+    if plane > 0 && shifted == 0 {
+        // The varint ended in an earlier plane.
+        return Ok(());
+    }
+    let more = shifted >= 0x80;
+    if more && plane + 1 == PLANES {
+        return Err(Error::new(
+            Check::ReePlanes,
+            format!("the value {value} needs more than {PLANES} significance planes"),
+        ));
+    }
+    writer.u8((shifted & 0x7F) as u8 | if more { 0x80 } else { 0 });
+    Ok(())
+}
+
+/// Write `PLANES(n)` for the varints a walk yields: the four plane lengths, then
+/// the bytes of plane 0, plane 1, plane 2 and plane 3.
+///
+/// `walk` runs once per plane, because a plane's length is written ahead of its
+/// bytes while the varints arrive in order. Nothing is materialized: `sizes` is
+/// what a sizing walk counted, and each plane walk re-derives the varints it
+/// needs from the same source.
+fn write_planes(
+    writer: &mut Writer,
+    sizes: PlaneSizes,
+    mut walk: impl FnMut(&mut Writer, usize) -> Result<()>,
+) -> Result<()> {
+    sizes.write(writer);
+    for plane in 0..PLANES {
+        walk(writer, plane)?;
+    }
+    Ok(())
+}
+
 /// Write the tagless binary REE stream of section 5.3 for `source`, mapping each
 /// value through `map` so the split encoder can threshold without materializing a
 /// second mask.
@@ -510,7 +704,11 @@ fn write_binary_stream(
     let mut first_value: Option<u8> = None;
     let mut last: Option<u8> = None;
     let mut run_count = 0u64;
-    source.walk(map, |_, value| {
+    let mut sizes = PlaneSizes::default();
+    // Every run but the last is stored, and a run is only known not to be the
+    // last once another one arrives.
+    let mut pending: Option<u64> = None;
+    source.walk(map, |length, value| {
         match last {
             None => {
                 if value != 0x00 && value != 0xFF {
@@ -531,6 +729,9 @@ fn write_binary_stream(
         }
         last = Some(value);
         run_count += 1;
+        if let Some(previous) = pending.replace(length) {
+            sizes.add(previous);
+        }
         Ok(())
     })?;
     let Some(first_value) = first_value else {
@@ -542,42 +743,63 @@ fn write_binary_stream(
 
     writer.u8(first_value);
     writer.varint(run_count);
-    // Every run length except the last, whose end is implicitly total_pixels.
-    let mut remaining = run_count;
-    source.walk(map, |length, _| {
-        remaining -= 1;
-        if remaining > 0 {
-            writer.varint(length);
-        }
-        Ok(())
+    // The lengths of the first `run_count - 1` runs; the last ends at
+    // `total_pixels`, which the reader already knows.
+    write_planes(writer, sizes, |writer, plane| {
+        let mut remaining = run_count;
+        source.walk(map, |length, _| {
+            remaining -= 1;
+            if remaining > 0 {
+                write_plane_byte(writer, length, plane)?;
+            }
+            Ok(())
+        })
     })
 }
 
 /// Write the tagless grayscale REE stream of section 5.4 for `source`: the run
-/// count, then every run's value and its absolute end position.
+/// count, every run's value, then the planes of every run length but the last.
 fn write_grayscale_stream(writer: &mut Writer, source: RunSource<'_>) -> Result<()> {
     let mut run_count = 0u64;
+    let mut sizes = PlaneSizes::default();
+    let mut pending: Option<u64> = None;
     source.walk(
         |value| value,
-        |_, _| {
+        |length, _| {
             run_count += 1;
+            if let Some(previous) = pending.replace(length) {
+                sizes.add(previous);
+            }
             Ok(())
         },
     )?;
     writer.varint(run_count);
 
-    // The last run ends at total_pixels, which the source's own lengths pin: the
-    // mask is exactly as long as the layer, or the runs sum to it.
-    let mut end = 0u64;
+    // Every run's value, hoisted out of the run loop: an edge's values are a few
+    // repeated bytes, and keeping them out of the lengths leaves those planes
+    // smooth.
     source.walk(
         |value| value,
-        |length, value| {
-            end += length;
+        |_, value| {
             writer.u8(value);
-            writer.varint(end);
             Ok(())
         },
-    )
+    )?;
+
+    // The last run ends at `total_pixels`, which the reader already knows.
+    write_planes(writer, sizes, |writer, plane| {
+        let mut remaining = run_count;
+        source.walk(
+            |value| value,
+            |length, _| {
+                remaining -= 1;
+                if remaining > 0 {
+                    write_plane_byte(writer, length, plane)?;
+                }
+                Ok(())
+            },
+        )
+    })
 }
 
 /// Write the tagless split REE stream of section 5.5 for `source`: a binary core
@@ -591,13 +813,23 @@ fn write_split_stream(writer: &mut Writer, source: RunSource<'_>) -> Result<()> 
     write_binary_stream(writer, source, threshold)?;
 
     // The overlay is exactly the pixels whose value is neither 0x00 nor 0xFF.
+    // Within a run of them every delta after the first is 1.
     let mut count = 0u64;
+    let mut sizes = PlaneSizes::default();
+    let mut start = 0u64;
+    let mut previous = 0u64;
     source.walk(
         |value| value,
         |length, value| {
             if value != 0x00 && value != 0xFF {
                 count += length;
+                sizes.add(start - previous);
+                for _ in 1..length {
+                    sizes.add(1);
+                }
+                previous = start + length - 1;
             }
+            start += length;
             Ok(())
         },
     )?;
@@ -605,21 +837,24 @@ fn write_split_stream(writer: &mut Writer, source: RunSource<'_>) -> Result<()> 
 
     // Positions are absolute then delta-encoded, and strictly increasing, so
     // every delta after the first is at least 1.
-    let mut start = 0u64;
-    let mut previous = 0u64;
-    source.walk(
-        |value| value,
-        |length, value| {
-            if value != 0x00 && value != 0xFF {
-                for position in start..start + length {
-                    writer.varint(position - previous);
-                    previous = position;
+    write_planes(writer, sizes, |writer, plane| {
+        let mut start = 0u64;
+        let mut previous = 0u64;
+        source.walk(
+            |value| value,
+            |length, value| {
+                if value != 0x00 && value != 0xFF {
+                    write_plane_byte(writer, start - previous, plane)?;
+                    for _ in 1..length {
+                        write_plane_byte(writer, 1, plane)?;
+                    }
+                    previous = start + length - 1;
                 }
-            }
-            start += length;
-            Ok(())
-        },
-    )?;
+                start += length;
+                Ok(())
+            },
+        )
+    })?;
 
     // The values, in the same order.
     source.walk(
@@ -762,9 +997,13 @@ mod tests {
 
     /// The 64 x 48 pixel masks of `test-vectors/valid/binary-basic.lumen`, one
     /// per tag, exactly as the corpus stores them.
-    const LAYER_BINARY: &str = "00000364c801";
-    const LAYER_GRAYSCALE: &str = "01050064807800dc01ffc002008018";
-    const LAYER_SPLIT: &str = "020005641e14321e640101010101010101010101010101010101010101010101010101010101c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8";
+    ///
+    /// Each length array is four plane lengths followed by the planes, so the
+    /// binary stream's `02 01 00 00 64 c8 01` is plane 0 holding `64 c8` and
+    /// plane 1 holding `01`: the lengths 100 and 200.
+    const LAYER_BINARY: &str = "0000030201000064c801";
+    const LAYER_GRAYSCALE: &str = "0105008000ff000400000064146464";
+    const LAYER_SPLIT: &str = "02000504000000641e14321e1e000000640101010101010101010101010101010101010101010101010101010101c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8";
     /// `HEAD.display_width_px * HEAD.display_height_px` for that file.
     const TOTAL: u32 = 64 * 48;
 
@@ -927,7 +1166,7 @@ mod tests {
     #[test]
     fn split_layer_of_the_corpus_round_trips() {
         let data = bytes(LAYER_SPLIT);
-        assert_eq!(data.len(), 68, "the corpus split stream is 68 bytes");
+        assert_eq!(data.len(), 76, "the corpus split stream is 76 bytes");
         // A binary core with thirty 200-valued edge pixels at 100..130.
         let expected = mask(&[(0, 100), (200, 30), (0, 20), (255, 50), (0, 2872)]);
         for strict in [false, true] {
@@ -937,10 +1176,11 @@ mod tests {
         }
         // Byte equality pins the delta encoding: the first position is absolute
         // (0x64 = 100), the twenty-nine that follow are 1 apart, and exactly
-        // thirty value bytes close the stream.
-        assert_eq!(data[8], 0x64);
-        assert!(data[9..38].iter().all(|b| *b == 0x01));
-        assert!(data[38..].iter().all(|b| *b == 0xC8));
+        // thirty value bytes close the stream. The positions are one plane, so
+        // they start after its four length varints.
+        assert_eq!(data[16], 0x64, "the first position is 100");
+        assert!(data[17..46].iter().all(|b| *b == 0x01));
+        assert!(data[46..].iter().all(|b| *b == 0xC8));
         assert_eq!(encode_split(&expected, TOTAL).unwrap(), data);
         assert_eq!(
             encode(&expected, TOTAL, EncodeMode::Split).unwrap(),
@@ -975,42 +1215,46 @@ mod tests {
     fn all_white_is_one_run() {
         let (tag, data) = encode(&[255u8; 16], 16, EncodeMode::Auto).unwrap().unwrap();
         assert_eq!(tag, TAG_BINARY);
-        // tag, first_value 0xFF, run_count 1, no stored lengths.
-        assert_eq!(data, vec![TAG_BINARY, 0xFF, 0x01]);
+        // tag, first_value 0xFF, run_count 1, then four zero plane lengths: the
+        // header is written even when no length is stored.
+        assert_eq!(data, vec![TAG_BINARY, 0xFF, 0x01, 0x00, 0x00, 0x00, 0x00]);
         assert_eq!(decode(&data, 16, true).unwrap().pixels, vec![255u8; 16]);
     }
 
     #[test]
     fn auto_picks_the_smaller_stream_and_breaks_ties_towards_grayscale() {
-        // A tie on a three-pixel mask: both streams are eight bytes.
-        let tie = [0u8, 128, 0];
-        assert_eq!(encode_grayscale(&tie, 3).unwrap().len(), 8);
-        assert_eq!(encode_split(&tie, 3).unwrap().len(), 8);
+        // A six-pixel mask whose two streams are both 17 bytes: grayscale pays a
+        // value byte per run, split a byte per edge pixel.
+        let tie = [0xFF, 0x00, 0x01, 0x00, 0x01, 0x00];
+        assert_eq!(encode_grayscale(&tie, 6).unwrap().len(), 17);
+        assert_eq!(encode_split(&tie, 6).unwrap().len(), 17);
         assert_eq!(
-            encode(&tie, 3, EncodeMode::Auto).unwrap().unwrap().0,
+            encode(&tie, 6, EncodeMode::Auto).unwrap().unwrap().0,
             TAG_GRAYSCALE
         );
 
-        // A long run of distinct values: every one is a grayscale run (626
-        // bytes), while the split overlay pays one delta plus one value each.
-        let gradient: Vec<u8> = (1..=250u16).map(|v| v as u8).collect();
-        let grayscale = encode_grayscale(&gradient, 250).unwrap();
-        let split = encode_split(&gradient, 250).unwrap();
+        // Alternating black and edge pixels: the thresholded mask collapses to a
+        // single run, so the split core is seven bytes against grayscale's two
+        // hundred runs.
+        let alternating: Vec<u8> = (0..200).map(|i| if i % 2 == 0 { 0 } else { 10 }).collect();
+        let grayscale = encode_grayscale(&alternating, 200).unwrap();
+        let split = encode_split(&alternating, 200).unwrap();
         assert!(split.len() < grayscale.len(), "{split:?} {grayscale:?}");
-        let (tag, data) = encode(&gradient, 250, EncodeMode::Auto).unwrap().unwrap();
+        let (tag, data) = encode(&alternating, 200, EncodeMode::Auto)
+            .unwrap()
+            .unwrap();
         assert_eq!(tag, TAG_SPLIT);
         assert_eq!(data, split);
-        assert_eq!(decode(&data, 250, false).unwrap().pixels, gradient);
+        assert_eq!(decode(&data, 200, false).unwrap().pixels, alternating);
 
-        // A hand-built gradient that is not all-binary still round-trips. The
-        // two streams are 12 and 11 bytes: grayscale is tag + run_count +
-        // 5 x (value + end_pos) = 1 + 1 + 10; split is tag + a three-byte
-        // binary core + aa_count + 3 positions + 3 values = 1 + 3 + 1 + 3 + 3.
+        // A five-pixel ramp is not all-binary, and grayscale is the smaller of
+        // the two streams here: the split overlay pays a byte per edge pixel on
+        // top of its core.
         let ramp = [0u8, 64, 128, 192, 255];
-        assert_eq!(encode_grayscale(&ramp, 5).unwrap().len(), 12);
-        assert_eq!(encode_split(&ramp, 5).unwrap().len(), 11);
+        let grayscale = encode_grayscale(&ramp, 5).unwrap();
+        assert!(grayscale.len() < encode_split(&ramp, 5).unwrap().len());
         let (tag, data) = encode(&ramp, 5, EncodeMode::Auto).unwrap().unwrap();
-        assert_eq!(tag, TAG_SPLIT, "split is strictly smaller here");
+        assert_eq!(tag, TAG_GRAYSCALE);
         assert_eq!(decode(&data, 5, false).unwrap().pixels, ramp);
     }
 
@@ -1018,8 +1262,12 @@ mod tests {
     fn binary_stripes_round_trip_all_modes() {
         let pixels = mask(&[(0, 3), (255, 2), (0, 4), (255, 1)]);
         let data = encode_binary(&pixels, 10).unwrap();
-        // first_value 0, run_count 4, three stored lengths.
-        assert_eq!(data, vec![TAG_BINARY, 0x00, 0x04, 3, 2, 4]);
+        // first_value 0, run_count 4, then four plane lengths and the one plane
+        // holding the three stored lengths.
+        assert_eq!(
+            data,
+            vec![TAG_BINARY, 0x00, 0x04, 0x03, 0x00, 0x00, 0x00, 3, 2, 4]
+        );
         for strict in [false, true] {
             assert_eq!(decode(&data, 10, strict).unwrap().pixels, pixels);
         }
@@ -1115,7 +1363,7 @@ mod tests {
     fn binary_run_lengths_split_loose_from_strict() {
         // first_value 0x00, run_count 3, stored lengths 0 and 2: the first run
         // is empty but still toggles the value.
-        let empty_first = [TAG_BINARY, 0x00, 0x03, 0x00, 0x02];
+        let empty_first = [TAG_BINARY, 0x00, 0x03, 0x02, 0x00, 0x00, 0x00, 0x00, 0x02];
         assert_eq!(
             decode(&empty_first, 4, false).unwrap().pixels,
             vec![255, 255, 0, 0]
@@ -1124,7 +1372,7 @@ mod tests {
 
         // run_count 2 with one stored length of 4: the implicit final run is
         // empty, which loose accepts.
-        let implicit_empty = [TAG_BINARY, 0x00, 0x02, 0x04];
+        let implicit_empty = [TAG_BINARY, 0x00, 0x02, 0x01, 0x00, 0x00, 0x00, 0x04];
         assert_eq!(
             decode(&implicit_empty, 4, false).unwrap().pixels,
             vec![0, 0, 0, 0]
@@ -1133,7 +1381,7 @@ mod tests {
 
         // The stored lengths overshoot total_pixels, so the implicit final run
         // would be negative: both modes reject it.
-        let overshoot = [TAG_BINARY, 0x00, 0x02, 0x05];
+        let overshoot = [TAG_BINARY, 0x00, 0x02, 0x01, 0x00, 0x00, 0x00, 0x05];
         assert_eq!(check_of(&overshoot, 4, false), Check::ReeEndPositions);
         assert_eq!(check_of(&overshoot, 4, true), Check::ReeEndPositions);
 
@@ -1146,7 +1394,7 @@ mod tests {
         );
 
         // The canonical form is accepted by both modes.
-        let canonical = [TAG_BINARY, 0x00, 0x02, 0x02];
+        let canonical = [TAG_BINARY, 0x00, 0x02, 0x01, 0x00, 0x00, 0x00, 0x02];
         for strict in [false, true] {
             assert_eq!(
                 decode(&canonical, 4, strict).unwrap().pixels,
@@ -1157,38 +1405,90 @@ mod tests {
 
     #[test]
     fn grayscale_run_rules_split_loose_from_strict() {
-        // Two adjacent runs with the same value.
-        let repeated = [TAG_GRAYSCALE, 0x02, 0x00, 0x02, 0x00, 0x04];
+        // Two adjacent runs with the same value. run_count 2, values 0x00 0x00,
+        // one stored length of 2.
+        let repeated = [
+            TAG_GRAYSCALE,
+            0x02,
+            0x00,
+            0x00,
+            0x01,
+            0x00,
+            0x00,
+            0x00,
+            0x02,
+        ];
         assert_eq!(
             decode(&repeated, 4, false).unwrap().pixels,
             vec![0, 0, 0, 0]
         );
         assert_eq!(check_of(&repeated, 4, true), Check::ReeGrayscaleRuns);
 
-        // A zero-length run: end position 0, then 5 up to total_pixels.
-        let empty_run = [TAG_GRAYSCALE, 0x02, 0x00, 0x00, 0x05, 0x04];
+        // A zero-length first run: run_count 2, values 0x00 0x05, stored length
+        // 0. Loose fills the second run over the whole layer.
+        let empty_run = [
+            TAG_GRAYSCALE,
+            0x02,
+            0x00,
+            0x05,
+            0x01,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+        ];
         assert_eq!(
             decode(&empty_run, 4, false).unwrap().pixels,
             vec![5, 5, 5, 5]
         );
         assert_eq!(check_of(&empty_run, 4, true), Check::ReeGrayscaleRuns);
 
-        // Out of order: 3 then 2 then 4. Strict reports the grayscale rule,
-        // loose the end-position rule.
-        let backwards = [TAG_GRAYSCALE, 0x03, 0x00, 0x03, 0x05, 0x02, 0x07, 0x04];
-        assert_eq!(check_of(&backwards, 4, false), Check::ReeEndPositions);
-        assert_eq!(check_of(&backwards, 4, true), Check::ReeGrayscaleRuns);
+        // An implicit final run of zero length: the stored length is the whole
+        // layer, so the last run would cover nothing.
+        let implicit_empty = [
+            TAG_GRAYSCALE,
+            0x02,
+            0x00,
+            0x05,
+            0x01,
+            0x00,
+            0x00,
+            0x00,
+            0x04,
+        ];
+        assert_eq!(
+            decode(&implicit_empty, 4, false).unwrap().pixels,
+            vec![0, 0, 0, 0]
+        );
+        assert_eq!(check_of(&implicit_empty, 4, true), Check::ReeGrayscaleRuns);
 
-        // The last end position must be total_pixels, in both modes.
-        let short = [TAG_GRAYSCALE, 0x01, 0x00, 0x03];
-        assert_eq!(check_of(&short, 4, false), Check::ReeEndPositions);
-        assert_eq!(check_of(&short, 4, true), Check::ReeEndPositions);
-        let past = [TAG_GRAYSCALE, 0x01, 0x00, 0x05];
+        // The stored lengths overshoot total_pixels, in both modes.
+        let past = [
+            TAG_GRAYSCALE,
+            0x02,
+            0x00,
+            0x05,
+            0x01,
+            0x00,
+            0x00,
+            0x00,
+            0x05,
+        ];
         assert_eq!(check_of(&past, 4, false), Check::ReeEndPositions);
         assert_eq!(check_of(&past, 4, true), Check::ReeEndPositions);
 
         // Only 0x00/0xFF pixels: such a layer must use tag 0x00.
-        let binary_values = [TAG_GRAYSCALE, 0x02, 0x00, 0x02, 0xFF, 0x04];
+        let binary_values = [
+            TAG_GRAYSCALE,
+            0x02,
+            0x00,
+            0xFF,
+            0x01,
+            0x00,
+            0x00,
+            0x00,
+            0x02,
+        ];
         assert_eq!(
             decode(&binary_values, 4, false).unwrap().pixels,
             vec![0, 0, 255, 255]
@@ -1197,6 +1497,12 @@ mod tests {
             check_of(&binary_values, 4, true),
             Check::ReeGrayscaleAllBinary
         );
+
+        // One run of black is a whole layer of 0x00, which is the tag 0x00
+        // layer's business too.
+        let one_run = [TAG_GRAYSCALE, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00];
+        assert_eq!(decode(&one_run, 4, false).unwrap().pixels, vec![0u8; 4]);
+        assert_eq!(check_of(&one_run, 4, true), Check::ReeGrayscaleAllBinary);
 
         // The corpus grayscale stream is canonical for both modes.
         assert_eq!(
@@ -1207,8 +1513,11 @@ mod tests {
 
     /// A canonical split stream: binary 0x0000, 0xFF00, AA 200 at 4 and 5.
     const SPLIT_TOTAL: u32 = 8;
-    const SPLIT_CANONICAL: [u8; 10] = [
-        TAG_SPLIT, 0x00, 0x03, 0x04, 0x02, 0x02, 0x04, 0x01, 0xC8, 0xC8,
+    const SPLIT_CANONICAL: [u8; 18] = [
+        TAG_SPLIT, 0x00, 0x03, 0x02, 0x00, 0x00, 0x00, 0x04, 0x02, // core
+        0x02, // aa_count
+        0x02, 0x00, 0x00, 0x00, 0x04, 0x01, // positions
+        0xC8, 0xC8, // values
     ];
 
     #[test]
@@ -1227,7 +1536,7 @@ mod tests {
             SPLIT_CANONICAL
         );
         // The first position is absolute (4), the second a delta of 1.
-        assert_eq!(&SPLIT_CANONICAL[6..8], &[0x04, 0x01]);
+        assert_eq!(&SPLIT_CANONICAL[14..16], &[0x04, 0x01]);
     }
 
     #[test]
@@ -1235,7 +1544,8 @@ mod tests {
         // A repeated position (delta 0) and a position at total_pixels are both
         // refused, in loose mode too.
         let repeated = [
-            TAG_SPLIT, 0x00, 0x03, 0x04, 0x02, 0x02, 0x04, 0x00, 0xC8, 0xC8,
+            TAG_SPLIT, 0x00, 0x03, 0x02, 0x00, 0x00, 0x00, 0x04, 0x02, 0x02, 0x02, 0x00, 0x00,
+            0x00, 0x04, 0x00, 0xC8, 0xC8,
         ];
         assert_eq!(
             check_of(&repeated, SPLIT_TOTAL, false),
@@ -1247,7 +1557,8 @@ mod tests {
         );
 
         let out_of_range = [
-            TAG_SPLIT, 0x00, 0x03, 0x04, 0x02, 0x02, 0x08, 0x01, 0xC8, 0xC8,
+            TAG_SPLIT, 0x00, 0x03, 0x02, 0x00, 0x00, 0x00, 0x04, 0x02, 0x02, 0x02, 0x00, 0x00,
+            0x00, 0x08, 0x01, 0xC8, 0xC8,
         ];
         assert_eq!(
             check_of(&out_of_range, SPLIT_TOTAL, false),
@@ -1255,11 +1566,14 @@ mod tests {
         );
 
         // An overlay count above total_pixels + 1 is refused before allocating.
-        let too_many = [TAG_SPLIT, 0x00, 0x01, 0x06];
+        // The core is one run, so it carries the four zero plane lengths.
+        let too_many = [TAG_SPLIT, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x06];
         assert_eq!(check_of(&too_many, 4, false), Check::ReeSplitPositions);
 
-        // A truncated value array.
-        let short_values = [TAG_SPLIT, 0x00, 0x03, 0x04, 0x02, 0x02, 0x04, 0x01, 0xC8];
+        // A truncated value array: one position, no value byte.
+        let short_values = [
+            TAG_SPLIT, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x01, 0x01, 0x00, 0x00, 0x00, 0x04,
+        ];
         assert_eq!(
             check_of(&short_values, SPLIT_TOTAL, false),
             Check::ReeVarint
@@ -1268,7 +1582,8 @@ mod tests {
         // The overlay must hold exactly the pixels that are neither 0x00 nor
         // 0xFF, and must threshold to the binary component.
         let wrong_threshold = [
-            TAG_SPLIT, 0x00, 0x03, 0x04, 0x02, 0x02, 0x04, 0x01, 0x64, 0xC8,
+            TAG_SPLIT, 0x00, 0x03, 0x02, 0x00, 0x00, 0x00, 0x04, 0x02, 0x02, 0x02, 0x00, 0x00,
+            0x00, 0x04, 0x01, 0x64, 0xC8,
         ];
         assert!(decode(&wrong_threshold, SPLIT_TOTAL, false).is_ok());
         assert_eq!(
@@ -1277,20 +1592,173 @@ mod tests {
         );
 
         let white_overlay = [
-            TAG_SPLIT, 0x00, 0x03, 0x04, 0x02, 0x02, 0x04, 0x01, 0xFF, 0xC8,
+            TAG_SPLIT, 0x00, 0x03, 0x02, 0x00, 0x00, 0x00, 0x04, 0x02, 0x02, 0x02, 0x00, 0x00,
+            0x00, 0x04, 0x01, 0xFF, 0xC8,
         ];
         assert_eq!(
             check_of(&white_overlay, SPLIT_TOTAL, true),
             Check::ReeSplitThreshold
         );
 
+        // An empty overlay is canonical: the positions still carry their four
+        // zero plane lengths.
+        let no_overlay = [
+            TAG_SPLIT, 0x00, 0x02, 0x01, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ];
+        let expected = mask(&[(0, 4), (255, 4)]);
+        for strict in [false, true] {
+            assert_eq!(
+                decode(&no_overlay, SPLIT_TOTAL, strict).unwrap().pixels,
+                expected
+            );
+        }
+        assert_eq!(encode_split(&expected, SPLIT_TOTAL).unwrap(), no_overlay);
+
         // The binary component's own rules still apply.
-        let non_canonical_core = [TAG_SPLIT, 0x00, 0x00, 0x00];
+        let non_canonical_core = [TAG_SPLIT, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
         assert_eq!(
             check_of(&non_canonical_core, SPLIT_TOTAL, true),
             Check::ReeNoRunCountZero
         );
         assert!(decode(&non_canonical_core, SPLIT_TOTAL, false).is_ok());
+    }
+
+    /// The planes of a length array, in significance order: the four plane
+    /// lengths, then the plane bytes.
+    fn planes(sizes: [u8; PLANES], bytes: &[u8]) -> Vec<u8> {
+        let mut out = sizes.to_vec();
+        out.extend_from_slice(bytes);
+        out
+    }
+
+    #[test]
+    fn varint_bytes_are_laid_out_in_significance_planes() {
+        // Lengths 100 and 300: 300 is two bytes, so plane 0 holds both low bytes
+        // and plane 1 the single high byte. Interleaved they would be
+        // `64 00 01 01`-ish; grouped, the noisy plane stays on its own.
+        let pixels = mask(&[(0, 100), (255, 300), (0, 3)]);
+        let data = encode_binary(&pixels, 403).unwrap();
+        let mut expected = vec![TAG_BINARY, 0x00, 0x03];
+        expected.extend(planes([2, 1, 0, 0], &[100, 0xAC, 0x02]));
+        assert_eq!(data, expected);
+        assert_eq!(decode(&data, 403, true).unwrap().pixels, pixels);
+
+        // A varint whose high byte is zero in a later plane is the same value:
+        // 128 is `80 01`, so plane 0 holds `80` and plane 1 `01`.
+        let wide = mask(&[(0, 128), (255, 128)]);
+        let data = encode_binary(&wide, 256).unwrap();
+        let mut expected = vec![TAG_BINARY, 0x00, 0x02];
+        expected.extend(planes([1, 1, 0, 0], &[0x80, 0x01]));
+        assert_eq!(data, expected);
+        assert_eq!(decode(&data, 256, true).unwrap().pixels, wide);
+    }
+
+    #[test]
+    fn planes_must_be_prefix_closed_and_exactly_used() {
+        // Prefix-closure: plane 3 holds a byte while planes 0..2 are empty. A
+        // single-run stream stores no lengths, so nothing is read from them.
+        let not_prefix_closed = [TAG_BINARY, 0x00, 0x01, 0x00, 0x00, 0x00, 0x02, 0x80, 0x01];
+        assert!(decode(&not_prefix_closed, 4, false).is_ok());
+        assert_eq!(
+            check_of(&not_prefix_closed, 4, true),
+            Check::ReePlanes,
+            "a non-empty plane may not follow an empty one"
+        );
+
+        // Leftover plane bytes: two runs store one length, so plane 0's second
+        // byte describes no varint.
+        let leftover = [TAG_BINARY, 0x00, 0x02, 0x02, 0x00, 0x00, 0x00, 0x02, 0x02];
+        assert_eq!(
+            decode(&leftover, 4, false).unwrap().pixels,
+            vec![0, 0, 255, 255]
+        );
+        assert_eq!(check_of(&leftover, 4, true), Check::ReePlanes);
+
+        // A varint that continues past plane 3 has nowhere to go.
+        let too_many_planes = [
+            TAG_BINARY, 0x00, 0x02, 0x01, 0x01, 0x01, 0x01, 0x80, 0x80, 0x80, 0x80,
+        ];
+        assert_eq!(check_of(&too_many_planes, 4, false), Check::ReeVarint);
+
+        // A varint crossing planes must still be minimally encoded: `80 00` is
+        // the overlong form of 0.
+        let overlong = [TAG_BINARY, 0x00, 0x02, 0x01, 0x01, 0x00, 0x00, 0x80, 0x00];
+        assert_eq!(check_of(&overlong, 4, false), Check::ReeVarint);
+
+        // Fewer varints than the count needs: two runs want one length, but the
+        // planes hold none.
+        let short = [TAG_BINARY, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00];
+        assert_eq!(check_of(&short, 4, false), Check::ReeVarint);
+
+        // A plane length that claims more bytes than the stream holds is a
+        // truncated stream.
+        let truncated = [TAG_BINARY, 0x00, 0x02, 0x04, 0x00, 0x00, 0x00];
+        assert_eq!(check_of(&truncated, 4, false), Check::ReeVarint);
+    }
+
+    #[test]
+    fn a_length_needing_a_fifth_plane_is_refused() {
+        // 2^28 is the first length whose varint is five bytes, and the format has
+        // four planes: the encoder reports it rather than writing a varint whose
+        // top byte is missing. The run list never materializes the mask.
+        let total = (1u64 << 28) + 1;
+        let runs = [Run::new(1 << 28, 0), Run::new(1, 255)];
+        assert_eq!(
+            encode_runs(&runs, total as u32, EncodeMode::Binary)
+                .unwrap_err()
+                .check(),
+            Check::ReePlanes
+        );
+        assert_eq!(
+            encode_runs(&runs, total as u32, EncodeMode::Grayscale)
+                .unwrap_err()
+                .check(),
+            Check::ReePlanes
+        );
+
+        // One below the boundary is a four-byte varint: plane 3 holds its top
+        // byte and the stream round-trips without building the mask.
+        let fits = [Run::new((1 << 28) - 1, 255), Run::new(1, 0)];
+        let (_, data) = encode_runs(&fits, 1 << 28, EncodeMode::Binary)
+            .unwrap()
+            .unwrap();
+        assert_eq!(data.len(), 2 + 1 + 4 + 4, "four plane bytes, one per plane");
+        assert_eq!(&data[7..11], &[0xFF, 0xFF, 0xFF, 0x7F]);
+    }
+
+    #[test]
+    fn a_single_run_stream_carries_the_four_plane_lengths() {
+        // A run_count == 1 stream stores no length, and carries the header anyway:
+        // a reader that returned before reading it would leave four bytes behind
+        // and `ree.no_trailing_bytes` would fire on a canonical stream.
+        let one_run = [TAG_BINARY, 0xFF, 0x01, 0x00, 0x00, 0x00, 0x00];
+        assert_eq!(validate_stream(&one_run, 7, true), Ok(one_run.len()));
+        for strict in [false, true] {
+            assert_eq!(decode(&one_run, 7, strict).unwrap().pixels, vec![255u8; 7]);
+        }
+
+        // The same stream without the header is short of its structure, not a run
+        // of seven pixels: the four lengths are not optional.
+        let headerless = [TAG_BINARY, 0xFF, 0x01];
+        assert_eq!(check_of(&headerless, 7, false), Check::ReeVarint);
+
+        // Grayscale reads its values first, then the header: one run of 0x80.
+        let grayscale = [TAG_GRAYSCALE, 0x01, 0x80, 0x00, 0x00, 0x00, 0x00];
+        assert_eq!(validate_stream(&grayscale, 7, true), Ok(grayscale.len()));
+        assert_eq!(decode(&grayscale, 7, true).unwrap().pixels, vec![0x80u8; 7]);
+        assert_eq!(
+            check_of(&[TAG_GRAYSCALE, 0x01, 0x80], 7, false),
+            Check::ReeVarint
+        );
+
+        // A split whose core is a single run still carries the core's header,
+        // which is what lines the overlay count up behind it, and an empty
+        // overlay carries its own.
+        let split = [
+            TAG_SPLIT, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ];
+        assert_eq!(validate_stream(&split, 7, true), Ok(split.len()));
+        assert_eq!(decode(&split, 7, true).unwrap().pixels, vec![0u8; 7]);
     }
 
     #[test]
@@ -1397,10 +1865,14 @@ mod tests {
         assert_eq!(runs[0], Run::new(1, 90));
         assert_eq!(runs[1], Run::new(1, 100));
         assert_run_path_matches(&pixels, &runs, 5, EncodeMode::Split);
-        // The core is `first_value 0x00`, two runs, one stored length of 3.
+        // The core is `first_value 0x00`, two runs, and one stored length of 3
+        // in plane 0 behind the four plane lengths.
         let (tag, data) = encode_runs(&runs, 5, EncodeMode::Split).unwrap().unwrap();
         assert_eq!(tag, TAG_SPLIT);
-        assert_eq!(&data[..5], &[TAG_SPLIT, 0x00, 0x02, 0x03, 0x03]);
+        assert_eq!(
+            &data[..9],
+            &[TAG_SPLIT, 0x00, 0x02, 0x01, 0x00, 0x00, 0x00, 0x03, 0x03]
+        );
         assert_eq!(decode(&data, 5, true).unwrap().pixels, pixels);
     }
 

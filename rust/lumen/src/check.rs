@@ -221,6 +221,10 @@ pub enum Check {
     ReeTag,
     /// A varint is overlong, truncated, or longer than 10 bytes.
     ReeVarint,
+    /// The four plane lengths of a varint array describe planes that are not
+    /// prefix-closed, or that hold more bytes than the array's varints use
+    /// (strict); or a value needs more than four planes to encode.
+    ReePlanes,
     /// A binary REE `first_value` is neither `0x00` nor `0xFF`.
     ReeFirstValue,
     /// The non-canonical `run_count == 0` form (strict mode).
@@ -364,6 +368,7 @@ impl Check {
             LhasLeafMatch => "lhas.leaf_match",
             ReeTag => "ree.tag",
             ReeVarint => "ree.varint",
+            ReePlanes => "ree.planes",
             ReeFirstValue => "ree.first_value",
             ReeNoRunCountZero => "ree.no_run_count_zero",
             ReeRunLengths => "ree.run_lengths",
@@ -397,6 +402,7 @@ impl Check {
         matches!(
             self,
             ReeNoRunCountZero
+                | ReePlanes
                 | ReeRunLengths
                 | ReeGrayscaleRuns
                 | ReeGrayscaleAllBinary

@@ -72,12 +72,13 @@ const REQUIRED_META_FIELDS: [&str; 10] = [
 /// The order the REE checks are reported in, which is not the order they are
 /// discovered: a slice's stream can break several rules at once, and the report
 /// names the first one the specification lists.
-const REE_ORDER: [&str; 12] = [
+const REE_ORDER: [&str; 13] = [
     "ree.varint",
     "ree.tag",
     "ree.split_positions",
     "ree.first_value",
     "ree.end_positions",
+    "ree.planes",
     "ree.data_size",
     "ree.no_run_count_zero",
     "ree.run_lengths",
@@ -89,7 +90,8 @@ const REE_ORDER: [&str; 12] = [
 
 /// Checks a loose reader does not run, because they judge a file's fidelity to
 /// the canonical encoding rather than its readability.
-const STRICT_ONLY: [&str; 5] = [
+const STRICT_ONLY: [&str; 6] = [
+    "ree.planes",
     "ree.no_run_count_zero",
     "ree.run_lengths",
     "ree.grayscale_runs",
