@@ -70,6 +70,7 @@ file, a single `header.version` lineage, and no constraints kept for legacy comp
 | [`rust/lumen/`](rust/lumen/) | The reference implementation: encoder, decoder and validator (crate `lumen-format`) |
 | [`rust/corpus-gen/`](rust/corpus-gen/) | `make_vectors`: regenerates the corpus from the specification, independently of the reference crate |
 | [`rust/corpus/`](rust/corpus/) | `verify_vectors` and `cross_check`: the specification's own reader, independent of both |
+| [`imhex/`](imhex/) | `lumen.hexpat`: an ImHex pattern for the container that also builds a decoded virtual file tree - header, chunk directory, layer table, hashes, metadata and per-layer masks as files to inspect |
 | Repository root | The DragonFruit plugin for `.lumen` (`pluginDefinition.ts` and `slicing/`), which DragonFruit imports as the submodule at its `plugins/lumen` |
 | [`status.json`](status.json) | The machine-readable revision declaration: version, status, published git ref |
 | [`.github/workflows/ci.yml`](.github/workflows/ci.yml) | Runs the corpus, the crate and the cross-check on every change |
