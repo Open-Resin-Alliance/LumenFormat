@@ -22,7 +22,7 @@ META's field names:
 
 Which pair the chunk belongs to is not in the payload: the pair's layer table entry carries
 `first_lrov`, either `0` (no overrides) or the directory index of the chunk holding them
-([§4.7](06-layer-data.md#47-ltbl---layer-table-chunk)). Nothing else points at the chunk, and
+([§4.7](09-layer-data.md#47-ltbl---layer-table-chunk)). Nothing else points at the chunk, and
 every `LROV` chunk is named by exactly one entry, so a chunk's values are applied to the pair
 that names it and to no other.
 
@@ -35,9 +35,9 @@ that names it and to no other.
   The layer counts may appear too, and they do not move the ramp: the blend uses the counts
   the pair's sector resolves before any override, so an override of `bottom_layer_count` sets
   that field's value for the pairs it is applied to and leaves the ranges where they were
-  ([§8](11-layer-timing.md#8-per-layer-settings-model)).
+  ([§8](14-layer-timing.md#8-per-layer-settings-model)).
 - Overrides are applied after the sector's bottom/transition blending
-  ([§8](11-layer-timing.md#8-per-layer-settings-model)), so a field an `LROV` chunk carries
+  ([§8](14-layer-timing.md#8-per-layer-settings-model)), so a field an `LROV` chunk carries
   is the value the layer is printed with, whatever range it falls in.
 
 **Reader support: REQUIRED.** Writing the chunk is the encoder's choice - a slicer may write
@@ -50,9 +50,9 @@ than print that pair at the values its sector resolves to on its own.
 The reason is that this is the one degradation a printer cannot notice. A layer printed at
 its sector's exposure instead of its override is a print that fails quietly: the file is
 structurally valid, every checksum still passes, and nothing in the output says a chunk was
-ignored. So the rule is the same one [§4.12](07-scene-chunks.md#412-extd---extension-chunk)
+ignored. So the rule is the same one [§4.12](10-scene-chunks.md#412-extd---extension-chunk)
 applies to an unimplemented `critical` extension, and the same principle as
-[§7.2](10-sectors.md#72-sector-0-convention-and-single-material-degradation): a capability a
+[§7.2](13-sectors.md#72-sector-0-convention-and-single-material-degradation): a capability a
 reader lacks makes a file unprintable to it, not printable with approximations. A slicer
 that knows its target cannot honor overrides should not write them; a printer that meets
 them must.

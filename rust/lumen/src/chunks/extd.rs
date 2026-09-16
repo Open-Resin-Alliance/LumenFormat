@@ -1,5 +1,5 @@
 //! The `EXTD` chunk: vendor and future-standard extensions
-//! ([`spec/07-scene-chunks.md`] section 4.12).
+//! ([`spec/10-scene-chunks.md`] section 4.12).
 
 use crate::check::Check;
 use crate::container::CHUNK_FLAG_ENCRYPTED;

@@ -22,8 +22,8 @@
 
 | Reference | Topic |
 |-----------|-------|
-| [`DragonFruit/docs/dev/voxl-format-spec.md`](https://github.com/Open-Resin-Alliance/DragonFruit/blob/main/docs/dev/voxl-format-spec.md) | VOXL native scene container specification (embedded via VOXL chunk, [§4.11](07-scene-chunks.md#411-voxl---embedded-scene-chunk)) |
-| [`test-vectors/`](test-vectors/) | Conformance corpus: byte-exact vectors and an independent validator ([§11.6](14-validation.md#116-conformance-corpus)) |
+| [`DragonFruit/docs/dev/voxl-format-spec.md`](https://github.com/Open-Resin-Alliance/DragonFruit/blob/main/docs/dev/voxl-format-spec.md) | VOXL native scene container specification (embedded via VOXL chunk, [§4.11](10-scene-chunks.md#411-voxl---embedded-scene-chunk)) |
+| [`test-vectors/`](test-vectors/) | Conformance corpus: byte-exact vectors and an independent validator ([§11.6](17-validation.md#116-conformance-corpus)) |
 | [`rust/dragonfruit-slicing-engine/src/encoders/mod.rs`](https://github.com/Open-Resin-Alliance/DragonFruit/blob/main/rust/dragonfruit-slicing-engine/src/encoders/mod.rs) | `FormatEncoder` and `RleStreamEncoder` trait contracts |
 | [`rust/dragonfruit-slicing-engine/docs/ARCHITECTURE.md`](https://github.com/Open-Resin-Alliance/DragonFruit/blob/main/rust/dragonfruit-slicing-engine/docs/ARCHITECTURE.md) | Slicing engine architecture overview |
 | [`rust/dragonfruit-slicing-engine/src/rle.rs`](https://github.com/Open-Resin-Alliance/DragonFruit/blob/main/rust/dragonfruit-slicing-engine/src/rle.rs) | Core RLE types consumed by the LUMEN REE encoder |

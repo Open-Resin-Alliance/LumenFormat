@@ -1,4 +1,4 @@
-//! The per-layer settings pipeline ([`spec/11-layer-timing.md`] section 8).
+//! The per-layer settings pipeline ([`spec/14-layer-timing.md`] section 8).
 //!
 //! Base values come from `META`, a `META.sectors` entry overrides them per
 //! sector, the bottom and transition ranges blend bottom-prefixed values into
@@ -9,7 +9,7 @@ use crate::check::Check;
 use crate::error::{Error, Result};
 use crate::json::{CureCurve, Meta, Sector, Timing, REQUIRED_META_FIELDS};
 
-/// Light PWM when META carries none (`spec/03-chunks.md` section 4.2).
+/// Light PWM when META carries none (`spec/05-meta.md` section 4.2).
 const DEFAULT_LIGHT_PWM: u32 = 255;
 
 /// The concrete timing of one `(layer, sector)` pair.

@@ -1,4 +1,4 @@
-//! Protocol-Buffers-style varints ([`spec/08-layer-encoding.md`] section 5.2).
+//! Protocol-Buffers-style varints ([`spec/11-layer-encoding.md`] section 5.2).
 //!
 //! Seven data bits per byte, least-significant group first, MSB set means more
 //! bytes follow. The shortest form is mandatory: an overlong encoding is

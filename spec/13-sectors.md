@@ -10,16 +10,16 @@ A **sector** is an exposure group with its own timing parameters and its own mas
 each layer. On a given layer, a sector is a pair:
 
 - an **override set** - that `(layer, sector)`'s `LROV` chunk, or none
-  ([§4.5](05-print-control.md#45-lrov---layer-override-chunk)), and
+  ([§4.5](08-print-control.md#45-lrov---layer-override-chunk)), and
 - a **data slice** - that `(layer, sector)`'s byte range inside the `LAYR` chunk for its
-  sector ([§4.9](06-layer-data.md#49-layr---layer-data-chunk)), or none.
+  sector ([§4.9](09-layer-data.md#49-layr---layer-data-chunk)), or none.
 
 Those two, plus the layer table entry that names both
-([§4.7](06-layer-data.md#47-ltbl---layer-table-chunk)), are all a sector is in the layer
+([§4.7](09-layer-data.md#47-ltbl---layer-table-chunk)), are all a sector is in the layer
 stream. There is no in-band sector id and no per-layer framing to parse: a sector's data is
 its own chunk, and the entry that points at it is where a reader learns which sector it is
 looking at. Anything a sector carries beyond that - a name, a colour, a material, and the
-timing it starts from - is declared once in `META.sectors` ([§4.2](03-chunks.md#42-meta---metadata-chunk)).
+timing it starts from - is declared once in `META.sectors` ([§4.2](05-meta.md#42-meta---metadata-chunk)).
 
 Use cases:
 

@@ -1,11 +1,11 @@
-//! Run-end encoded layer masks ([`spec/08-layer-encoding.md`] section 5).
+//! Run-end encoded layer masks ([`spec/11-layer-encoding.md`] section 5).
 //!
 //! Three tags are defined: binary REE (`0x00`), grayscale REE (`0x01`) and split
 //! REE (`0x02`). A layer whose pixels are all zero has no stream at all - the
 //! empty-layer form lives in the `LTBL` entry, not in the layer data.
 //!
 //! Every run-length or position array is stored as four significance planes
-//! ([`spec/08-layer-encoding.md`] section 5.3.1): the four plane lengths, then the
+//! ([`spec/11-layer-encoding.md`] section 5.3.1): the four plane lengths, then the
 //! bytes of plane 0, plane 1, plane 2 and plane 3. A varint's byte `j` belongs to
 //! plane `j`, so a length's high byte stops sitting between two noisy low bytes and
 //! the compressor can see that it is nearly constant along a scanline.
@@ -1294,7 +1294,7 @@ pub fn validate_stream(data: &[u8], total_pixels: u32, strict: bool) -> Result<u
 /// Walk the pixels a slice exposes, as `[start, end)` ranges.
 ///
 /// A slice exposes every pixel its mask decodes to something other than `0x00`,
-/// which is what the sector partition rule ([`spec/10-sectors.md`] section 7.3)
+/// which is what the sector partition rule ([`spec/13-sectors.md`] section 7.3)
 /// compares between the sectors of one layer. The ranges come from the stream's
 /// structure, so the rule costs no mask: a split stream reports its thresholded
 /// core's runs and then the overlay it carries, whose pixels a strict reader has

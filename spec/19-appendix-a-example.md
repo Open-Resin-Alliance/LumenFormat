@@ -83,11 +83,11 @@ The timing pipeline resolves it as:
 once and an operator adjusts individual layers. Ten layers, two sectors: sector 0 is
 the model, a rectangle that widens as the print rises, and sector 1 a support column
 in a second vat. The two masks are disjoint at every layer, which is what the
-partition invariant asks ([§7.3](10-sectors.md#73-sector-mask-invariant)): a pixel
+partition invariant asks ([§7.3](13-sectors.md#73-sector-mask-invariant)): a pixel
 belongs to exactly one sector.
 
 **The two resins** are a library in META and an entry in its `sectors` array
-([§4.2](03-chunks.md#42-meta---metadata-chunk)):
+([§4.2](05-meta.md#42-meta---metadata-chunk)):
 
 ```jsonc
 "materials": [
@@ -124,7 +124,7 @@ the rest of the resolved value standing.
 
 Chunks 3 to 5 are one *range* of three layers, and it is three chunks because an
 `LROV` chunk belongs to exactly one `(layer, sector)` - the layer table entry that
-names it is what places it ([§4.5](05-print-control.md#45-lrov---layer-override-chunk)).
+names it is what places it ([§4.5](08-print-control.md#45-lrov---layer-override-chunk)).
 A slicer that adjusts a 500-layer range writes 500 small chunks, each a handful of
 bytes of JSON; that is the cost of having no range form in the payload.
 
@@ -169,7 +169,7 @@ while the entry itself is what keeps sector 0's place in the order.
 
 **What a reader resolves** for every `(layer, sector)` - META, then the sector's own
 entry, then the bottom and transition blend over the counts *that sector* carries or
-inherits, then the delta its entry names ([§8](11-layer-timing.md#8-per-layer-settings-model)):
+inherits, then the delta its entry names ([§8](14-layer-timing.md#8-per-layer-settings-model)):
 
 | Layer | Sector 0 | Sector 1 | Overridden |
 |-------|----------|----------|------------|
@@ -192,7 +192,7 @@ layer 4 is fully normal at 2,500 ms for the model and still a bottom layer at
 
 A reader that prints one sector per layer cannot print this file faithfully: sector 1
 carries pixels on every layer, so the single-material degradation of
-[§7.2](10-sectors.md#72-sector-0-convention-and-single-material-degradation) has to
+[§7.2](13-sectors.md#72-sector-0-convention-and-single-material-degradation) has to
 report the print as incomplete rather than complete. The reference crate answers
 `is_single_material_complete() == false` for it, which is §7.2's rule expressed as an
 API.

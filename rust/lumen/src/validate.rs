@@ -1,4 +1,4 @@
-//! The checks of [`spec/14-validation.md`] section 11.
+//! The checks of [`spec/17-validation.md`] section 11.
 //!
 //! Validation returns the **first** failure, in the order the specification
 //! presents the checks: file framing, then presence, then each chunk's semantic

@@ -5,7 +5,7 @@
 //! `LROV` payload all draw on the same field namespace, so they share [`Timing`].
 //! Unknown JSON keys are preserved in `Timing::extra` rather than dropped, which
 //! is what lets this crate re-emit a chunk it did not fully understand
-//! ([`spec/13-versioning.md`] section 10.2).
+//! ([`spec/16-versioning.md`] section 10.2).
 //!
 //! Durations are whole milliseconds, lengths are integer micrometers and speeds
 //! are integer micrometers per minute, so all three are modelled as integers and
@@ -16,7 +16,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-/// The ten fields META must carry ([`spec/14-validation.md`] section 11.2).
+/// The ten fields META must carry ([`spec/17-validation.md`] section 11.2).
 pub const REQUIRED_META_FIELDS: [&str; 10] = [
     "meta_version",
     "normal_exposure_ms",
@@ -36,7 +36,7 @@ pub const REQUIRED_META_FIELDS: [&str; 10] = [
 /// Every field is optional: META requires some of them, a sector entry or an
 /// `LROV` payload supplies only what it changes, and a `PROF` supplies all of
 /// them. A `bottom_*` field that is absent equals its normal counterpart
-/// ([`spec/11-layer-timing.md`] section 8).
+/// ([`spec/14-layer-timing.md`] section 8).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Timing {
     /// Default layer thickness in micrometers.
@@ -482,7 +482,7 @@ pub struct Profile {
 /// The entry carries only what differs from META's own values: every timing
 /// field it leaves out is inherited from META's, field by field, and a sector
 /// with no entry at all - sector 0, the primary one, always - resolves from META
-/// alone ([`spec/11-layer-timing.md`] section 8). A sector carries no material
+/// alone ([`spec/14-layer-timing.md`] section 8). A sector carries no material
 /// until its entry names one.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Sector {

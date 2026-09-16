@@ -82,30 +82,33 @@ Rendered specification: <https://openresin.org/specs/lumen>
 Start at [`spec/01-overview.md`](spec/01-overview.md). The specification is published in
 parts under [`spec/`](spec/), in reading order, and section numbers (`§3.1`) are stable
 anchors across them - a link into a section keeps working whichever part it lives in.
-Section numbers track the subject, not the file: §4 is split across five parts so each
+Section numbers track the subject, not the file: §4 is split across eight parts so each
 chunk group can be read on its own.
 
 | Part | Sections | Covers |
 |------|----------|--------|
 | [`01-overview.md`](spec/01-overview.md) | §1-2 | Design philosophy, core conventions, what LUMEN is not |
 | [`02-file-structure.md`](spec/02-file-structure.md) | §3 | Header, chunk directory at the end of the file, trailer |
-| [`03-chunks.md`](spec/03-chunks.md) | §4, §4.1-4.3 | Chunk type summary, `HEAD`, `META`, `PROF` |
-| [`04-chunk-auth.md`](spec/04-chunk-auth.md) | §4.4 | `AUTH`, password and machine-binding sections |
-| [`05-print-control.md`](spec/05-print-control.md) | §4.5-4.6 | `LROV`, `PREV` |
-| [`06-layer-data.md`](spec/06-layer-data.md) | §4.7-4.10 | `LTBL`, `ZDIC`, `LAYR`, `LHAS` |
-| [`07-scene-chunks.md`](spec/07-scene-chunks.md) | §4.11-4.12 | `VOXL` embedded scene, `EXTD` extensions |
-| [`08-layer-encoding.md`](spec/08-layer-encoding.md) | §5 | Run-end encoding: binary, grayscale and split REE |
-| [`09-compression.md`](spec/09-compression.md) | §6 | zstd block framing and the shared trained dictionary |
-| [`10-sectors.md`](spec/10-sectors.md) | §7 | Multi-material sectors and the sector mask invariant |
-| [`11-layer-timing.md`](spec/11-layer-timing.md) | §8 | Per-layer settings, bottom/transition blending, overrides |
-| [`12-encryption.md`](spec/12-encryption.md) | §9 | AEAD framing, Argon2id passwords, X25519 machine binding |
-| [`13-versioning.md`](spec/13-versioning.md) | §10 | Revision numbering, forward compatibility, change control |
-| [`14-validation.md`](spec/14-validation.md) | §11 | Every check a conforming reader runs, loose and strict |
-| [`15-comparison.md`](spec/15-comparison.md) | §12 | LUMEN against CTB, GOO, AFZ and NanoDLP |
-| [`16-appendix-a-example.md`](spec/16-appendix-a-example.md) | Appendix A | The example files the reference implementation writes, layout by layout |
-| [`17-appendix-b-encoder.md`](spec/17-appendix-b-encoder.md) | Appendix B | The reference implementation: the crate and the slicer adapter that ships |
-| [`18-appendix-c-references.md`](spec/18-appendix-c-references.md) | Appendix C | Standards, RFCs and related format specifications |
-| [`19-license.md`](spec/19-license.md) | - | MIT text and format governance |
+| [`03-chunks.md`](spec/03-chunks.md) | §4 | The chunk type summary: what each chunk is for, required to write, mandatory to honor |
+| [`04-head.md`](spec/04-head.md) | §4.1 | `HEAD`: display dimensions, build volume, layer count |
+| [`05-meta.md`](spec/05-meta.md) | §4.2 | `META`: exposure, motion, waits, PWM, materials, sectors |
+| [`06-prof.md`](spec/06-prof.md) | §4.3 | `PROF`: a named, reusable print profile |
+| [`07-chunk-auth.md`](spec/07-chunk-auth.md) | §4.4 | `AUTH`, password and machine-binding sections |
+| [`08-print-control.md`](spec/08-print-control.md) | §4.5-4.6 | `LROV`, `PREV` |
+| [`09-layer-data.md`](spec/09-layer-data.md) | §4.7-4.10 | `LTBL`, `ZDIC`, `LAYR`, `LHAS` |
+| [`10-scene-chunks.md`](spec/10-scene-chunks.md) | §4.11-4.12 | `VOXL` embedded scene, `EXTD` extensions |
+| [`11-layer-encoding.md`](spec/11-layer-encoding.md) | §5 | Run-end encoding: binary, grayscale and split REE |
+| [`12-compression.md`](spec/12-compression.md) | §6 | zstd block framing and the shared trained dictionary |
+| [`13-sectors.md`](spec/13-sectors.md) | §7 | Multi-material sectors and the sector mask invariant |
+| [`14-layer-timing.md`](spec/14-layer-timing.md) | §8 | Per-layer settings, bottom/transition blending, overrides |
+| [`15-encryption.md`](spec/15-encryption.md) | §9 | AEAD framing, Argon2id passwords, X25519 machine binding |
+| [`16-versioning.md`](spec/16-versioning.md) | §10 | Revision numbering, forward compatibility, change control |
+| [`17-validation.md`](spec/17-validation.md) | §11 | Every check a conforming reader runs, loose and strict |
+| [`18-comparison.md`](spec/18-comparison.md) | §12 | LUMEN against CTB, GOO, AFZ and NanoDLP |
+| [`19-appendix-a-example.md`](spec/19-appendix-a-example.md) | Appendix A | The example files the reference implementation writes, layout by layout |
+| [`20-appendix-b-encoder.md`](spec/20-appendix-b-encoder.md) | Appendix B | The reference implementation: the crate and the slicer adapter that ships |
+| [`21-appendix-c-references.md`](spec/21-appendix-c-references.md) | Appendix C | Standards, RFCs and related format specifications |
+| [`22-license.md`](spec/22-license.md) | - | MIT text and format governance |
 
 Two audiences are expected, and the Reader's Guide in
 [`spec/01-overview.md`](spec/01-overview.md) says where each can start: engineers evaluating

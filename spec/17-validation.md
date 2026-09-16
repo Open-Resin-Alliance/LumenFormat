@@ -36,7 +36,7 @@ companion field left to contradict. What replaced them is named in the lists bel
   when `size_compressed > 0`, and `[offset, offset + size_uncompressed)` when
   `size_compressed == 0`. Exception: null descriptors (`offset == 0`). A `LAYR` chunk's
   extent follows the same rule: its `size_uncompressed` is the container's byte length, and a
-  sealed container's is `size_compressed` ([§4.9](06-layer-data.md#49-layr---layer-data-chunk)).
+  sealed container's is `size_compressed` ([§4.9](09-layer-data.md#49-layr---layer-data-chunk)).
 - [ ] `HEAD` chunk present (`presence.head`) and is the first chunk, at the offset immediately
   after the 32-byte header (`dir.head_first`).
 - [ ] `META` chunk present (`presence.meta`).
@@ -68,7 +68,7 @@ companion field left to contradict. What replaced them is named in the lists bel
 - [ ] `HEAD.display_width_px × display_height_px > 0` (`head.display_pixels`).
 - [ ] The META payload is a JSON object (`meta.json`).
 - [ ] META JSON contains all required fields (`meta.required_fields`): `meta_version`, `normal_exposure_ms`, `bottom_exposure_ms`, `bottom_layer_count`, `transition_layer_count`, `layer_height_um`, `lift_slow_distance_um`, `lift_slow_speed_um_min`, `retract_fast_distance_um`, `retract_fast_speed_um_min`.
-- [ ] Every `*_ms` field in META, and `estimated_print_time_sec`, is a JSON integer (`meta.time_integer`). A value with a fractional part such as `2500.5` is invalid; the rule covers the timing fields of META's `sectors` entries too, since they are META's fields. See [§4.2](03-chunks.md#42-meta---metadata-chunk) for the encoders' and readers' obligations.
+- [ ] Every `*_ms` field in META, and `estimated_print_time_sec`, is a JSON integer (`meta.time_integer`). A value with a fractional part such as `2500.5` is invalid; the rule covers the timing fields of META's `sectors` entries too, since they are META's fields. See [§4.2](05-meta.md#42-meta---metadata-chunk) for the encoders' and readers' obligations.
 - [ ] `META.normal_exposure_ms > 0` and `META.bottom_exposure_ms > 0`, as integer comparisons (`meta.exposure`).
 - [ ] `META.layer_height_um > 0` (`meta.layer_height`).
 - [ ] If `META.materials` is present, it is a non-empty array and every entry has a non-empty `name` (`meta.materials_shape`).
@@ -87,19 +87,19 @@ companion field left to contradict. What replaced them is named in the lists bel
 - [ ] If `PROF.settings.cure_curve` present, `dp_um > 0`, `ec_mj_cm2 > 0.0`, `e0_mj_cm2 >= 0.0` (`prof.cure_curve`).
 - [ ] If `PROF` chunk present with `profile_uuid`, the UUID string is well-formed (36 characters, 8-4-4-4-12 hex pattern, `prof.profile_uuid`).
 - [ ] If `PROF.materials` is present, it satisfies the same shape rules as `META.materials` (`prof.materials_shape`).
-- [ ] If `PREV` chunk present, `preview_role` is 0–3 and reserved flag bits 5–31 are 0 (`prev.flags`, [§4.6](05-print-control.md#46-prev---preview-image-chunk)).
-- [ ] (Strict mode) If `PREV` chunk present, its payload begins with the PNG signature and its `IHDR` is well-formed (`prev.png_signature`, [§4.6](05-print-control.md#46-prev---preview-image-chunk)).
+- [ ] If `PREV` chunk present, `preview_role` is 0–3 and reserved flag bits 5–31 are 0 (`prev.flags`, [§4.6](08-print-control.md#46-prev---preview-image-chunk)).
+- [ ] (Strict mode) If `PREV` chunk present, its payload begins with the PNG signature and its `IHDR` is well-formed (`prev.png_signature`, [§4.6](08-print-control.md#46-prev---preview-image-chunk)).
 - [ ] If `LHAS` chunk present, recompute Merkle root from `layer_hashes` and verify it matches `merkle_root` (`lhas.root_recompute`).
 - [ ] (Strict mode) If `LHAS` chunk present, decompress and hash each layer; verify against `layer_hashes` (`lhas.leaf_match`).
-- [ ] (Strict mode) If `VOXL` chunk present, the payload is recognizable as VOXL: it begins with the V2 magic `VOXL` or with the V1 JSON document marker `{` (`voxl.signature`) ([§4.11](07-scene-chunks.md#411-voxl---embedded-scene-chunk)). Whether it is a *valid* VOXL file is VOXL's business, checked by whatever parses the scene; a print reader never needs to know.
-- [ ] Every `EXTD` payload is at least 8 bytes: `ext_version` and `ext_type` make up the fixed part of the frame (`extd.frame`, [§4.12](07-scene-chunks.md#412-extd---extension-chunk)).
+- [ ] (Strict mode) If `VOXL` chunk present, the payload is recognizable as VOXL: it begins with the V2 magic `VOXL` or with the V1 JSON document marker `{` (`voxl.signature`) ([§4.11](10-scene-chunks.md#411-voxl---embedded-scene-chunk)). Whether it is a *valid* VOXL file is VOXL's business, checked by whatever parses the scene; a print reader never needs to know.
+- [ ] Every `EXTD` payload is at least 8 bytes: `ext_version` and `ext_type` make up the fixed part of the frame (`extd.frame`, [§4.12](10-scene-chunks.md#412-extd---extension-chunk)).
 - [ ] `EXTD` `ext_type` is four ASCII characters (`extd.ext_type`).
-- [ ] `EXTD` reserved flag bits - 0-3, 5-7 and 25-31 - are 0 (`extd.flags`, [§4.12](07-scene-chunks.md#412-extd---extension-chunk)).
-- [ ] No `EXTD` chunk that a reader does not implement carries `critical = 1` (`extd.critical`): such a file is unprintable to that reader rather than printable with approximations ([§4.12](07-scene-chunks.md#412-extd---extension-chunk)).
+- [ ] `EXTD` reserved flag bits - 0-3, 5-7 and 25-31 - are 0 (`extd.flags`, [§4.12](10-scene-chunks.md#412-extd---extension-chunk)).
+- [ ] No `EXTD` chunk that a reader does not implement carries `critical = 1` (`extd.critical`): such a file is unprintable to that reader rather than printable with approximations ([§4.12](10-scene-chunks.md#412-extd---extension-chunk)).
 
 ### 11.3 Layer Data Validation (post-decompression)
 
-- [ ] Before decompressing, a `LAYR` frame declares its content size (`layr.content_size_present`). The descriptor does not carry the frame's output length, so a frame without one is rejected rather than allocated for ([§4.9](06-layer-data.md#49-layr---layer-data-chunk)).
+- [ ] Before decompressing, a `LAYR` frame declares its content size (`layr.content_size_present`). The descriptor does not carry the frame's output length, so a frame without one is rejected rather than allocated for ([§4.9](09-layer-data.md#49-layr---layer-data-chunk)).
 - [ ] The declared content size is at most the bound the chunk's slices justify (grayscale REE costs at most about 5 bytes per pixel plus framing per slice, `layr.allocation_bound`), so a corrupt or hostile chunk cannot force an unbounded allocation.
 - [ ] Decompressing a `LAYR` frame succeeds and yields exactly the size the frame declares, and no more (`layr.frame_decompressed_size`).
 - [ ] A frame's zstd dictionary ID equals `ZDIC.dict_id` when `ZDIC` is present (`layr.dict_id_match`, `zdic.dict_id_match`), and is `0` when it is absent (`layr.dict_id_absent`).
@@ -109,27 +109,27 @@ companion field left to contradict. What replaced them is named in the lists bel
 - [ ] Split-encoded layers (tag `0x02`): `aa_positions` values are strictly increasing and every position is `< total_pixels` (`ree.split_positions`), and `aa_values` holds exactly `aa_pixel_count` bytes.
 - [ ] For binary REE (tag `0x00`): `first_value` must be `0x00` or `0xFF` (`ree.first_value`).
 - [ ] REE streams decode to strictly increasing end positions, and the last end position equals `total_pixels` (`ree.end_positions`).
-- [ ] (Strict mode) Significance planes ([§5.3.1](08-layer-encoding.md#531-significance-planes)): a stream's four plane lengths describe planes that are prefix-closed - a non-empty plane may not follow an empty one - and the fixed bytes, the plane lengths and the planes account for exactly `data_size` (`ree.planes`, `ree.no_trailing_bytes`).
-- [ ] A slice's stored bytes and its `data_size` agree: the stream at `data_offset` consumes exactly `data_size` bytes with nothing left over (`ree.data_size`, `ree.no_trailing_bytes`), and a slice with `data_size == 0` carries no stream at all - it is an all-black `(layer, sector)` ([§5.6](08-layer-encoding.md#56-canonical-encoding)).
-- [ ] (Strict mode) No slice uses the non-canonical `run_count == 0` form (`ree.no_run_count_zero`); an all-black slice is stored with `data_size == 0` and no bytes ([§5.3](08-layer-encoding.md#53-binary-ree-no-anti-aliasing)).
+- [ ] (Strict mode) Significance planes ([§5.3.1](11-layer-encoding.md#531-significance-planes)): a stream's four plane lengths describe planes that are prefix-closed - a non-empty plane may not follow an empty one - and the fixed bytes, the plane lengths and the planes account for exactly `data_size` (`ree.planes`, `ree.no_trailing_bytes`).
+- [ ] A slice's stored bytes and its `data_size` agree: the stream at `data_offset` consumes exactly `data_size` bytes with nothing left over (`ree.data_size`, `ree.no_trailing_bytes`), and a slice with `data_size == 0` carries no stream at all - it is an all-black `(layer, sector)` ([§5.6](11-layer-encoding.md#56-canonical-encoding)).
+- [ ] (Strict mode) No slice uses the non-canonical `run_count == 0` form (`ree.no_run_count_zero`); an all-black slice is stored with `data_size == 0` and no bytes ([§5.3](11-layer-encoding.md#53-binary-ree-no-anti-aliasing)).
 - [ ] (Strict mode) Binary REE (tag `0x00`): every stored run length is `>= 1`, the implicit final run length is `>= 1`, and the lengths sum to exactly `total_pixels` (`ree.run_lengths`).
 - [ ] (Strict mode) Grayscale REE (tag `0x01`): every run length is `>= 1` and no two adjacent runs carry the same value (`ree.grayscale_runs`).
 - [ ] (Strict mode) A slice whose pixels are all `0x00`/`0xFF` is not stored as grayscale REE; it uses tag `0x00` (`ree.grayscale_all_binary`).
 - [ ] (Strict mode) The same tag choice for split REE: a slice whose pixels are all `0x00`/`0xFF` has no anti-aliasing to overlay, so it is not stored as tag `0x02` - an empty overlay over a thresholded core is a stream a strict validator rejects (`ree.split_all_binary`).
 - [ ] (Strict mode) Split REE (tag `0x02`): the binary component thresholds at `v >= 128`, and the overlay covers exactly the pixels whose value is neither `0x00` nor `0xFF` (`ree.split_threshold`).
-- [ ] (Strict mode) The sector masks of one layer are pairwise disjoint: no pixel is exposed by two sectors of the same layer, and their union is the layer's exposed image (`sector.partition`). Two sectors of a layer live in different `LAYR` chunks, so this compares the slices the layer's entries name ([§7.3](10-sectors.md#73-sector-mask-invariant)).
+- [ ] (Strict mode) The sector masks of one layer are pairwise disjoint: no pixel is exposed by two sectors of the same layer, and their union is the layer's exposed image (`sector.partition`). Two sectors of a layer live in different `LAYR` chunks, so this compares the slices the layer's entries name ([§7.3](13-sectors.md#73-sector-mask-invariant)).
 
 ### 11.4 Encryption Validation
 
-- [ ] If `ENCRYPTED` flag set, all `LAYR`/`META`/`PROF`/`LROV`/`VOXL`/`ZDIC` chunks have the encrypted flag set (`crypt.chunk_flags`), every `LAYR` frame is at least 28 bytes (one sealed unit), and every `LAYR` frame is individually sealed ([§9.3](12-encryption.md#93-encryption-format)).
-- [ ] If `ENCRYPTED` flag set, `HEAD`, `AUTH` and `LTBL` do **not** have the encrypted flag set, and a `LAYR` chunk's 4-byte version field is plaintext inside its sealed chunk ([§9.1](12-encryption.md#91-design-principles)).
-- [ ] If the `ENCRYPTED` flag is clear, no chunk descriptor sets the encrypted bit: there is no key in the file that could open such a chunk (`crypt.no_key`, [§9.1](12-encryption.md#91-design-principles)).
+- [ ] If `ENCRYPTED` flag set, all `LAYR`/`META`/`PROF`/`LROV`/`VOXL`/`ZDIC` chunks have the encrypted flag set (`crypt.chunk_flags`), every `LAYR` frame is at least 28 bytes (one sealed unit), and every `LAYR` frame is individually sealed ([§9.3](15-encryption.md#93-encryption-format)).
+- [ ] If `ENCRYPTED` flag set, `HEAD`, `AUTH` and `LTBL` do **not** have the encrypted flag set, and a `LAYR` chunk's 4-byte version field is plaintext inside its sealed chunk ([§9.1](15-encryption.md#91-design-principles)).
+- [ ] If the `ENCRYPTED` flag is clear, no chunk descriptor sets the encrypted bit: there is no key in the file that could open such a chunk (`crypt.no_key`, [§9.1](15-encryption.md#91-design-principles)).
 - [ ] Each sealed unit opens with `associated_data = chunk_type || 0x00 || unit_index_le_u32`, where `unit_index` is `0` for a single-unit chunk and the `LAYR` chunk's directory index for a `LAYR` chunk (`crypt.unit_index_binding`). A sealed frame presented at another `LAYR` chunk's directory index therefore fails its tag check: an implementation that opens it anyway has not bound the unit to its identity.
 - [ ] Auth tag verifies for each encrypted chunk (decryption integrity check, `crypt.tag_verify`).
 - [ ] `AUTH.mode` has at least one bit set (`crypt.mode_empty`).
-- [ ] If `AUTH.mode` bit 0 is set, `password_section_len >= 65` (the fixed password section size, `crypt.password_section_len`; see [§4.4.1](04-chunk-auth.md#441-password-section)).
-- [ ] If `AUTH.mode` bit 1 is set, `machine_section_len >= 104` and `machine_section_len % 104 == 0` (must contain at least one complete recipient entry, `crypt.machine_section_len`; see [§4.4.2](04-chunk-auth.md#442-machine-binding-section)).
-- [ ] Machine-binding entries are well formed (`crypt.recipient_entry`), and an exchange that yields the all-zero shared secret is rejected rather than used as a KEK (`crypt.low_order_point`, [§4.4.2](04-chunk-auth.md#442-machine-binding-section)).
+- [ ] If `AUTH.mode` bit 0 is set, `password_section_len >= 65` (the fixed password section size, `crypt.password_section_len`; see [§4.4.1](07-chunk-auth.md#441-password-section)).
+- [ ] If `AUTH.mode` bit 1 is set, `machine_section_len >= 104` and `machine_section_len % 104 == 0` (must contain at least one complete recipient entry, `crypt.machine_section_len`; see [§4.4.2](07-chunk-auth.md#442-machine-binding-section)).
+- [ ] Machine-binding entries are well formed (`crypt.recipient_entry`), and an exchange that yields the all-zero shared secret is rejected rather than used as a KEK (`crypt.low_order_point`, [§4.4.2](07-chunk-auth.md#442-machine-binding-section)).
 - [ ] A wrapped session key that does not unwrap is reported as an unwrap failure (`crypt.key_unwrap`), and a file whose key cannot be recovered - wrong password, or no recipient entry matching this machine - is refused rather than partially decrypted (`crypt.no_key`).
 - [ ] Argon2id parameters are within the reader's supported budget (`crypt.argon2_budget`). Readers MUST reject a file whose derivation cost exceeds that budget rather than attempting it - a hostile file can otherwise exhaust memory. Recommended ceilings: `iterations <= 10`, `memory_kib <= 4 194 304`, `parallelism <= 16`.
 
@@ -139,7 +139,7 @@ companion field left to contradict. What replaced them is named in the lists bel
   chunks and fields - ones this revision does not define, or that the reader has no use
   for, such as `PREV`, `PROF` or `LHAS`. Skipping never reaches a chunk the reader must act
   on: an `LROV` chunk a reader cannot honor makes the file unprintable to it, not printable
-  without overrides ([§4.5](05-print-control.md#45-lrov---layer-override-chunk)).
+  without overrides ([§4.5](08-print-control.md#45-lrov---layer-override-chunk)).
 - **Strict** (file verification tools): Enforce all semantic validations. Warn on
   non-critical issues, error on critical ones.
 
@@ -152,7 +152,7 @@ fractional part is a type violation, not a canonicalization preference, so a loo
 rejects it too. They cover every duration in the timing namespace - META's `sectors`
 entries are META's fields, so `meta.time_integer` covers them - and `meta.time_integer`
 also covers META's `estimated_print_time_sec`, which is whole seconds rather than
-milliseconds ([§4.2](03-chunks.md#42-meta---metadata-chunk)). Whether a reader
+milliseconds ([§4.2](05-meta.md#42-meta---metadata-chunk)). Whether a reader
 *additionally* rejects integral floating-point syntax such as `2500.0` is the reader's
 choice, and no file may rely on either answer.
 
@@ -165,9 +165,9 @@ valid vector pins the uncompressed structures it contains exactly - the file hea
 `layr_version` and the decompressed output of its frame, `LHAS`, every REE stream, the
 chunk directory and the trailer - and each invalid vector fails exactly one named check
 from this section. Each valid vector also records the settings a conforming reader must
-resolve for a sample of `(layer, sector)` points, which pins the [§8](11-layer-timing.md#8-per-layer-settings-model)
+resolve for a sample of `(layer, sector)` points, which pins the [§8](14-layer-timing.md#8-per-layer-settings-model)
 pipeline - base values, bottom and transition blending, absent-field defaults, and the
-`LROV` overrides a reader is required to apply ([§4.5](05-print-control.md#45-lrov---layer-override-chunk)) -
+`LROV` overrides a reader is required to apply ([§4.5](08-print-control.md#45-lrov---layer-override-chunk)) -
 rather than only the bytes. Compressed payloads are pinned by property rather than by byte,
 because zstd output is not stable across versions. The encrypted vectors carry their
 test password and recipient key in the manifest.

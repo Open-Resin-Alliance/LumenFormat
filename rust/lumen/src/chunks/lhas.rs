@@ -1,5 +1,5 @@
 //! The `LHAS` chunk: per-layer leaf hashes and a Merkle root
-//! ([`spec/06-layer-data.md`] section 4.10).
+//! ([`spec/09-layer-data.md`] section 4.10).
 //!
 //! The tree is RFC 6962 style and domain separated: leaves hash `0x00 || data`,
 //! internal nodes hash `0x01 || left || right`, and an odd node at any level is

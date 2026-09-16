@@ -1,5 +1,5 @@
-//! One codec per chunk type ([`spec/03-chunks.md`], [`spec/06-layer-data.md`],
-//! [`spec/07-scene-chunks.md`]).
+//! One codec per chunk type ([`spec/03-chunks.md`], [`spec/09-layer-data.md`],
+//! [`spec/10-scene-chunks.md`]).
 //!
 //! Each codec deals in *plaintext payload bytes*: decryption and the zstd layer
 //! are the caller's business, because whether a chunk carries a zstd frame is a

@@ -1,5 +1,5 @@
 //! The `PREV` chunk: a PNG preview, with its role in the descriptor flags
-//! ([`spec/05-print-control.md`] section 4.6).
+//! ([`spec/08-print-control.md`] section 4.6).
 
 use crate::check::Check;
 use crate::container::CHUNK_FLAG_ENCRYPTED;

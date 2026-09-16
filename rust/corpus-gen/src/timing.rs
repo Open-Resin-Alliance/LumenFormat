@@ -3,7 +3,7 @@
 //!
 //! The generator already writes each vector's META and `LROV` payloads; this
 //! module reads those same payloads the way a conforming reader must and resolves
-//! the timing of a `(layer, sector)` pair ([`spec/11-layer-timing.md`] section 8).
+//! the timing of a `(layer, sector)` pair ([`spec/14-layer-timing.md`] section 8).
 //! `manifest.json` then records the result for the points [`Pipeline::manifest`]
 //! selects, so a third-party implementation has numbers to agree with and not
 //! just bytes to re-derive.

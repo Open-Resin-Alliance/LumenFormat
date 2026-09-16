@@ -20,7 +20,7 @@ own internal version field for format detection.
 
 LUMEN treats the payload as opaque. A scene is copied in on save and handed back
 unchanged on re-open, so nothing in this specification requires a reader to parse VOXL
-beyond recognizing which generation it is ([§11.2](14-validation.md#112-semantic-validation)).
+beyond recognizing which generation it is ([§11.2](17-validation.md#112-semantic-validation)).
 A slicer that re-opens the file decodes the VOXL itself, under VOXL's rules, and may then
 check that the scene agrees with this file's `HEAD` fields - but a printer never needs to,
 and a print reader that skips the chunk entirely is conforming.
@@ -76,7 +76,7 @@ Vendor or future-standard extension data.
 | 25–31 | - | Reserved. Must be 0. |
 
 Readers skip `EXTD` chunks they do not implement, unless `critical` is set, in which
-case they MUST refuse the file ([§11.2](14-validation.md#112-semantic-validation)). An
+case they MUST refuse the file ([§11.2](17-validation.md#112-semantic-validation)). An
 extension with `vendor_id = 0` and one of the reserved type codes below is still
 unimplemented until a reader implements its semantics; reserving the code is not the
 same as defining the payload.
@@ -86,6 +86,6 @@ same as defining the payload.
 | `ext_type` | Name | Purpose |
 |------------|------|---------|
 | `SIGN` | Signature | Cryptographic signature for file authenticity. |
-| `VLYR` | Variable Layers | Per-layer height values. Reserved for a future core mechanism; not usable in v1 ([§5.7](08-layer-encoding.md#57-resin-working-curve-experimental)). |
+| `VLYR` | Variable Layers | Per-layer height values. Reserved for a future core mechanism; not usable in v1 ([§5.7](11-layer-encoding.md#57-resin-working-curve-experimental)). |
 | `CMLT` | Compression ML | Training metadata for the `ZDIC` dictionary (corpus size, training parameters). |
 | `CMAP` | Color Map | Per-sector color channel mapping for multi-color printing. |

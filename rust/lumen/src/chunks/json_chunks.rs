@@ -1,5 +1,5 @@
 //! The JSON chunks: `META`, `PROF` and `LROV`
-//! ([`spec/03-chunks.md`], [`spec/05-print-control.md`]).
+//! ([`spec/05-meta.md`], [`spec/06-prof.md`], [`spec/08-print-control.md`]).
 //!
 //! `META` and `PROF` are objects of their own; an `LROV` payload is one
 //! `(layer, sector)`'s timing delta, an object in the same field namespace META

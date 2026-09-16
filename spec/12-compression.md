@@ -9,7 +9,7 @@ A 12K printer generates 74.6 million pixels per layer; across 2,000 layers that
 is 149 GB of raw data. Without aggressive compression, files are unmanageably
 large for storage, network transfer, and embedded-printer memory.
 
-LUMEN's compression strategy has two layers. First, the REE encoding ([§5](08-layer-encoding.md#5-layer-mask-encoding))
+LUMEN's compression strategy has two layers. First, the REE encoding ([§5](11-layer-encoding.md#5-layer-mask-encoding))
 reduces the per-layer information content well below that of raw pixels.
 Second, zstd compresses each sector's layer data in frames with a shared
 trained dictionary, exploiting the fact that adjacent layers in a
@@ -36,11 +36,11 @@ compression of REE data.
 
 1. Encode every `(layer, sector)` slice to an REE stream, in layer order within each sector.
 2. Group each sector's layers into contiguous runs, and make one frame - one `LAYR` chunk -
-   per run ([§4.9](06-layer-data.md#49-layr---layer-data-chunk)). Recommended: 32–64
+   per run ([§4.9](09-layer-data.md#49-layr---layer-data-chunk)). Recommended: 32–64
    layers per frame.
 3. Sample the first `min(256, total_layers)` layers for a training set.
 4. Train a zstd dictionary with `ZDICT_trainFromBuffer()`.
-5. Store the dictionary in a `ZDIC` chunk ([§4.8](06-layer-data.md#48-zdic---zstd-dictionary-chunk)).
+5. Store the dictionary in a `ZDIC` chunk ([§4.8](09-layer-data.md#48-zdic---zstd-dictionary-chunk)).
 6. Compress each frame independently with `ZSTD_compress_usingDict()`.
 
 The dictionary captures statistical patterns in REE data. Because adjacent layers

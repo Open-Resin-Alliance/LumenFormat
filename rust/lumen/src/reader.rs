@@ -5,7 +5,7 @@
 //! decoded on demand, one `LAYR` chunk at a time, so reading layer 1 of a
 //! 2,000-layer print decompresses the one chunk that holds it rather than the
 //! whole file. For a firmware reader that pulls layers through a fixed buffer,
-//! that is the whole point of the chunked design ([`spec/09-compression.md`]
+//! that is the whole point of the chunked design ([`spec/12-compression.md`]
 //! section 6.2), and the cache here holds exactly one decompressed chunk at a
 //! time - the one last asked for.
 //!
@@ -540,7 +540,7 @@ impl<'a> LumenFile<'a> {
     /// The returned values already carry the sector's `META.sectors` entry, the
     /// bottom and transition blend with the counts that sector carries or
     /// inherits, and the `(layer, sector)`'s own `LROV` payload. Overrides are
-    /// not opt-in ([`spec/05-print-control.md`] section 4.5): a reader that does
+    /// not opt-in ([`spec/08-print-control.md`] section 4.5): a reader that does
     /// not apply them must refuse a file that carries an `LROV` chunk, because
     /// printing the layer at META's exposure instead of its override fails
     /// quietly. This method is therefore the only supported way to read a

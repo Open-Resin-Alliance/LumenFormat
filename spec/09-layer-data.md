@@ -56,7 +56,7 @@ they carry.
 - `first_lrov` is `0` or an `LROV` chunk directory index; it is `0` only when that
   `(layer, sector)` has no overrides, and every `LROV` chunk in the file is named by exactly
   one entry - no two entries share one, and none is left unreferenced
-  ([§4.5](05-print-control.md#45-lrov---layer-override-chunk)).
+  ([§4.5](08-print-control.md#45-lrov---layer-override-chunk)).
 - A layer whose every entry has `data_size == 0` is the empty layer, all black.
 
 **Sectors and the `MULTI_SECTOR` flag.** `MULTI_SECTOR` is set exactly when at least one layer
@@ -109,7 +109,7 @@ group)`.
 
 **Flags:** uncompressed container; the frame inside is zstd-compressed. Encrypted if `AUTH`
 present - the version field stays plaintext and the frame is the sealed unit
-([§9.3](12-encryption.md#93-encryption-format)).
+([§9.3](15-encryption.md#93-encryption-format)).
 
 A chunk holds one sector's mask data for a run of layers, and never two sectors' data: the
 sector a chunk belongs to is stated by the layer table entries that name it, not by the
@@ -135,7 +135,7 @@ frame        : [u8]  - One zstd frame over the concatenation described above.
 **Descriptor.** The version field is a container header, not part of the frame:
 `size_uncompressed` is the container's byte length - 4 plus the frame's stored length - and
 `size_compressed` is `0` when the frame is not sealed, the container's stored length when it
-is. Sealing adds 28 bytes of AEAD framing ([§9.3](12-encryption.md#93-encryption-format)), so
+is. Sealing adds 28 bytes of AEAD framing ([§9.3](15-encryption.md#93-encryption-format)), so
 a sealed container is `4 + 28 + frame_length` bytes and the frame's stored length is
 `size_compressed - 32`. Neither figure is the frame's output length: that is the content size
 the frame itself declares ([§3.2](02-file-structure.md#32-chunk-descriptor)).
@@ -163,7 +163,7 @@ frame per layer also conforms.
 followed by the encoded mask data:
 
 ```
-tag          : u8         - Encoding tag. See the encoding tag table in [§5](08-layer-encoding.md#5-layer-mask-encoding).
+tag          : u8         - Encoding tag. See the encoding tag table in [§5](11-layer-encoding.md#5-layer-mask-encoding).
 mask_data    : [u8]       - REE stream in the format specified by the tag.
 ```
 
@@ -201,7 +201,7 @@ verification. This enables:
 | 38 | N | - | `layer_hashes` | `layer_count × hash_size` bytes. `layer_hashes[i]` is the leaf hash `SHA-256(0x00 \|\| d)`, where `d` is layer `i`'s data: the slices its `LTBL` entries describe, concatenated in ascending `sector_id`, each byte range `[data_offset, + data_size)` taken from its `LAYR` chunk's decompressed output. An empty layer stores `SHA-256(0x00)`. |
 
 Because these hashes cover decompressed bytes, they are reproducible only if encoders
-agree on the byte stream; [§5.6](08-layer-encoding.md#56-canonical-encoding) defines that canonical form.
+agree on the byte stream; [§5.6](11-layer-encoding.md#56-canonical-encoding) defines that canonical form.
 
 **Merkle tree construction** (domain-separated, RFC 6962 style):
 

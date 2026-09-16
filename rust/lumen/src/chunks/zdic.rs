@@ -1,5 +1,5 @@
 //! The `ZDIC` chunk: the zstd dictionary shared by every `LAYR` frame
-//! ([`spec/06-layer-data.md`] section 4.8).
+//! ([`spec/09-layer-data.md`] section 4.8).
 
 use crate::check::Check;
 use crate::error::{Error, Result};

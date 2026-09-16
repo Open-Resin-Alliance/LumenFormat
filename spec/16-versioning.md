@@ -33,7 +33,7 @@ before that ([§10.3](#103-change-control)).
 1. **Unknown chunk types:** Skip (chunk descriptor gives byte range). This covers chunk
    types this revision does not define, and chunks a reader has no use for. It does not
    cover a *defined* chunk whose handling changes what is printed: those are implemented, or
-   the file is refused - `LROV` ([§4.5](05-print-control.md#45-lrov---layer-override-chunk)),
+   the file is refused - `LROV` ([§4.5](08-print-control.md#45-lrov---layer-override-chunk)),
    and an unimplemented `critical` extension (item 6 below).
 2. **Unknown chunk flags:** Ignore within known types.
 3. **Unknown JSON keys:** Ignore in the JSON payloads this specification defines - META,
@@ -66,7 +66,7 @@ revision it was written against and be understood, which is the whole point of t
 A correction that resolves an ambiguity with no single reading names the reading that is now
 correct, and a file produced under another reading is not a conforming file for that
 revision. The encryption constants in
-[§4.4.1](04-chunk-auth.md#441-password-section) were pinned this way, while this document was
+[§4.4.1](07-chunk-auth.md#441-password-section) were pinned this way, while this document was
 still a draft.
 
 **Additive** changes ship as a minor revision of this document (`v1.1`) and leave

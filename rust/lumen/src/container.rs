@@ -102,7 +102,7 @@ impl ChunkType {
     }
 
     /// Whether the payload carries a zstd frame, per the normative table in
-    /// [`spec/09-compression.md`] section 6.3.
+    /// [`spec/12-compression.md`] section 6.3.
     ///
     /// `LAYR` is excluded, and not because it is uncompressed: its payload is a
     /// version field plus a frame the container does not itself decompress, in

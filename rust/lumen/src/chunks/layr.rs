@@ -1,5 +1,5 @@
 //! The `LAYR` chunk: one sector's mask data for one group of layers, as a
-//! single zstd frame ([`spec/06-layer-data.md`] section 4.9).
+//! single zstd frame ([`spec/09-layer-data.md`] section 4.9).
 //!
 //! A `LAYR` chunk is a pair: `layr_version` in the clear, then one zstd frame
 //! over the concatenation of that sector's layer data for the chunk's layer

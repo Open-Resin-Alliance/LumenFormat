@@ -3,7 +3,7 @@
 //! Every check carries the `<group>.<rule>` name the specification's conformance
 //! corpus uses in `expected_failure` ([`test-vectors/README.md`]), so a failure
 //! reported by this crate can be compared verbatim against the corpus. Names are
-//! stable: see `spec/14-validation.md` section 11, which groups them.
+//! stable: see `spec/17-validation.md` section 11, which groups them.
 
 /// A named conformance check, mirroring the corpus convention `<group>.<rule>`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

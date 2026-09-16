@@ -27,8 +27,8 @@ what they need without reading the whole thing:
 
 | Audience | Recommended path |
 |----------|-----------------|
-| **Engineers evaluating LUMEN** (product managers, engineering leads, curious hackers) | Read [§1](#1-design-philosophy) (Design Philosophy), [§2](#2-core-conventions) (Core Conventions), the [§4](03-chunks.md#4-chunk-types) chunk summary table, [§5](08-layer-encoding.md#5-layer-mask-encoding) intro, [§6](09-compression.md#6-compression-strategy) intro, [§9](12-encryption.md#9-encryption-model) intro, and [§12](15-comparison.md#12-comparison-with-existing-formats) (Comparison). Skip binary layout tables unless you need them. |
-| **Developers implementing LUMEN** (encoder/decoder authors, firmware engineers) | Read everything. Start with [§3](02-file-structure.md#3-file-structure) (File Structure) and [§4](03-chunks.md#4-chunk-types) (Chunk Types) for the container, then [§5](08-layer-encoding.md#5-layer-mask-encoding) (Layer Mask Encoding) for the REE spec. Reference [§11](14-validation.md#11-reader-validation-requirements) (Validation) for your test plan. |
+| **Engineers evaluating LUMEN** (product managers, engineering leads, curious hackers) | Read [§1](#1-design-philosophy) (Design Philosophy), [§2](#2-core-conventions) (Core Conventions), the [§4](03-chunks.md#4-chunk-types) chunk summary table, [§5](11-layer-encoding.md#5-layer-mask-encoding) intro, [§6](12-compression.md#6-compression-strategy) intro, [§9](15-encryption.md#9-encryption-model) intro, and [§12](18-comparison.md#12-comparison-with-existing-formats) (Comparison). Skip binary layout tables unless you need them. |
+| **Developers implementing LUMEN** (encoder/decoder authors, firmware engineers) | Read everything. Start with [§3](02-file-structure.md#3-file-structure) (File Structure) and [§4](03-chunks.md#4-chunk-types) (Chunk Types) for the container, then [§5](11-layer-encoding.md#5-layer-mask-encoding) (Layer Mask Encoding) for the REE spec. Reference [§11](17-validation.md#11-reader-validation-requirements) (Validation) for your test plan. |
 
 Sections marked with implementation-level binary tables assume the reader is
 writing code against the format. Sections with broader prose and design
@@ -68,7 +68,7 @@ Alliance:
 5. **Per-layer settings.** Any timing parameter can be overridden for any layer
    or range of layers - and per sector, since two sectors of one layer are separate
    exposures. The bottom, transition and normal ranges still describe the
-   common case ([§8](11-layer-timing.md#8-per-layer-settings-model)); the overrides extend
+   common case ([§8](14-layer-timing.md#8-per-layer-settings-model)); the overrides extend
    that model rather than replacing it.
 
 6. **Open and transparent.** No obfuscation and no mandatory encryption. Optional
@@ -83,7 +83,7 @@ To avoid confusion with other parts of the ORA ecosystem, LUMEN is explicitly
 - **Not a scene format.** LUMEN carries resolved print data (layer masks,
   exposure settings, motion parameters). For editable 3D scenes with models,
   supports, and modifiers, see the VOXL format. LUMEN can *embed* a VOXL scene
-  ([§4.11](07-scene-chunks.md#411-voxl---embedded-scene-chunk)) for round-trip editing, but the format's primary purpose is print
+  ([§4.11](10-scene-chunks.md#411-voxl---embedded-scene-chunk)) for round-trip editing, but the format's primary purpose is print
   execution.
 
 - **Not a streaming protocol.** LUMEN is a file format, designed for storage
@@ -109,7 +109,7 @@ To avoid confusion with other parts of the ORA ecosystem, LUMEN is explicitly
 | Magic bytes | `LUMN` (`0x4C 0x55 0x4D 0x4E`) |
 | Endianness | Little-endian (all multi-byte integers) |
 | Coordinate basis | Right-handed, Z-up |
-| Image orientation | Layer masks are stored as the printer must expose them; readers apply no flip ([§4.1](03-chunks.md#41-head---file-header-chunk)). |
+| Image orientation | Layer masks are stored as the printer must expose them; readers apply no flip ([§4.1](04-head.md#41-head---file-header-chunk)). |
 | Units | Micrometers (`um`), micrometers per minute (`um/min`) and milliseconds (`ms`); seconds (`s`) only for the Unix timestamp and the estimated print time. Lengths, speeds and durations are whole numbers. |
 | Range notation | `a..b` is half-open `[a, b)`. `for i in 0..N` iterates `i = 0, 1, ..., N-1`. |
 

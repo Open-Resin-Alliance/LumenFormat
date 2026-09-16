@@ -77,30 +77,30 @@ Each entry in the Chunk Directory is 32 bytes.
 |--------|------|------|-------|-------------|
 | 0 | 4 | `[u8; 4]` | `chunk_type` | Four ASCII characters. e.g. `HEAD`, `META`. |
 | 4 | 8 | `u64` | `offset` | Absolute byte offset from start of file to chunk payload. `0` = null descriptor (skip). |
-| 12 | 8 | `u64` | `size_uncompressed` | Size of the payload after decompression. `LAYR` is the exception: the container's byte length ([§4.9](06-layer-data.md#49-layr---layer-data-chunk)). |
+| 12 | 8 | `u64` | `size_uncompressed` | Size of the payload after decompression. `LAYR` is the exception: the container's byte length ([§4.9](09-layer-data.md#49-layr---layer-data-chunk)). |
 | 20 | 8 | `u64` | `size_compressed` | Size as stored. `0` = the payload is stored as it is, with nothing wrapped around it. |
 | 28 | 4 | `u32` | `flags` | Chunk-specific flags. See per-chunk definitions. |
 
 **Stored size:** `size_compressed` is the payload's on-disk byte length, including
-any AEAD framing ([§9.3](12-encryption.md#93-encryption-format)). `0` means the payload is stored as it
+any AEAD framing ([§9.3](15-encryption.md#93-encryption-format)). `0` means the payload is stored as it
 is, with nothing wrapped around it, so the on-disk length is `size_uncompressed`.
 
 **Compression:** whether a chunk payload carries a zstd frame is a property of its
-chunk type, not of `size_compressed` ([§6.3](09-compression.md#63-per-chunk-compression-policy)). For a compressed chunk the payload is a
+chunk type, not of `size_compressed` ([§6.3](12-compression.md#63-per-chunk-compression-policy)). For a compressed chunk the payload is a
 zstd frame that decompresses to `size_uncompressed` bytes; for an uncompressed chunk
 the payload bytes are the chunk data itself. This matters for chunks that are stored
 uncompressed but may still be encrypted (`ZDIC`, `PREV`): their `size_compressed` is
 non-zero yet there is no zstd layer to undo.
 
 `LAYR` is the one chunk whose `size_uncompressed` is not its decompressed size. Its payload
-is a version field followed by exactly one zstd frame ([§4.9](06-layer-data.md#49-layr---layer-data-chunk)), and `size_uncompressed` is the
+is a version field followed by exactly one zstd frame ([§4.9](09-layer-data.md#49-layr---layer-data-chunk)), and `size_uncompressed` is the
 byte length of that container - what an unsealed chunk stores, since the version field is
 never compressed. The frame's output length is not in the descriptor: it is the content size
 the frame declares, and every `LAYR` frame carries one.
 
 **Encryption:** if the `ENCRYPTED` flag (bit 4) is set in the chunk descriptor's
 `flags` field, the payload is encrypted as described in
-[§9.3](12-encryption.md#93-encryption-format): for most chunks the whole payload is
+[§9.3](15-encryption.md#93-encryption-format): for most chunks the whole payload is
 one sealed unit, while `LAYR` keeps its version field plaintext and seals the one
 frame that follows it. This is per-chunk encryption, distinct from the
 file-level `ENCRYPTED` flag (header bit 3) which signals the presence of an `AUTH`
@@ -128,5 +128,5 @@ Last 8 bytes of the file.
 2. Read the 32-byte header from offset 0. Verify `magic == "LUMN"` and `version` is recognized.
 3. Seek to `header.dir_offset`. Read `header.chunk_count` × 32-byte descriptors.
 4. For each descriptor with `offset != 0`, read the stored payload; decrypt if the
-   chunk flags have bit 4 set; decompress if the chunk type is compressed ([§6.3](09-compression.md#63-per-chunk-compression-policy));
+   chunk flags have bit 4 set; decompress if the chunk type is compressed ([§6.3](12-compression.md#63-per-chunk-compression-policy));
    dispatch by `chunk_type`.

@@ -10,7 +10,7 @@ blended over the ranges its own sector supplies.
 
 1. **Base values** from META. For a sector `>= 1`, its `META.sectors` entry replaces META's
    value for every field that entry carries, so the base is META resolved field by field for
-   that sector ([§4.2](03-chunks.md#42-meta---metadata-chunk)). A sector with no entry - sector
+   that sector ([§4.2](05-meta.md#42-meta---metadata-chunk)). A sector with no entry - sector
    0 among them - takes META as it stands.
 2. **Bottom/transition blending:** Layers `0 .. bottom_layer_count-1` use the
    bottom-prefixed values verbatim. For a layer `i` in the transition range
@@ -37,7 +37,7 @@ blended over the ranges its own sector supplies.
    sector, and the pair is then blended over **its own** bottom and transition ranges: its
    bottom range can be longer than META's, its transition steps land on different layers, and
    two sectors in one file can be in different stages on the same layer
-   ([§4.2](03-chunks.md#42-meta---metadata-chunk)). A reader MUST NOT resolve
+   ([§4.2](05-meta.md#42-meta---metadata-chunk)). A reader MUST NOT resolve
    the ranges once from META and apply them to every sector.
 
    Interpolatable values are exposure times, lift/retract distances and speeds, and wait
@@ -48,11 +48,11 @@ blended over the ranges its own sector supplies.
    taken verbatim from the base the sector resolves - META's, or a `META.sectors` entry's
    where it carries them.
 3. **LROV overrides:** the pair's layer table entry names its `LROV` chunk, or `0` for none
-   ([§4.7](06-layer-data.md#47-ltbl---layer-table-chunk)). The fields that chunk carries
+   ([§4.7](09-layer-data.md#47-ltbl---layer-table-chunk)). The fields that chunk carries
    replace the interpolated values, field by field; a field it omits keeps the value the
    sector resolved, and no second chunk competes with it. A conforming reader
    MUST apply them: a printer that cannot honor overrides refuses the file rather than
-   print these layers at the wrong exposure ([§4.5](05-print-control.md#45-lrov---layer-override-chunk)).
+   print these layers at the wrong exposure ([§4.5](08-print-control.md#45-lrov---layer-override-chunk)).
 
 This models the existing bottom/normal/transition behavior while allowing arbitrary
 per-pair overrides.

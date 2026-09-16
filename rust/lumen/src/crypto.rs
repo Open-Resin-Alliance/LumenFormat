@@ -1,5 +1,5 @@
 //! Authenticated encryption: the `AUTH` chunk, the AEAD units, Argon2id
-//! password wrapping and X25519 machine binding ([`spec/12-encryption.md`]).
+//! password wrapping and X25519 machine binding ([`spec/15-encryption.md`]).
 //!
 //! This module owns every cryptographic parameter the specification fixes. Two
 //! things are deliberately *not* here: the corpus' fixed nonces and salts (a

@@ -1,5 +1,5 @@
 //! The `LTBL` chunk: the layer table
-//! ([`spec/06-layer-data.md`] section 4.7).
+//! ([`spec/09-layer-data.md`] section 4.7).
 //!
 //! One 28-byte entry per (layer, sector), grouped by layer and ascending
 //! `sector_id` within a layer, a layer's first entry being sector 0's. An entry

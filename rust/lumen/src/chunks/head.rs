@@ -1,5 +1,5 @@
 //! The `HEAD` chunk: display dimensions, layer count and encoder identity
-//! ([`spec/03-chunks.md`] section 4.1).
+//! ([`spec/04-head.md`] section 4.1).
 
 use crate::check::Check;
 use crate::error::{Error, Result};

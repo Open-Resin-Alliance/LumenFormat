@@ -86,7 +86,7 @@ sector's entry unblended, and this pins the pipeline that does the blending.
 The sample covers every branch rather than every layer, and each sector is sampled on the
 boundaries **it** resolves with: a `META.sectors` entry may carry its own
 `bottom_layer_count`/`transition_layer_count`, and then that sector blends over a different
-range than META's ([§4.2](../spec/03-chunks.md#42-meta---metadata-chunk)). For each sector
+range than META's ([§4.2](../spec/05-meta.md#42-meta---metadata-chunk)). For each sector
 `s`, with `B_s` and `T_s` the counts that sector supplies or inherits and `N = total_layers`:
 
 - layers `{0, 1, B_s-1, B_s, B_s+T_s, N-1}`, each clamped into range, plus every layer that
