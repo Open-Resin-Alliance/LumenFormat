@@ -15,8 +15,8 @@
 //! keep such a profile slicing LUMEN correctly without new settings, then the base
 //! `material` node of the manifest.
 //!
-//! Units: LUMEN stores integer micrometres and whole milliseconds, and nothing below
-//! one micrometre or one millisecond is expressible, so every value is converted and
+//! Units: LUMEN stores integer micrometers and whole milliseconds, and nothing below
+//! one micrometer or one millisecond is expressible, so every value is converted and
 //! rounded to the nearest unit here rather than truncated. The app's own settings
 //! already speak LUMEN's motion model - `liftDistanceMm`/`liftDistance2Mm` are the two
 //! segments of the peel, and the retract has its own pair - so the conversion is a unit
@@ -188,7 +188,7 @@ fn whole(value: f64) -> u32 {
     }
 }
 
-/// Millimetres to micrometres.
+/// Millimetres to micrometers.
 fn um_from_mm(millimetres: f64) -> u32 {
     whole(millimetres * 1000.0)
 }
@@ -369,7 +369,7 @@ pub fn build(job: &SliceJobV3) -> Result<LumenMetadata, SlicerV3Error> {
 
     // Temperatures. These have no ChiTuBox counterpart to convert or rename, so they
     // are read as plain numbers and written as they come: Celsius, in a fractional
-    // unit, not one of the integer micrometre or millisecond scales above. Only a key
+    // unit, not one of the integer micrometer or millisecond scales above. Only a key
     // the job actually carries produces a field, so a job without one leaves META
     // without a temperature and the printer keeps its own default (unheated).
     // `cure_curve` is deliberately never set: it is an object, not a settings field.

@@ -83,7 +83,7 @@ The integration, as the engine's traits are actually implemented:
   looked up in the chain the app already writes: `lumen.*` first, so the LUMEN settings
   profile owns every field it defines; then the CTB-shaped `ctb.*` / `export.ctb.*` keys a
   ChiTuBox-derived profile carries, which keeps such a profile slicing LUMEN without new
-  settings; then the manifest's `material` node. LUMEN stores integer micrometres and
+  settings; then the manifest's `material` node. LUMEN stores integer micrometers and
   whole milliseconds (§2), so every value is converted and rounded to the nearest unit
   rather than truncated, and the pairing the app's own settings already carry -
   `liftDistanceMm` and `liftDistance2Mm` as the two segments of the peel, a second retract
