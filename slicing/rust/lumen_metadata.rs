@@ -188,9 +188,9 @@ fn whole(value: f64) -> u32 {
     }
 }
 
-/// Millimetres to micrometers.
-fn um_from_mm(millimetres: f64) -> u32 {
-    whole(millimetres * 1000.0)
+/// Millimeters to micrometers.
+fn um_from_mm(millimeters: f64) -> u32 {
+    whole(millimeters * 1000.0)
 }
 
 /// Seconds to whole milliseconds.
