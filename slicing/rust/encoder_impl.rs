@@ -23,12 +23,14 @@
 //! `slicing/rust/requiredCrates.toml`, which the generator validates as semver.
 
 mod lumen_metadata;
+mod lumen_preview;
 mod lumen_types;
 
 use std::path::Path;
 use std::sync::Arc;
 
 use base64::Engine;
+use lumen::chunks::preview::PreviewRole;
 use lumen::reader::LumenFile;
 use lumen::ree::{encode_runs, EncodeMode, Run};
 use lumen::writer::{EncodedLayer, Encoder};
@@ -57,14 +59,18 @@ struct LumenRleStreamEncoder {
     /// `HEAD.display_width_px * HEAD.display_height_px`: the frame every layer's runs
     /// cover, and the value LUMEN's run ends are relative to.
     total_pixels: u32,
+    /// The export capture, already fitted into the large preview role, or `None`
+    /// when the job had none to offer.
+    preview_png: Option<Vec<u8>>,
     layers: Vec<LayerSlot>,
 }
 
 impl LumenRleStreamEncoder {
-    fn new(metadata: LumenMetadata, total_pixels: u32) -> Self {
+    fn new(metadata: LumenMetadata, total_pixels: u32, preview_png: Option<Vec<u8>>) -> Self {
         Self {
             metadata,
             total_pixels,
+            preview_png,
             layers: Vec::new(),
         }
     }
@@ -154,7 +160,10 @@ fn embedded_scene(metadata: &LumenMetadata) -> Result<Option<Vec<u8>>, SlicerV3E
 }
 
 /// A writer configured the way this print asked for.
-fn open_encoder(metadata: &LumenMetadata) -> Result<Encoder, SlicerV3Error> {
+fn open_encoder(
+    metadata: &LumenMetadata,
+    preview_png: Option<&[u8]>,
+) -> Result<Encoder, SlicerV3Error> {
     let mut encoder = Encoder::new(metadata.head.clone(), metadata.meta.clone());
     encoder.set_layers_per_chunk(metadata.layers_per_chunk);
     encoder.set_zstd_level(metadata.zstd_level);
@@ -164,6 +173,11 @@ fn open_encoder(metadata: &LumenMetadata) -> Result<Encoder, SlicerV3Error> {
     // profile's flag that puts one in the file.
     if let Some(scene) = embedded_scene(metadata)? {
         encoder.set_voxl(scene);
+    }
+    // The preview the file browser will show. The reference writer stores `PREV`
+    // payloads as they are, sealed or not, so it stays readable in an encrypted file.
+    if let Some(png) = preview_png {
+        encoder.add_preview(PreviewRole::Large, png.to_vec());
     }
     Ok(encoder)
 }
@@ -208,7 +222,7 @@ impl RleStreamEncoder for LumenRleStreamEncoder {
                 "no rendered layers were provided for LUMEN encoding".to_string(),
             ));
         }
-        let mut encoder = open_encoder(&self.metadata)?;
+        let mut encoder = open_encoder(&self.metadata, self.preview_png.as_deref())?;
         for (index, slot) in std::mem::take(&mut self.layers).into_iter().enumerate() {
             let layer = match slot {
                 LayerSlot::Empty => EncodedLayer::Empty,
@@ -257,6 +271,7 @@ impl FormatEncoder for LumenPluginEncoder {
         Ok(Some(Box::new(LumenRleStreamEncoder::new(
             metadata,
             total_pixels,
+            lumen_preview::export_preview_png(job),
         ))))
     }
 
@@ -325,7 +340,8 @@ impl FormatEncoder for LumenPluginEncoder {
             )
         })?;
         let metadata = lumen_metadata::build(job)?;
-        let mut encoder = open_encoder(&metadata)?;
+        let preview_png = lumen_preview::export_preview_png(job);
+        let mut encoder = open_encoder(&metadata, preview_png.as_deref())?;
         for mask in masks {
             encoder.push_layer(mask).map_err(lumen_error)?;
         }
@@ -357,6 +373,103 @@ fn grayscale_png(pixels: &[u8], width: u32, height: u32) -> Result<Vec<u8>, Slic
             .map_err(|error| SlicerV3Error::Png(error.to_string()))?;
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::SliceJobV3;
+
+    /// The capture DragonFruit hands the encoder: the app renders the export
+    /// thumbnail at 1600x960.
+    fn capture_png() -> Vec<u8> {
+        let (w, h) = (1600u32, 960u32);
+        let pixels = vec![200u8; (w * h) as usize];
+        let mut out = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut out, w, h);
+            encoder.set_color(png::ColorType::Grayscale);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut writer = encoder.write_header().unwrap();
+            writer.write_image_data(&pixels).unwrap();
+        }
+        out
+    }
+
+    fn test_job(thumbnail: Option<Vec<u8>>) -> SliceJobV3 {
+        SliceJobV3 {
+            output_format: ".lumen".to_string(),
+            source_width_px: 64,
+            source_height_px: 48,
+            width_px: 64,
+            height_px: 48,
+            build_width_mm: 100.0,
+            build_depth_mm: 60.0,
+            layer_height_mm: 0.05,
+            total_layers: 1,
+            anti_aliasing_level: "Off".to_string(),
+            // The default for this field is the empty string; LUMEN stores masks on
+            // the display grid, so the job has to say the raster is unpacked.
+            x_packing_mode: "none".to_string(),
+            metadata_json: "{}".to_string(),
+            export_thumbnail_png_base64: thumbnail
+                .map(|png| base64::engine::general_purpose::STANDARD.encode(png)),
+            ..Default::default()
+        }
+    }
+
+    /// One fully-lit layer through the streaming sink, which is the path a real
+    /// slice takes.
+    fn slice_one_layer(job: &SliceJobV3) -> Vec<u8> {
+        let encoder = LumenPluginEncoder;
+        let mut sink = encoder.create_rle_stream_encoder(job).unwrap().unwrap();
+        sink.consume_rle_layer(
+            0,
+            vec![RleRun {
+                length: 64 * 48,
+                value: 255,
+            }],
+        )
+        .unwrap();
+        sink.finalize_to_bytes().unwrap()
+    }
+
+    /// Width and height from the IHDR every PNG starts with.
+    fn png_dimensions(png_bytes: &[u8]) -> (u32, u32) {
+        (
+            u32::from_be_bytes(png_bytes[16..20].try_into().unwrap()),
+            u32::from_be_bytes(png_bytes[20..24].try_into().unwrap()),
+        )
+    }
+
+    #[test]
+    fn the_captured_thumbnail_reaches_the_file_as_a_large_preview() {
+        let bytes = slice_one_layer(&test_job(Some(capture_png())));
+        let file = LumenFile::open_unvalidated(&bytes).unwrap();
+
+        let previews = file.previews();
+        assert_eq!(previews.len(), 1, "one PREV chunk");
+        assert_eq!(previews[0].role, PreviewRole::Large);
+        // Fitted into the role's 400x300 box without distortion: 400x240.
+        assert_eq!(png_dimensions(&previews[0].png), (400, 240));
+    }
+
+    #[test]
+    fn a_job_without_a_usable_capture_writes_no_preview() {
+        // No thumbnail at all.
+        let bytes = slice_one_layer(&test_job(None));
+        assert!(LumenFile::open_unvalidated(&bytes)
+            .unwrap()
+            .previews()
+            .is_empty());
+
+        // A thumbnail that is not a PNG costs the file its preview and nothing else.
+        let bytes = slice_one_layer(&test_job(Some(b"not a png".to_vec())));
+        assert!(LumenFile::open_unvalidated(&bytes)
+            .unwrap()
+            .previews()
+            .is_empty());
+    }
 }
 
 pub fn create_plugin_encoder() -> Vec<Box<dyn FormatEncoder>> {
