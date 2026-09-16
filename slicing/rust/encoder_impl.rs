@@ -166,6 +166,10 @@ fn open_encoder(
     let mut encoder = Encoder::new(metadata.head.clone(), metadata.meta.clone());
     encoder.set_layers_per_chunk(metadata.layers_per_chunk);
     encoder.set_zstd_level(metadata.zstd_level);
+    // The writer samples the print, trains a dictionary and writes it only when the
+    // print's own data says it pays (section 6.2): an anti-aliased print's greyscale
+    // planes are high-entropy enough that a dictionary makes them larger, and a file
+    // is better off without one than with one that does not fit.
     encoder.set_dictionary(true);
     encoder.set_layer_hashes(true);
     // `VOXL` is opaque to LUMEN and optional everywhere, so it is only ever the

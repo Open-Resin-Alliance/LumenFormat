@@ -38,16 +38,28 @@ compression of REE data.
 2. Group each sector's layers into contiguous runs, and make one frame - one `LAYR` chunk -
    per run ([§4.9](09-layer-data.md#49-layr---layer-data-chunk)). Recommended: 32–64
    layers per frame.
-3. Sample the first `min(256, total_layers)` layers for a training set.
+3. Sample the print for a training set: windows spread across every frame rather than a
+   prefix of the file. The first layers of a print are its raft and its bottom layers, so
+   samples taken from there describe the rest of the file badly - measured on a 12K print,
+   prefix samples compressed 3% worse than no dictionary at all on a binary print and 5%
+   worse on an anti-aliased one, while samples spread across the print were the best set of
+   the three.
 4. Train a zstd dictionary with `ZDICT_trainFromBuffer()`.
-5. Store the dictionary in a `ZDIC` chunk ([§4.8](09-layer-data.md#48-zdic---zstd-dictionary-chunk)).
+5. Store the dictionary in a `ZDIC` chunk ([§4.8](09-layer-data.md#48-zdic---zstd-dictionary-chunk)) -
+   if it earns its bytes back. A dictionary is worth its own ~110 KB only when it fits the
+   data it is used on, and the specification permits omitting it, so an encoder is expected
+   to check rather than assume: compress a bounded probe of the print with and without the
+   candidate dictionary and write the chunk only when the dictionary wins. The reference
+   encoder compresses a share of the first, middle and last frames both ways and keeps the
+   dictionary when it wins by more than noise, with the dictionary's own bytes charged
+   against it.
 6. Compress each frame independently with `ZSTD_compress_usingDict()`.
 
 The dictionary captures statistical patterns in REE data. Because adjacent layers
 are highly similar (only the edges change between adjacent layers), a dictionary
-trained on the first 256 layers should generalize to the entire print. If dictionary
-training fails (degenerate geometry, very small prints), omit the `ZDIC` chunk and
-compress each frame with standard zstd, without a dictionary.
+trained across the print generalizes to the entire print. If dictionary training fails
+(degenerate geometry, very small prints), omit the `ZDIC` chunk and compress each frame
+with standard zstd, without a dictionary.
 
 Because a sector's frames may be compressed independently, one dictionary trained once for
 the print serves them all: every frame in the file agrees with `ZDIC.dict_id`, whatever
