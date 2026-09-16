@@ -1,4 +1,4 @@
-# META chunk
+# Metadata chunk
 
 <!-- Part of the LUMEN Format Specification. Section numbers (`§3.1`) are stable anchors across the parts. -->
 
