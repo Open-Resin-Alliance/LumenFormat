@@ -31,7 +31,7 @@ Offset    Size    Content
 ~442      ~800    PROF (zstd-compressed, ~2.5 KB uncompressed): reusable print profile for Odyssey import
 ~1,242    ~5,200  PREV (uncompressed PNG): 400×300 preview
 ~6,442    ~16K    ZDIC (uncompressed): zstd dictionary trained on the layer data
-~22,442   2,000   LTBL (uncompressed): 100 entries × 20 bytes
+~22,442   2,800   LTBL (uncompressed): 100 entries × 28 bytes
 ~24,442   ~850K   LAYR (uncompressed container; 2 block frames of 50 layers, ~1.6 MB uncompressed each)
 --        ~45K    VOXL (zstd-compressed, ~80 KB uncompressed): embedded scene for round-trip editing
 --        256     Chunk Directory: 8 × 32 bytes
@@ -53,15 +53,15 @@ below carry the tags they do:
 | Layer | Mask | Tag | Stored |
 |-------|------|-----|--------|
 | 0 | nothing at all: the empty-layer form | - | 0 bytes |
-| 1 | solid | binary REE (`0x00`) | 3 bytes |
-| 2 | solid with a rectangular hole | binary REE (`0x00`) | 36 bytes |
-| 3 | a horizontal ramp: 64 distinct values down each row | split REE (`0x02`) | 6,052 bytes |
-| 4 | a disc with a one-pixel anti-aliased rim | split REE (`0x02`) | 565 bytes |
-| 5 | a checkerboard, the worst case for run-end encoding | binary REE (`0x00`) | 3,028 bytes |
-| 6-11 | bars that grow with the layer, so no two layers are alike | binary REE (`0x00`) | 98 bytes each |
+| 1 | solid | binary REE (`0x00`) | 7 bytes |
+| 2 | solid with a rectangular hole | binary REE (`0x00`) | 40 bytes |
+| 3 | a horizontal ramp: 64 distinct values down each row | split REE (`0x02`) | 6,061 bytes |
+| 4 | a disc with a one-pixel anti-aliased rim | split REE (`0x02`) | 574 bytes |
+| 5 | a checkerboard, the worst case for run-end encoding | binary REE (`0x00`) | 3,033 bytes |
+| 6-11 | bars that grow with the layer, so no two layers are alike | binary REE (`0x00`) | 102 bytes each |
 
-The file is 12 chunks and 3,376 bytes: `HEAD`, `META`, `PROF`, `ZDIC` (a 648-byte
-dictionary, id 845093697), `PREV`, `VOXL`, `LTBL`, `LHAS`, three `LAYR`, `EXTD`.
+The file is 12 chunks and 3,400 bytes: `HEAD`, `META`, `PROF`, `ZDIC` (a 650-byte
+dictionary, id 165639893), `PREV`, `VOXL`, `LTBL`, `LHAS`, three `LAYR`, `EXTD`.
 Layer 3 is the largest slice by far - sixty times the growing bars - which is what an
 anti-aliased ramp costs and what section 6 exists to compress.
 
