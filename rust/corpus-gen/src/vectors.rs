@@ -1658,7 +1658,7 @@ fn extensions() -> Built {
     ];
     vector::build_vector(&VectorSpec {
         name: "extensions",
-        description: "Two non-critical EXTD chunks - one reserved ORA type code and one vendor extension - exercising the frame, the vendor id and critical flag bit, and the rule that readers skip extensions they do not implement.",
+        description: "Two non-critical EXTD chunks - one reserved ORA type code and one vendor extension whose vendor id is unregistered, which section 4.12.1 permits - exercising the frame, the vendor id and critical flag bit, and the rule that readers skip extensions they do not implement.",
         features: &[
             "extd-chunk",
             "extension-frame",

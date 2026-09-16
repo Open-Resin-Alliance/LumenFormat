@@ -252,7 +252,8 @@ implementation. That is exactly what CI checks.
   generated files plus `manifest.json` are committed together. CI regenerates the corpus and
   fails if the tree moves, so a hand-edited vector cannot slip through.
 - Vendor IDs for `EXTD` chunks are registered through the Alliance to avoid collisions
-  between independent implementations ([§4.12](spec/10-scene-chunks.md#412-extd---extension-chunk)). These conventions are voluntary; coordination
+  between independent implementations; the register is
+  [§4.12.1](spec/10-scene-chunks.md#4121-vendor-id-registry). These conventions are voluntary; coordination
   keeps the ecosystem interoperable, but the license lets you implement, extend and fork
   without asking.
 

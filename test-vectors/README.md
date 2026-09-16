@@ -139,7 +139,7 @@ layer 2 and sector 1's own ends at layer 5.
 | `lrov-per-pair` | 5 | 1 | - | Five layers of one sector whose three overridden layers carry the very same delta, written as one chunk per pair. Sharing an override chunk is the encoder's choice rather than a rule, so a file that names a different chunk for every pair - and no chunk twice - has to keep working: a reader applies what each entry names either way. |
 | `previews` | 4 | 2 | AES-256-GCM, password | Password-mode AES-256-GCM with two PREV chunks: a large preview in the clear and a sealed icon. Preview sealing is optional even when the file is encrypted, so both forms are valid in the same file. |
 | `embedded-scene` | 4 | 2 | AES-256-GCM, password | Password-mode AES-256-GCM with a sealed VOXL chunk: the scene bytes are copied in and must come back out unchanged, while LUMEN itself never parses them. |
-| `extensions` | 4 | 2 | - | Two non-critical EXTD chunks - one reserved ORA type code and one vendor extension - exercising the frame, the vendor id and critical flag bit, and the rule that readers skip extensions they do not implement. |
+| `extensions` | 4 | 2 | - | Two non-critical EXTD chunks - one reserved ORA type code and one vendor extension whose vendor id is unregistered, which section 4.12.1 permits - exercising the frame, the vendor id and critical flag bit, and the rule that readers skip extensions they do not implement. |
 
 ## Invalid vectors
 

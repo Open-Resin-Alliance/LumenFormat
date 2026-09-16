@@ -10,6 +10,11 @@ use crate::io::{Reader, Writer};
 pub const EXTD_FRAME_LEN: usize = 8;
 
 /// Where the `vendor_id` field sits in the descriptor flags.
+///
+/// `vendor_id` is a registered label, not a dispatch key: the registry lives in
+/// the specification (section 4.12.1) and this crate never consults it. A value
+/// it does not know is an extension its caller does not implement, which the
+/// `critical` bit decides what to do about.
 pub const VENDOR_ID_SHIFT: u32 = 8;
 /// The `vendor_id` field's mask.
 pub const VENDOR_ID_MASK: u32 = 0xFFFF << VENDOR_ID_SHIFT;

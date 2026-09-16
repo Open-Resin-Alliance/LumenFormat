@@ -6649,7 +6649,7 @@
           "a60a344cbd543c7ddad3987e4668bfa9991af96ff7e7de95498992fd2604bdb2"
         ]
       },
-      "description": "Two non-critical EXTD chunks - one reserved ORA type code and one vendor extension - exercising the frame, the vendor id and critical flag bit, and the rule that readers skip extensions they do not implement.",
+      "description": "Two non-critical EXTD chunks - one reserved ORA type code and one vendor extension whose vendor id is unregistered, which section 4.12.1 permits - exercising the frame, the vendor id and critical flag bit, and the rule that readers skip extensions they do not implement.",
       "dict": {
         "dict_id": 0,
         "dict_size": 0,

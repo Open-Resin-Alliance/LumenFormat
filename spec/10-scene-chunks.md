@@ -77,7 +77,7 @@ Vendor or future-standard extension data.
 | Bit | Name | Description |
 |-----|------|-------------|
 | 0–7 | - | Reserved for standard chunk flags (bit 4 = `ENCRYPTED`, see [§3.2](02-file-structure.md#32-chunk-descriptor)). |
-| 8–23 | `vendor_id` | Vendor identifier (registered with ORA). `0x0000` = ORA standard extension. |
+| 8–23 | `vendor_id` | Vendor identifier, assigned by the Alliance ([§4.12.1](#4121-vendor-id-registry)). `0x0000` = ORA standard extension. |
 | 24 | `critical` | If set, a reader that does not implement this extension must refuse the file rather than print an approximation. |
 | 25–31 | - | Reserved. Must be 0. |
 
@@ -95,3 +95,42 @@ same as defining the payload.
 | `VLYR` | Variable Layers | Per-layer height values. Reserved for a future core mechanism; not usable in v1 ([§5.7](11-layer-encoding.md#57-resin-working-curve-experimental)). |
 | `CMLT` | Compression ML | Training metadata for the `ZDIC` dictionary (corpus size, training parameters). |
 | `CMAP` | Color Map | Per-sector color channel mapping for multi-color printing. |
+
+### 4.12.1 Vendor ID Registry
+
+`vendor_id` is a 16-bit namespace the Alliance assigns, and this table is the register of it.
+It is a **label, not a dispatch mechanism**: a reader acts on the `critical` bit and on the
+`ext_type` it finds, and never needs this list to read a file - an extension is implemented or
+it is not, and the list only settles who owns a number.
+
+**One ID per vendor, not per product.** A vendor's extensions are told apart by `ext_type`,
+which is that vendor's own namespace: `SIGN` under `0x0000` and `SIGN` under a vendor's ID are
+two different extensions, and a vendor allocates its type codes however it likes, in its own
+documentation. So a manufacturer with several printer lines - Concepts 3D and its Athena
+printers, say - registers once and distinguishes its extensions by type.
+
+**Assignment.** An ID is requested from the Alliance (an issue on this repository), assigned
+once, and never reassigned, not even when a vendor stops using one: a file written years ago
+must still name the vendor that wrote it. Registration is free and it is voluntary, and nothing
+in the format depends on it - a vendor may write an ID that is not in this table, which means
+only that the number is not protected and another vendor may pick the same one.
+
+**Mnemonic IDs.** Where the space allows, an ID is assigned so that its two bytes, read in file
+order, spell the vendor's mark: the value is `first_char | (second_char << 8)`, because
+`vendor_id` lives at bits 8-23 and byte 1 of the flag field holds its low byte. A hex dump of
+the descriptor flags then shows the mark in the field itself - `0x3343` reads `C3`, since the
+bytes are `43 33` - which is what lets an unfamiliar extension be identified in a file without
+opening this document. IDs that need no mnemonic, or whose two characters are taken, are
+assigned in the ordinary way; only the vendor's own registration fixes which it is.
+
+| `vendor_id` | Bytes | Vendor | Notes |
+|-------------|-------|--------|-------|
+| `0x0000` | - | ORA standard | Reserved for the standard extension types above; never assigned to a vendor. |
+| `0x3343` | `C3` | Concepts 3D | Athena printers. Extension types are Concepts 3D's own. |
+| `0xFFFF` | - | - | Reserved: not assigned, and a reader treats it as any other vendor it does not know. |
+
+An ID that is not listed here is not an error and not a defect in the file: it belongs to a
+vendor that registered after this revision was published, or to one that did not register at
+all. A reader MUST NOT refuse a file over an unknown `vendor_id` - only `critical` makes a file
+unprintable to a reader that does not implement the extension - and a validator MUST NOT warn
+about one.
