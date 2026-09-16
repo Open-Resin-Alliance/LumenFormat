@@ -4,12 +4,13 @@
 
 ## Appendix C: References
 
-### Standards & RFCs
+### C.1 Standards & RFCs
 
 | Reference | Topic |
 |-----------|-------|
 | [zstd RFC 8878](https://datatracker.ietf.org/doc/html/rfc8878) | Zstandard compression algorithm |
 | [Protocol Buffers Varint Encoding](https://protobuf.dev/programming-guides/encoding/#varints) | Continuation-bit varint format used for REE |
+| [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119) | The requirement keywords of [§2.1](01-overview.md#21-requirement-keywords) |
 | [AES-256-KW (RFC 3394)](https://datatracker.ietf.org/doc/html/rfc3394) | Key wrapping for session key encryption |
 | [Argon2id (RFC 9106)](https://datatracker.ietf.org/doc/html/rfc9106) | Memory-hard password KDF |
 | [X25519 ECDH (RFC 7748)](https://datatracker.ietf.org/doc/html/rfc7748) | Elliptic-curve key agreement for machine binding |
@@ -18,17 +19,17 @@
 | [SHA-256 (FIPS 180-4)](https://csrc.nist.gov/publications/detail/fips/180/4/final) | Merkle tree hash function |
 | [CRC-32C (RFC 3720 §12.1)](https://datatracker.ietf.org/doc/html/rfc3720#section-12.1) | Castagnoli CRC for file trailer |
 
-### DragonFruit Project Internals
+### C.2 DragonFruit Project Internals
 
 | Reference | Topic |
 |-----------|-------|
 | [`DragonFruit/docs/dev/voxl-format-spec.md`](https://github.com/Open-Resin-Alliance/DragonFruit/blob/main/docs/dev/voxl-format-spec.md) | VOXL native scene container specification (embedded via VOXL chunk, [§4.11](10-scene-chunks.md#411-voxl---embedded-scene-chunk)) |
-| [`test-vectors/`](test-vectors/) | Conformance corpus: byte-exact vectors and an independent validator ([§11.6](17-validation.md#116-conformance-corpus)) |
+| [`test-vectors/`](../test-vectors/) | Conformance corpus: byte-exact vectors and an independent validator ([§11.6](17-validation.md#116-conformance-corpus)) |
 | [`rust/dragonfruit-slicing-engine/src/encoders/mod.rs`](https://github.com/Open-Resin-Alliance/DragonFruit/blob/main/rust/dragonfruit-slicing-engine/src/encoders/mod.rs) | `FormatEncoder` and `RleStreamEncoder` trait contracts |
 | [`rust/dragonfruit-slicing-engine/docs/ARCHITECTURE.md`](https://github.com/Open-Resin-Alliance/DragonFruit/blob/main/rust/dragonfruit-slicing-engine/docs/ARCHITECTURE.md) | Slicing engine architecture overview |
 | [`rust/dragonfruit-slicing-engine/src/rle.rs`](https://github.com/Open-Resin-Alliance/DragonFruit/blob/main/rust/dragonfruit-slicing-engine/src/rle.rs) | Core RLE types consumed by the LUMEN REE encoder |
 
-### Related Format Specifications
+### C.3 Related Format Specifications
 
 | Reference | Topic |
 |-----------|-------|

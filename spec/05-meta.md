@@ -164,9 +164,18 @@ to `0`. The `bottom_*` fields follow the same model.
 1. Start with META's values as defaults for all layers. For a sector `>= 1`, its entry in `META.sectors` replaces META's value for every field it carries, so a sector resolves field by field; a sector with no entry, sector 0 included, resolves from META alone.
 2. Apply bottom/transition blending over the ranges that sector resolves with: layers in its bottom range use bottom-prefixed values; layers in its transition range interpolate between bottom and normal values ([§8](14-layer-timing.md#8-per-layer-settings-model) defines the formula and which fields participate).
 3. If the `(layer, sector)` pair's layer table entry carries a non-zero `first_lrov`, apply the fields that `LROV` chunk holds ([§4.5](08-print-control.md#45-lrov---layer-override-chunk)).
-4. **Absent fields.** A field META does not carry, that the sector's `META.sectors` entry does not supply for the sector and that the pair's `LROV` chunk does not override, resolves to `0` for a distance, speed or duration - a segment or a pause that is not performed - and to `255` for `light_pwm`. Absent does not mean "whatever the implementation usually does": two readers must resolve the same file to the same numbers, so an encoder that leaves a field out is asking for zero. A field with no meaning to zero is not in this class, and is absent rather than zero when META does not carry it: `chamber_temperature_c` and `vat_temperature_c` are targets the printer uses or does not, and the `cure_curve` is either present or not.
+4. **Absent fields.** A field that META does not carry, that the sector's `META.sectors` entry does not supply for the sector and that the pair's `LROV` chunk does not override, resolves to `0` for a distance, speed or duration - a segment or a pause that is not performed - and to `255` for `light_pwm`. Absent does not mean "whatever the implementation usually does": two readers must resolve the same file to the same numbers, so an encoder that leaves a field out is asking for zero. The one exception is a `bottom_*` field: an absent one is not zero but the value its normal counterpart resolves to, because the bottom and transition ranges blend the two forms of one quantity and an encoder that writes no burn-in motion is asking for the same motion as the rest of the print ([§8](14-layer-timing.md#8-per-layer-settings-model) step 2). So an absent `bottom_lift_slow_distance_um` equals the resolved `lift_slow_distance_um` - not `0`, which would print the bottom layers with no peel at all - while an absent `lift_slow_distance_um` itself is `0`, because nothing else can supply it. A field with no meaning to zero is not in this class, and is absent rather than zero when META does not carry it: `chamber_temperature_c` and `vat_temperature_c` are targets the printer uses or does not, and the `cure_curve` is either present or not.
 
 See [§8](14-layer-timing.md#8-per-layer-settings-model) for the complete layer timing pipeline.
+
+**PWM.** `light_pwm` and `bottom_light_pwm` are duty values over a fixed range, `0` to
+`255` inclusive, not an arbitrary integer: `255` is the lamp at full power and `128` is
+about half. A value outside that range is invalid, wherever the field appears - META, a
+`META.sectors` entry, an `LROV` payload or a `PROF`'s `settings` - and a validator rejects
+it under `pwm.range` ([§11.2](17-validation.md#112-semantic-validation)). The range is
+checked rather than clamped, because a duty of `3000` is a slicer that has confused a
+percentage or a 16-bit scale for the field, and a reader that silently clamped it would
+print at a different power from one that did not.
 
 **Materials:** `materials` is the authoritative material library for this print.
 `META.sectors[].material_index` indexes it and defaults to `0`. A single-material print carries

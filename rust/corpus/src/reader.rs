@@ -42,9 +42,9 @@ use sha2::{Digest, Sha256};
 use crate::bytes::{at, u32_at, u64_at};
 use crate::container::{Chunk, COMPRESSED_TYPES, ENCRYPTED_FLAG, LAYR_HEADER_SIZE, SEALED_FLAG};
 use crate::content::{
-    cure_curve_ok, is_int, is_positive_number, is_uuid, materials_shape_ok, png_header_ok,
-    sector_material_index_ok, sectors_shape_ok, sectors_time_integer, temperature_range_ok,
-    time_fields_integer,
+    cure_curve_ok, is_int, is_positive_number, is_uuid, materials_shape_ok, meta_pwm_range_ok,
+    png_header_ok, pwm_range_ok, sector_material_index_ok, sectors_shape_ok, sectors_time_integer,
+    temperature_range_ok, time_fields_integer,
 };
 use crate::crypto::{
     argon2_params, chunk_flag_report, open_unit, recover_session_key, CryptoBlock,
@@ -849,6 +849,7 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
     );
     checks.check("meta.cure_curve", cure_curve_ok(meta.get("cure_curve")));
     checks.check("meta.temperature_range", temperature_range_ok(&meta));
+    checks.check("pwm.range", meta_pwm_range_ok(&meta));
 
     // ---- PROF / LROV / PREV ---------------------------------------------
     // Optional content chunks. PROF and LROV go through the same
@@ -901,6 +902,7 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
                     .is_some_and(is_positive_number)
             }),
         );
+        checks.check("pwm.range", settings.is_none_or(pwm_range_ok));
         checks.check(
             "prof.cure_curve",
             cure_curve_ok(settings.and_then(|settings| settings.get("cure_curve"))),
@@ -946,6 +948,7 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
                 "lrov.time_integer",
                 lrov_bodies.values().all(time_fields_integer),
             );
+            checks.check("pwm.range", lrov_bodies.values().all(pwm_range_ok));
             // §4.7: each `LROV` chunk is one `(layer, sector)`'s override set.
             // Two rules read that, and they are different defects, so they are
             // different verdicts - each recorded here in the order the corpus
@@ -1210,7 +1213,7 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
         }
     }
     checks.check("layr.content_size_present", content_sizes_present);
-    checks.check("layr.allocation_bound", allocation_ok);
+    checks.check("frame.allocation_bound", allocation_ok);
     if zdic_present {
         // Every frame that reports a dictionary reports *this* one: §4.8
         // requires the one chunk to be the dictionary for all of them.

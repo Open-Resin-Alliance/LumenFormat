@@ -415,7 +415,7 @@ impl<'a> LumenFile<'a> {
 
     /// How many slices the layer table points into `index`, floored at one.
     ///
-    /// The same definition the validator uses for `layr.allocation_bound`, so the
+    /// The same definition the validator uses for `frame.allocation_bound`, so the
     /// bound this reader allocates against is the bound the specification states:
     /// an entry that carries bytes counts, an entry that carries none does not,
     /// and a chunk nothing points into still gets one layer's worth.

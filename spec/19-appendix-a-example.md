@@ -25,23 +25,26 @@ Single-sector, 100 layers, 1920×1080, no encryption (illustrative estimates):
 ```
 Offset    Size    Content
 ------    ----    -------
-0         32      File header: LUMN, v1, dir_offset=<end>, chunk_count=8, flags=0x00
-32        ~60     HEAD (uncompressed): encoder="DragonFruit 1.0", 1920×1080, layer_height_um=50, 100 layers
+0         32      File header: LUMN, v1, dir_offset=<end>, chunk_count=9, flags=0x00
+32        ~60     HEAD (uncompressed): encoder="DragonFruit 1.0", 1920x1080, layer_height_um=50, 100 layers
 ~92       ~350    META (zstd-compressed, ~1.2 KB uncompressed): full JSON metadata
 ~442      ~800    PROF (zstd-compressed, ~2.5 KB uncompressed): reusable print profile for Odyssey import
-~1,242    ~5,200  PREV (uncompressed PNG): 400×300 preview
+~1,242    ~5,200  PREV (uncompressed PNG): 400x300 preview
 ~6,442    ~16K    ZDIC (uncompressed): zstd dictionary trained on the layer data
-~22,442   2,800   LTBL (uncompressed): 100 entries × 28 bytes
-~24,442   ~850K   LAYR (uncompressed container; 2 block frames of 50 layers, ~1.6 MB uncompressed each)
---        ~45K    VOXL (zstd-compressed, ~80 KB uncompressed): embedded scene for round-trip editing
---        256     Chunk Directory: 8 × 32 bytes
+~22,442   2,816   LTBL (uncompressed): the 16-byte header and 100 x 28-byte entries
+~25,258   ~425K   LAYR (first frame: layers 0-49, ~800 KB uncompressed)
+~460,000  ~425K   LAYR (second frame: layers 50-99)
+~895,000  ~45K    VOXL (zstd-compressed, ~80 KB uncompressed): embedded scene for round-trip editing
+--        288     Chunk Directory: 9 x 32 bytes
 --        8       Trailer: "LEND" + CRC-32C
 ```
 
-Total: approximately 920 KB for this example (the optional `LROV` chunk is omitted
-because there are no overrides). Actual sizes depend on geometry
-complexity, AA settings, and zstd compression level. The VOXL embedding adds a
-small overhead relative to the layer data and buys full re-editability.
+Total: approximately 940 KB for this example. The directory holds nine entries
+because the two `LAYR` chunks are one per frame - 100 layers over frames of 50 -
+and the optional `LROV` chunk is absent because this print overrides nothing.
+Actual sizes depend on geometry complexity, AA settings, and zstd compression
+level. The VOXL embedding adds a small overhead relative to the layer data and
+buys full re-editability.
 
 ### A.2 The single-sector example
 
@@ -110,8 +113,8 @@ belongs to exactly one sector.
 ]
 ```
 
-**The per-layer settings** are five `LROV` chunks, one per `(layer, sector)` the
-operator touched. Each is a sparse delta: it replaces the fields it names and leaves
+**The per-layer settings** are three `LROV` chunks, one per distinct delta the
+operator set. Each is a sparse delta: it replaces the fields it names and leaves
 the rest of the resolved value standing.
 
 | Chunk | Applies to | Delta | Why a slicer would write it |
@@ -126,7 +129,10 @@ layer table entries that name it, and any number of them may name one
 the range - no field in the payload says where it starts or ends - so a slicer that
 adjusts 500 layers with one delta writes one chunk and points 500 entries at it. A
 slicer that gives every pair a chunk of its own is equally conforming, which is what
-[`lrov-per-pair`](../test-vectors/README.md) pins.
+[`lrov-per-pair`](../test-vectors/README.md) pins. The numbers in that table's first column
+are chunk directory indices, and they are the same numbers the layer table below carries in
+`first_lrov`: chunk 2 sits at directory index 2, so the file's first three chunks are
+`HEAD`, `META` and `LROV`.
 
 **The file** is 11 chunks and 2,344 bytes: `HEAD`, `META`, three `LROV`, `LTBL`,
 `LHAS`, and four `LAYR` chunks - one per `(sector, layer group)`, two sectors over
@@ -182,9 +188,9 @@ inherits, then the delta its entry names ([§8](14-layer-timing.md#8-per-layer-s
 | 4 | 9,375 ms | 26,000 ms | - |
 | 5 | 2,500 ms | 20,250 ms | - |
 | 6 | **2,000 ms** | 14,500 ms | sector 0, chunk 3 |
-| 7 | **2,000 ms** | 8,750 ms | sector 0, chunk 4 |
-| 8 | **2,000 ms** | 3,000 ms | sector 0, chunk 5 |
-| 9 | 2,500 ms | **5,000 ms** | sector 1, chunk 6 |
+| 7 | **2,000 ms** | 8,750 ms | sector 0, chunk 3 |
+| 8 | **2,000 ms** | 3,000 ms | sector 0, chunk 3 |
+| 9 | 2,500 ms | **5,000 ms** | sector 1, chunk 4 |
 
 The two sectors are in different stages on the same layer, which is the point of the
 counts living in the sector's own entry: sector 0 burns in for two layers and blends

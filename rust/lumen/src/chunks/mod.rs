@@ -176,7 +176,7 @@ pub fn allocation_bound(layers: u64, total_pixels: u32) -> u64 {
 pub fn check_allocation(uncompressed_size: u64, bound: u64, payload_len: usize) -> Result<()> {
     if uncompressed_size > bound {
         return Err(Error::new(
-            Check::LayrAllocationBound,
+            Check::FrameAllocationBound,
             format!(
                 "declared uncompressed size {uncompressed_size} exceeds the {bound} bytes the \
                  structure allows for {payload_len} stored bytes"
@@ -258,7 +258,7 @@ mod tests {
         assert!(check_allocation(bound, bound, 1).is_ok());
         assert_eq!(
             check_allocation(bound + 1, bound, 1).unwrap_err().check(),
-            Check::LayrAllocationBound
+            Check::FrameAllocationBound
         );
         assert!(allocation_bound(2, 1000) > 0);
     }
@@ -282,7 +282,7 @@ mod tests {
             decompress_frame(&frame, None, (frame.len() as u64) * MAX_ZSTD_RATIO as u64)
                 .unwrap_err()
                 .check(),
-            Check::LayrAllocationBound
+            Check::FrameAllocationBound
         );
 
         // A bound from the file's own structure accepts it, and the output is

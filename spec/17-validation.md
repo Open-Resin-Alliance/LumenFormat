@@ -8,6 +8,16 @@ Every rule below is named `<group>.<rule>`, and implementations SHOULD report th
 rule under that name, which is also how the conformance corpus names it
 ([§11.6](#116-conformance-corpus)).
 
+**Order.** A validator reports the first failure it reaches, and the lists below are in the
+order it is expected to reach them: the framing (§11.1), then the semantics that need no
+decompression (§11.2), then the layer data and the encryption units (§11.3, §11.4), within
+each list in the order written. A file can break more than one rule - a layer table whose
+first entry names no `LROV` chunk while that chunk sits unreferenced breaks two - and the
+order is what decides which one is named, so a validator that reports a different violation
+of the same file is not wrong about the file, only about the order. The conformance corpus
+names, for each vector, the check its order reaches first; where a vector is built to break
+two rules, its manifest entry says so.
+
 This revision made a sector structural - one `LAYR` chunk and one optional `LROV` chunk per
 `(layer, sector)`, addressed by the layer table - so the checks that named the old shapes are
 retired, and their names must not appear in a conforming validator's report: `sect.*` and
@@ -21,33 +31,37 @@ since an `LROV` chunk names neither a layer nor a sector; `lrov.identity_consist
 sector's identity is META's and is stated once; and `ltbl.empty_layer_no_bytes`, which had no
 companion field left to contradict. What replaced them is named in the lists below.
 
+This revision also retires two names that had nothing to check: `header.chunk_count`, because
+the directory is read *from* that field and so has no independent length to disagree with it
+(a count that is too large fails `header.dir_offset`, and the entries are read under
+`dir.descriptor`), and `layr.allocation_bound`, which the bound now shares with every other
+compressed chunk as `frame.allocation_bound`.
+
 ### 11.1 Structural Validation
 
 - [ ] Magic bytes `LUMN` at offset 0 (`header.magic`).
 - [ ] Trailer magic `LEND` at `file_size - 8` (`trailer.magic`).
 - [ ] Trailer CRC-32C matches `bytes[0 .. file_len-8]` (`trailer.crc32c`).
 - [ ] `header.version` is recognized (`header.version`).
-- [ ] `header.flags` sets no reserved bit: bits 0, 2 and 4 are `0` (`header.flags_reserved`).
+- [ ] `header.flags` clears the retired bits: bits 0, 2 and 4 are `0` (`header.flags_reserved`). Bits 5–31 are unassigned, and a reader MUST ignore them ([§3.1](02-file-structure.md#31-file-header)).
 - [ ] `header.dir_offset` is within the file, and the whole directory fits inside it (`header.dir_offset`).
-- [ ] `header.chunk_count` matches the number of directory entries (`header.chunk_count`).
-- [ ] Every chunk descriptor is readable as a 32-byte entry (`dir.descriptor`).
+- [ ] Every chunk descriptor is readable as a 32-byte entry (`dir.descriptor`). This is where `header.chunk_count` is spent: the directory *is* that many entries read from `header.dir_offset`, so a count that runs past the end of the file fails `header.dir_offset` and the entries themselves are read here. There is no separate `header.chunk_count` check - the count has no independent source of truth to disagree with ([§11](#11-reader-validation-requirements), retired names).
 - [ ] If `header.total_uncompressed_size != 0`, it equals the sum of every chunk's `size_uncompressed` (`header.total_uncompressed_size`).
 - [ ] No two chunks overlap, and no chunk's stored extent lies outside the file or inside the directory (`dir.overlap`, `dir.chunk_extent`). A chunk's stored extent is `[offset, offset + size_compressed)`
   when `size_compressed > 0`, and `[offset, offset + size_uncompressed)` when
   `size_compressed == 0`. Exception: null descriptors (`offset == 0`). A `LAYR` chunk's
   extent follows the same rule: its `size_uncompressed` is the container's byte length, and a
   sealed container's is `size_compressed` ([§4.9](09-layer-data.md#49-layr---layer-data-chunk)).
-- [ ] `HEAD` chunk present (`presence.head`) and is the first chunk, at the offset immediately
-  after the 32-byte header (`dir.head_first`).
+- [ ] `HEAD` chunk present (`presence.head`) and the first entry in the directory (`dir.head_first`). The offset it sits at is the descriptor's business: a gap between the fixed header and the first payload is legal ([§3](02-file-structure.md#3-file-structure)), and a validator MUST NOT require `HEAD` at offset 32.
 - [ ] `META` chunk present (`presence.meta`).
-- [ ] `LTBL` chunk present, and at most one (`presence.ltbl`).
+- [ ] `LTBL` chunk present, and exactly one (`presence.ltbl`). A second layer table is this check's failure rather than something a reader picks from: two tables can disagree about which chunk holds a layer's data and where its slice starts, and nothing in the file resolves that.
 - [ ] At least one `LAYR` chunk present (`presence.layr`); each is at least 4 bytes (its
   `layr_version`) and holds exactly one frame after that field.
 - [ ] `HEAD.head_version` (`head.version`), `LTBL.table_version` (`ltbl.version`), `ZDIC.zdic_version` (`zdic.version`), `AUTH.auth_version` (`auth.version`) and `META.meta_version` (`meta.version`) are recognized, and so is the `layr_version` of every `LAYR` chunk - the field is per chunk, so one unrecognized value is enough (`layr.version`).
 - [ ] The `AUTH` payload is long enough for the sections it declares (`auth.frame`).
-- [ ] `ZDIC`, when present, is well formed: `dict_size` does not exceed 112 640 bytes and the chunk holds that many bytes (`zdic.dict_size`), and no more than one non-null `ZDIC` chunk is present (`zdic.single`).
+- [ ] `ZDIC`, when present, is well formed: `dict_size` does not exceed 112 640 bytes and the chunk holds that many bytes (`zdic.dict_size`), and no more than one non-null `ZDIC` chunk is present (`zdic.single`). The chunk ends where the dictionary ends: a writer MUST NOT append anything after it, and a reader MAY ignore bytes it finds there - slack inside a chunk is not a failure in either mode, because nothing is read from it.
 - [ ] A dictionary is present exactly when the `LAYR` frames use one (`presence.zdic`): if any frame references a zstd dictionary (dictionary ID `!= 0`), exactly one `ZDIC` chunk is present and every frame that references a dictionary references *that* one (`layr.dict_id_match`, `zdic.dict_id_match`); if no frame references a dictionary, no `ZDIC` chunk is present and every frame's dictionary ID is `0` (`layr.dict_id_absent`). An encoder may compress one frame without the dictionary another frame uses, so a frame that reports none is not a mismatch - "the file carries a dictionary nothing uses" is this rule's own failure, reported as `presence.zdic`, and it is reported after the frames' half so a file that breaks both is named by the frames' rule.
-- [ ] If `LHAS` chunk present, its payload is long enough for its header and hashes (`lhas.frame`), `hash_algorithm` is `0x01` (`lhas.hash_algorithm`), and `layer_count` equals `HEAD.total_layers` (`lhas.layer_count`).
+- [ ] If `LHAS` chunk present, its payload is long enough for its header and hashes (`lhas.frame`), `hash_algorithm` is `0x01` (`lhas.hash_algorithm`), and `layer_count` equals `HEAD.total_layers` (`lhas.layer_count`). As with `ZDIC`, the chunk ends after the last leaf hash and trailing bytes are ignored rather than rejected.
 
 ### 11.2 Semantic Validation
 
@@ -70,6 +84,7 @@ companion field left to contradict. What replaced them is named in the lists bel
 - [ ] The META payload is a JSON object (`meta.json`).
 - [ ] META JSON contains all required fields (`meta.required_fields`): `meta_version`, `normal_exposure_ms`, `bottom_exposure_ms`, `bottom_layer_count`, `transition_layer_count`, `layer_height_um`, `lift_slow_distance_um`, `lift_slow_speed_um_min`, `retract_fast_distance_um`, `retract_fast_speed_um_min`.
 - [ ] Every `*_ms` field in META, and `estimated_print_time_sec`, is a JSON integer (`meta.time_integer`). A value with a fractional part such as `2500.5` is invalid; the rule covers the timing fields of META's `sectors` entries too, since they are META's fields. See [§4.2](05-meta.md#42-meta---metadata-chunk) for the encoders' and readers' obligations.
+- [ ] Every `light_pwm` and `bottom_light_pwm` - in META, in a `META.sectors` entry, in an `LROV` payload and in a `PROF`'s `settings` - is within `0..=255` (`pwm.range`, [§4.2](05-meta.md#42-meta---metadata-chunk)). A duty outside that range is a slicer that has mistaken a percentage or a wider scale for the field, and a reader never clamps it: the two readings print at different powers.
 - [ ] `META.normal_exposure_ms > 0` and `META.bottom_exposure_ms > 0`, as integer comparisons (`meta.exposure`).
 - [ ] `META.layer_height_um > 0` (`meta.layer_height`).
 - [ ] If `META.materials` is present, it is a non-empty array and every entry has a non-empty `name` (`meta.materials_shape`).
@@ -101,7 +116,7 @@ companion field left to contradict. What replaced them is named in the lists bel
 ### 11.3 Layer Data Validation (post-decompression)
 
 - [ ] Before decompressing, a `LAYR` frame declares its content size (`layr.content_size_present`). The descriptor does not carry the frame's output length, so a frame without one is rejected rather than allocated for ([§4.9](09-layer-data.md#49-layr---layer-data-chunk)).
-- [ ] The declared content size is at most the bound the chunk's slices justify (grayscale REE costs at most about 5 bytes per pixel plus framing per slice, `layr.allocation_bound`), so a corrupt or hostile chunk cannot force an unbounded allocation.
+- [ ] No frame is decompressed without a bound on what it may expand to (`frame.allocation_bound`). A `LAYR` frame's declared content size is at most what the chunk's slices justify - grayscale REE costs at most about 5 bytes per pixel plus framing per slice - and every other compressed chunk's frame is at most 4096 times its stored length, so a corrupt or hostile file cannot force an unbounded allocation. The non-`LAYR` bound is a guard rather than a property of the data: a legitimate `META`, `PROF`, `LROV` or `VOXL` payload of mostly one repeated byte can exceed it, which is why it is generous, and a file that trips it is refused rather than sized for.
 - [ ] Decompressing a `LAYR` frame succeeds and yields exactly the size the frame declares, and no more (`layr.frame_decompressed_size`).
 - [ ] A frame's zstd dictionary ID equals `ZDIC.dict_id` when `ZDIC` is present (`layr.dict_id_match`, `zdic.dict_id_match`), and is `0` when it is absent (`layr.dict_id_absent`).
 - [ ] For each `LTBL` entry: `data_offset + data_size` is within the decompressed output of the chunk `first_layr` names (`ltbl.offset_within_chunk`), and entries naming one chunk do not overlap (`ltbl.slices_disjoint`).
@@ -118,12 +133,12 @@ companion field left to contradict. What replaced them is named in the lists bel
 - [ ] (Strict mode) A slice whose pixels are all `0x00`/`0xFF` is not stored as grayscale REE; it uses tag `0x00` (`ree.grayscale_all_binary`).
 - [ ] (Strict mode) The same tag choice for split REE: a slice whose pixels are all `0x00`/`0xFF` has no anti-aliasing to overlay, so it is not stored as tag `0x02` - an empty overlay over a thresholded core is a stream a strict validator rejects (`ree.split_all_binary`).
 - [ ] (Strict mode) Split REE (tag `0x02`): the binary component thresholds at `v >= 128`, and the overlay covers exactly the pixels whose value is neither `0x00` nor `0xFF` (`ree.split_threshold`).
-- [ ] (Strict mode) The sector masks of one layer are pairwise disjoint: no pixel is exposed by two sectors of the same layer, and their union is the layer's exposed image (`sector.partition`). Two sectors of a layer live in different `LAYR` chunks, so this compares the slices the layer's entries name ([§7.3](13-sectors.md#73-sector-mask-invariant)).
+- [ ] (Strict mode) The sector masks of one layer are pairwise disjoint: no pixel is exposed by two sectors of the same layer (`sector.partition`). Two sectors of a layer live in different `LAYR` chunks, so this compares the slices the layer's entries name ([§7.3](13-sectors.md#73-sector-mask-invariant)). What the masks together *cover* is not this check's business and cannot be: the file does not carry the geometry the masks came from.
 
 ### 11.4 Encryption Validation
 
 - [ ] If `ENCRYPTED` flag set, all `LAYR`/`META`/`PROF`/`LROV`/`VOXL`/`ZDIC` chunks have the encrypted flag set (`crypt.chunk_flags`), every `LAYR` frame is at least 28 bytes (one sealed unit), and every `LAYR` frame is individually sealed ([§9.3](15-encryption.md#93-encryption-format)).
-- [ ] If `ENCRYPTED` flag set, `HEAD`, `AUTH` and `LTBL` do **not** have the encrypted flag set, and a `LAYR` chunk's 4-byte version field is plaintext inside its sealed chunk ([§9.1](15-encryption.md#91-design-principles)).
+- [ ] If `ENCRYPTED` flag set, `HEAD`, `AUTH`, `LTBL` and `LHAS` do **not** have the encrypted flag set - they are the plaintext spine a reader uses before it has a key - and a `LAYR` chunk's 4-byte version field is plaintext inside its sealed chunk ([§9.1](15-encryption.md#91-design-principles)). `PREV` and `EXTD` may be sealed or not; both are conforming.
 - [ ] If the `ENCRYPTED` flag is clear, no chunk descriptor sets the encrypted bit: there is no key in the file that could open such a chunk (`crypt.no_key`, [§9.1](15-encryption.md#91-design-principles)).
 - [ ] Each sealed unit opens with `associated_data = chunk_type || 0x00 || unit_index_le_u32`, where `unit_index` is `0` for a single-unit chunk and the `LAYR` chunk's directory index for a `LAYR` chunk (`crypt.unit_index_binding`). A sealed frame presented at another `LAYR` chunk's directory index therefore fails its tag check: an implementation that opens it anyway has not bound the unit to its identity.
 - [ ] Auth tag verifies for each encrypted chunk (decryption integrity check, `crypt.tag_verify`).
@@ -148,9 +163,9 @@ Checks marked *strict mode* above MUST NOT fail a loose-mode read: a loose reade
 accepts them, a strict validator rejects them.
 
 The duration integer checks (`meta.time_integer`, `prof.settings_time_integer`,
-`lrov.time_integer`) are not strict-only. A duration with a
-fractional part is a type violation, not a canonicalization preference, so a loose reader
-rejects it too. They cover every duration in the timing namespace - META's `sectors`
+`lrov.time_integer`) and the PWM range check (`pwm.range`) are not strict-only. A duration with a
+fractional part, and a duty outside `0..=255`, are type violations rather than
+canonicalization preferences, so a loose reader rejects them too. They cover every duration in the timing namespace - META's `sectors`
 entries are META's fields, so `meta.time_integer` covers them - and `meta.time_integer`
 also covers META's `estimated_print_time_sec`, which is whole seconds rather than
 milliseconds ([§4.2](05-meta.md#42-meta---metadata-chunk)). Whether a reader
@@ -160,18 +175,22 @@ choice, and no file may rely on either answer.
 ### 11.6 Conformance Corpus
 
 The repository carries byte-exact test vectors and an independent validator under
-[`test-vectors/`](test-vectors/). Implementations SHOULD validate against them. Each
+[`../test-vectors/`](../test-vectors/). Implementations SHOULD validate against them. Each
 valid vector pins the uncompressed structures it contains exactly - the file header,
 `HEAD`, `META` with its `sectors` entries, `AUTH`, `LTBL`, every `LAYR` chunk's
 `layr_version` and the decompressed output of its frame, `LHAS`, every REE stream, the
-chunk directory and the trailer - and each invalid vector fails exactly one named check
-from this section. Each valid vector also records the settings a conforming reader must
+chunk directory and the trailer - and each invalid vector fails the check its manifest entry
+names, which is the first one the order of [§11](#11-reader-validation-requirements) reaches
+in that file. A file that breaks two rules has one failure named, and the vector's manifest
+entry says which and why. Each valid vector also records the settings a conforming reader must
 resolve for a sample of `(layer, sector)` points, which pins the [§8](14-layer-timing.md#8-per-layer-settings-model)
 pipeline - base values, bottom and transition blending, absent-field defaults, and the
 `LROV` overrides a reader is required to apply ([§4.5](08-print-control.md#45-lrov---layer-override-chunk)) -
-rather than only the bytes. Compressed payloads are pinned by property rather than by byte,
-because zstd output is not stable across versions. The encrypted vectors carry their
-test password and recipient key in the manifest.
+rather than only the bytes. Compressed payloads are pinned by property - the manifest records
+the zstd version and level, each frame's dictionary ID and its declared content size, and a
+validator asserts those rather than re-deriving bytes - while the vector's own SHA-256 pins
+the whole file as committed, frames included, for the zstd version that built it. The
+encrypted vectors carry their test password and recipient key in the manifest.
 
 Coverage is not exhaustive. The corpus exercises single- and multi-sector layer data,
 the empty-slice form, all three encoding tags, dictionary compression, files with more

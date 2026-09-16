@@ -7,7 +7,7 @@
 [![Discord](https://img.shields.io/discord/1281738817417777204?style=for-the-badge&logo=discord&logoColor=white&color=%235865F2)](https://discord.gg/beFeTaPH6v)
 
 LUMEN is the Open Resin Alliance's open print file format for resin (MSLA) 3D printing:
-run-end encoded layer masks in independently compressed zstd blocks, human-inspectable JSON
+run-end encoded layer masks in independently compressed zstd frames, human-inspectable JSON
 metadata in typed chunks, multi-material sectors, per-layer settings, and optional
 authenticated encryption. It is the native output format of the **DragonFruit** slicer and
 the print format **Odyssey** firmware consumes through its **Orion** frontend.
@@ -65,7 +65,7 @@ file, a single `header.version` lineage, and no constraints kept for legacy comp
 
 | Path | Contents |
 |------|----------|
-| [`spec/`](spec/) | The normative specification, published in 19 parts ([below](#reading-the-specification)) |
+| [`spec/`](spec/) | The normative specification, published in 22 parts ([below](#reading-the-specification)) |
 | [`test-vectors/`](test-vectors/) | Byte-exact `.lumen` conformance corpus, its manifest, and an independent validator |
 | [`rust/lumen/`](rust/lumen/) | The reference implementation: encoder, decoder and validator (crate `lumen-format`) |
 | [`rust/corpus-gen/`](rust/corpus-gen/) | `make_vectors`: regenerates the corpus from the specification, independently of the reference crate |
@@ -98,7 +98,7 @@ chunk group can be read on its own.
 | [`09-layer-data.md`](spec/09-layer-data.md) | §4.7-4.10 | `LTBL`, `ZDIC`, `LAYR`, `LHAS` |
 | [`10-scene-chunks.md`](spec/10-scene-chunks.md) | §4.11-4.12 | `VOXL` embedded scene, `EXTD` extensions |
 | [`11-layer-encoding.md`](spec/11-layer-encoding.md) | §5 | Run-end encoding: binary, grayscale and split REE |
-| [`12-compression.md`](spec/12-compression.md) | §6 | zstd block framing and the shared trained dictionary |
+| [`12-compression.md`](spec/12-compression.md) | §6 | zstd frame framing and the shared trained dictionary |
 | [`13-sectors.md`](spec/13-sectors.md) | §7 | Multi-material sectors and the sector mask invariant |
 | [`14-layer-timing.md`](spec/14-layer-timing.md) | §8 | Per-layer settings, bottom/transition blending, overrides |
 | [`15-encryption.md`](spec/15-encryption.md) | §9 | AEAD framing, Argon2id passwords, X25519 machine binding |
@@ -153,14 +153,14 @@ independently of the specification's own encoder:
 | Path | Contents |
 |------|----------|
 | `valid/*.lumen` | 14 files a conforming reader must accept, each pinning the structures it contains |
-| `invalid/*.lumen` | 57 files a conforming reader must reject, each failing the check its manifest entry names - and failing it *first* |
+| `invalid/*.lumen` | 59 files a conforming reader must reject, each failing the check its manifest entry names, which is the first one the validator order reaches |
 | `manifest.json` | Golden data for every vector: sizes, offsets, the layer table, each `LAYR` chunk's frame, per-layer hashes, Merkle root, CRC-32C, the timing a conforming reader must resolve for a sample of `(layer, sector)` points, and the credentials for encrypted vectors |
 | [`rust/corpus-gen/`](rust/corpus-gen/) | `make_vectors`: reference encoder that regenerates the corpus from the specification |
 | [`rust/corpus/`](rust/corpus/) | `verify_vectors`: independent reader and validator, sharing no code with the generator. `cross_check` runs it against files the reference crate wrote |
 
 Because the generator and the validator share no code, and neither depends on the reference
 crate, agreement between them is evidence that the specification is unambiguous rather than
-that one module is self-consistent. Four invalid vectors are marked `strict_only`: their
+that one module is self-consistent. Five invalid vectors are marked `strict_only`: their
 defect is invisible to a loose-mode reader, and the corpus asserts that a loose read accepts
 them, which pins the loose/strict distinction itself.
 
@@ -209,7 +209,7 @@ Consumers are adapters over it rather than parallel implementations - DragonFrui
 own settings into `META`/`PROF` and hands the crate layer masks, Odyssey implements its
 `PrintFile` trait over `LumenFile` - because every divergence between two implementations is
 a compatibility bug that only shows up on a printer. `LumenFile` borrows the container's
-bytes and decompresses one block per layer request, so a firmware reader streams a
+bytes and decompresses one frame per layer request, so a firmware reader streams a
 2,000-layer print through a bounded buffer; the crate's test suite measures that bound
 rather than asserting it in prose.
 
@@ -252,7 +252,7 @@ implementation. That is exactly what CI checks.
   generated files plus `manifest.json` are committed together. CI regenerates the corpus and
   fails if the tree moves, so a hand-edited vector cannot slip through.
 - Vendor IDs for `EXTD` chunks are registered through the Alliance to avoid collisions
-  between independent implementations (§19). These conventions are voluntary; coordination
+  between independent implementations ([§4.12](spec/10-scene-chunks.md#412-extd---extension-chunk)). These conventions are voluntary; coordination
   keeps the ecosystem interoperable, but the license lets you implement, extend and fork
   without asking.
 
@@ -260,7 +260,8 @@ Who wrote what is recorded by the repository's git history.
 
 ## License
 
-The specification is MIT - see [`LICENSE`](LICENSE) and §19. The reference implementation
+The specification is MIT - see [`LICENSE`](LICENSE) and
+[`spec/22-license.md`](spec/22-license.md). The reference implementation
 under [`rust/lumen/`](rust/lumen/) is dual-licensed MIT OR Apache-2.0. The Open Resin
 Alliance stewards the format, which is an ecosystem coordination role rather than a legal
 restriction.

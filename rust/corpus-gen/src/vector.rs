@@ -391,6 +391,9 @@ pub struct VectorSpec<'a> {
     /// `physical_width_px` and `physical_height_px`. Section 11.2 makes the frame
     /// exact (`head.frame`), so the corpus needs a way to write one that is not.
     pub head_padding: usize,
+    /// Write a second, identical `LTBL` chunk. Section 11.1 requires exactly one
+    /// layer table, so this is the malformed shape that pins `presence.ltbl`.
+    pub duplicate_ltbl: bool,
 }
 
 impl VectorSpec<'_> {
@@ -451,6 +454,7 @@ impl<'a> Default for VectorSpec<'a> {
             extds: Vec::new(),
             share_identical_overrides: true,
             head_padding: 0,
+            duplicate_ltbl: false,
         }
     }
 }
@@ -565,13 +569,22 @@ pub fn content_chunks(spec: &VectorSpec, enc: &Layers, auth: Option<Chunk>) -> C
     }
 
     // LTBL and LHAS, then the frames, so the table can name the LAYR chunks by
-    // directory index.
-    let layr_start = chunks.len() + 2;
+    // directory index. A duplicate table (the malformed vector) takes a slot of
+    // its own, which the arithmetic here has to account for like any other chunk.
+    let layr_start = chunks.len() + 2 + usize::from(spec.duplicate_ltbl);
     let entries = layer_entries(enc, layr_start, &points);
     chunks.push(Chunk::new(
         b"LTBL",
         payload::ltbl(&entries, spec.layers.len() as u32),
     ));
+    if spec.duplicate_ltbl {
+        // A second layer table, byte-identical to the first, so the file says
+        // which chunk holds a layer's data twice over (section 11.1).
+        chunks.push(Chunk::new(
+            b"LTBL",
+            payload::ltbl(&entries, spec.layers.len() as u32),
+        ));
+    }
     chunks.push(Chunk::new(b"LHAS", payload::lhas(&enc.leaves)));
     for frame in &enc.frames {
         chunks.push(Chunk::new(b"LAYR", payload::layr(&frame.bytes)));

@@ -41,6 +41,17 @@ stepping over exactly that many. Since the count lives on the first entry, the f
 each layer's sector count once, and the rest of the entries are ordered by the `sector_id`
 they carry.
 
+`first_layr` has no null form, unlike `first_lrov`: every entry names a real `LAYR` chunk
+directory index, the ones with nothing to print included. An entry with `data_size == 0` is
+how a `(layer, sector)` says "this sector exposes nothing on this layer", and it still names
+the chunk that sector's data belongs to - the chunk it would be a slice of - so a reader
+reaches a layer's entries without having to interpret an empty one, and a file whose every
+entry on a layer is empty still says which chunk that layer's sector belongs to
+([§11.2](17-validation.md#112-semantic-validation), `ltbl.first_layr_in_range`). The
+two-resin example's last layer is the worked case: sector 0 has `data_size` 0 there and
+names the same chunk its sector 1 entry does
+([Appendix A.3](19-appendix-a-example.md#a3-two-resins-with-per-layer-settings)).
+
 **Invariants:**
 
 - `entry_count` equals the sum of `1 + additional_sector_count` over each layer's first entry,
@@ -87,11 +98,18 @@ encrypted alongside the other content chunks when `AUTH` is present.
 
 **Presence rules:**
 
-- If any `LAYR` frame was compressed with a dictionary, exactly one `ZDIC` chunk
-  MUST be present, and every `LAYR` frame's dictionary ID MUST equal `ZDIC.dict_id`.
-- If no dictionary was used, `ZDIC` MUST be absent and every `LAYR` frame's
-  dictionary ID MUST be `0`.
-- A file MUST NOT contain more than one non-null `ZDIC` chunk.
+- A file carries at most one non-null `ZDIC` chunk, and a frame that names a dictionary
+  MUST name that one: a `LAYR` frame whose zstd dictionary ID is non-zero reports
+  `ZDIC.dict_id`.
+- If no frame names a dictionary, `ZDIC` MUST be absent and every frame's dictionary ID
+  MUST be `0`. A `ZDIC` chunk that no frame uses is a failure rather than harmless slack
+  (`presence.zdic`): a reader would have to hold a dictionary it never needs.
+- A frame MAY report `0` in a file whose dictionary other frames use. Compressing one layer
+  group with the dictionary and another without is a ratio decision - a frame whose data the
+  dictionary does not describe is better off without it - and it costs a reader nothing,
+  because every frame carries its own id and a reader decompresses by the id it finds. The
+  reference encoder writes all of a print's frames the same way; the format does not require
+  it to.
 - Writers MUST NOT suppress the zstd dictionary ID (`ZSTD_c_dictIDFlag`). Every `LAYR`
   frame compressed with the dictionary reports `dict_id`, so a reader can always tell
   whether a dictionary is required.
@@ -151,7 +169,8 @@ data back to back, and the layer table is what says where each slice begins and 
   bytes. The content size is the length of the concatenation above; a reader sizes its
   decode buffer from it, so it never trusts a second field to agree with a first.
 - A frame with a non-zero zstd dictionary ID requires a `ZDIC` chunk ([§4.8](#48-zdic---zstd-dictionary-chunk))
-  whose `dict_id` matches, and every `LAYR` frame in the file agrees with `ZDIC.dict_id`.
+  whose `dict_id` matches; a frame that reports `0` needs no dictionary of its own, whether
+  or not the file carries one.
 - For every entry that names this chunk, `data_offset + data_size` is at most the frame's
   decompressed length, and the byte ranges those entries describe do not overlap.
 

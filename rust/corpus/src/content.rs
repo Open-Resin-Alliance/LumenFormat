@@ -10,6 +10,9 @@ use serde_json::Value;
 
 use crate::bytes::be_u32_at;
 
+/// The two duty fields the timing namespace defines (section 4.2).
+const PWM_FIELDS: [&str; 2] = ["light_pwm", "bottom_light_pwm"];
+
 pub const PNG_SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1A, b'\n'];
 
 /// A JSON number, as opposed to a bool (which is an int in the Python).
@@ -221,6 +224,30 @@ pub fn temperature_range_ok(meta: &Value) -> bool {
                 is_number(value) && value.as_f64().is_some_and(|t| (0.0..=120.0).contains(&t))
             }
         })
+}
+
+/// §4.2: every `light_pwm`/`bottom_light_pwm` a payload carries is an integer
+/// duty over `0..=255`, wherever it appears - META, a `META.sectors` entry, an
+/// `LROV` payload or a `PROF`'s `settings`.
+pub fn pwm_range_ok(payload: &Value) -> bool {
+    PWM_FIELDS.iter().all(|key| match payload.get(key) {
+        None | Some(Value::Null) => true,
+        Some(value) => {
+            is_int(value) && value.as_i64().is_some_and(|duty| (0..=255).contains(&duty))
+        }
+    })
+}
+
+/// §4.2: [`pwm_range_ok`] for META, whose `sectors` entries carry the same fields.
+pub fn meta_pwm_range_ok(meta: &Value) -> bool {
+    if !pwm_range_ok(meta) {
+        return false;
+    }
+    match meta.get("sectors") {
+        None | Some(Value::Null) => true,
+        Some(Value::Array(entries)) => entries.iter().all(pwm_range_ok),
+        Some(_) => false,
+    }
 }
 
 /// §4.6 / §11.2 (strict): PNG signature followed by a well-formed IHDR.

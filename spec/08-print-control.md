@@ -74,8 +74,20 @@ A PNG image as raw bytes (no additional framing).
 | Bit | Name | Description |
 |-----|------|-------------|
 | 0–3 | `preview_role` | 0 = unspecified, 1 = large (rec. 400×300), 2 = small (rec. 200×125), 3 = icon (≤64×64). Role values 4–15 are reserved. |
-| 4 | `ENCRYPTED` | May be set if preview confidentiality is desired. |
+| 4 | `ENCRYPTED` | The common chunk flag ([§3.2](02-file-structure.md#32-chunk-descriptor)); may be set if preview confidentiality is desired. |
 | 5–31 | - | Reserved. Must be 0. |
 
 Multiple PREV chunks are permitted. Readers should select the best preview for
 their display based on `preview_role`.
+
+The role's size is a recommendation, not a constraint: a role-1 preview is "the large one",
+and a reader that finds a 1024×768 image there displays it. What the role fixes is which
+preview a reader with limited space or memory should reach for - the icon rather than the
+large one - and no check depends on a role's pixel dimensions. A file with no preview at all
+is conforming: `PREV` is for the human looking at the file, never for the print.
+
+Beyond the role, the file ranks its previews no further: a reader that holds several of one
+role picks the one it likes, and a file that carries them in a particular order is not saying
+anything by that order. A host may keep a preference of its own - the reference plugin ships
+`roleOrder: [1, 0, 2, 3]`, large before unspecified before small before icon - but it is the
+host's preference, not a fact the file carries.

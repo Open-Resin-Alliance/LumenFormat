@@ -487,7 +487,7 @@ can express.",
         Invalid::new(
             "layr-allocation-bound",
             "The file's only LAYR frame declares a decompressed size of 2147483647 bytes, some four thousand times what the slices pointing into it could hold, so a reader that sizes its buffer from the declaration allocates two gigabytes for a layer group of a 64 by 48 display.",
-            "layr.allocation_bound",
+            "frame.allocation_bound",
             container::repack(&b, &bound.layout),
         ),
     );
@@ -525,6 +525,30 @@ can express.",
             "META.sectors[0].material_index is 3 while META.materials holds one entry, so the sector names a material that is not there.",
             "meta.sector_material_index",
             sector_material_vector(),
+        ),
+    );
+
+    // pwm: a duty outside the fixed 0-255 range
+    emit(
+        &invalid_dir,
+        &mut manifest_invalid,
+        Invalid::new(
+            "meta-pwm-range",
+            "META.light_pwm is 3000: the field is a duty over 0..=255, so this is a slicer that has written a percentage or a wider scale into it. A reader that clamps prints at a different power from one that uses the value as given, which is why the range is checked (spec 4.2).",
+            "pwm.range",
+            pwm_range_vector(),
+        ),
+    );
+
+    // ltbl: two layer tables in one file
+    emit(
+        &invalid_dir,
+        &mut manifest_invalid,
+        Invalid::new(
+            "ltbl-two-chunks",
+            "The file carries two LTBL chunks, identical in their bytes. Two layer tables can disagree about which chunk holds a layer's data and where its slice starts, and nothing in the file resolves the disagreement, so a file carries exactly one (spec 11.1).",
+            "presence.ltbl",
+            duplicate_ltbl_vector(),
         ),
     );
 
@@ -1880,6 +1904,36 @@ fn unused_dictionary() -> Vec<u8> {
         use_dict: true,
         dict_samples_bytes: 1024,
         unused_zdic: true,
+        ..Default::default()
+    })
+    .raw
+}
+
+/// A plaintext file whose `META.light_pwm` is outside the field's `0..=255`
+/// range, which section 4.2 checks rather than clamps (`pwm.range`).
+fn pwm_range_vector() -> Vec<u8> {
+    vector::build_vector(&VectorSpec {
+        name: "x-pwm-range",
+        description: "source",
+        display: (64, 48),
+        layers: vector::sparse_layers(4, 64 * 48),
+        layers_per_chunk: 2,
+        meta_extra: vec![("light_pwm", Value::from(3000))],
+        ..Default::default()
+    })
+    .raw
+}
+
+/// A plaintext file carrying a second, identical `LTBL` chunk: the malformed
+/// shape section 11.1 rejects as `presence.ltbl`.
+fn duplicate_ltbl_vector() -> Vec<u8> {
+    vector::build_vector(&VectorSpec {
+        name: "x-duplicate-ltbl",
+        description: "source",
+        display: (64, 48),
+        layers: vector::sparse_layers(4, 64 * 48),
+        layers_per_chunk: 2,
+        duplicate_ltbl: true,
         ..Default::default()
     })
     .raw

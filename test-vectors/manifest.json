@@ -255,7 +255,7 @@
     {
       "base_vector": null,
       "description": "The file's only LAYR frame declares a decompressed size of 2147483647 bytes, some four thousand times what the slices pointing into it could hold, so a reader that sizes its buffer from the declaration allocates two gigabytes for a layer group of a 64 by 48 display.",
-      "expected_failure": "layr.allocation_bound",
+      "expected_failure": "frame.allocation_bound",
       "file": "invalid/layr-allocation-bound.lumen",
       "file_sha256": "e1ed9d6d08028867619d621f3e10f6f6a38cf895bbd1bbf1babe9f7ee8fba462",
       "file_size": 2496,
@@ -290,6 +290,26 @@
       "file_sha256": "0c891587184e6ed804d60f7cb5cfbc10b34d062d0bf92669a7b32d604a3a5c1f",
       "file_size": 1249,
       "name": "meta-sector-material-index",
+      "strict_only": false
+    },
+    {
+      "base_vector": null,
+      "description": "META.light_pwm is 3000: the field is a duty over 0..=255, so this is a slicer that has written a percentage or a wider scale into it. A reader that clamps prints at a different power from one that uses the value as given, which is why the range is checked (spec 4.2).",
+      "expected_failure": "pwm.range",
+      "file": "invalid/meta-pwm-range.lumen",
+      "file_sha256": "28b8eee356889518a85268e98b28471980afe275a0c1663d0e9274c9b85c7e92",
+      "file_size": 1159,
+      "name": "meta-pwm-range",
+      "strict_only": false
+    },
+    {
+      "base_vector": null,
+      "description": "The file carries two LTBL chunks, identical in their bytes. Two layer tables can disagree about which chunk holds a layer's data and where its slice starts, and nothing in the file resolves the disagreement, so a file carries exactly one (spec 11.1).",
+      "expected_failure": "presence.ltbl",
+      "file": "invalid/ltbl-two-chunks.lumen",
+      "file_sha256": "863eea9efe022bf133bd5eaf0fbef64e699c729690412ed6983515a249160682",
+      "file_size": 1311,
+      "name": "ltbl-two-chunks",
       "strict_only": false
     },
     {

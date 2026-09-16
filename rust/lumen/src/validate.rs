@@ -57,6 +57,10 @@ use std::cell::{Cell, RefCell};
 /// (section 3.1), so they are outside this mask.
 const HEADER_MUST_BE_ZERO: u32 = (1 << 0) | (1 << 2) | (1 << 4);
 
+/// The highest duty `light_pwm` and `bottom_light_pwm` may carry (section 4.2):
+/// the value is a fraction of full power over `0..=255`, not an arbitrary count.
+const PWM_MAX: u32 = 255;
+
 /// The durations the timing namespace defines, in whole milliseconds: META
 /// (section 4.2, its `sectors` entries included), a `PROF`'s `settings` block
 /// (4.3) and an `LROV` payload (4.5) all draw on these keys.
@@ -381,6 +385,16 @@ impl<'a> Ctx<'a> {
         if self.dir.find(Tag::LTBL).is_none() {
             return Err(Error::new(Check::PresenceLtbl, "no LTBL chunk"));
         }
+        // Exactly one: two layer tables can disagree about which chunk holds a
+        // layer's data and where its slice starts, and nothing in the file
+        // resolves that (section 11.1).
+        let tables = self.dir.find_all(Tag::LTBL).count();
+        if tables > 1 {
+            return Err(Error::new(
+                Check::PresenceLtbl,
+                format!("{tables} LTBL chunks; a file carries exactly one layer table"),
+            ));
+        }
         if self.dir.find(Tag::LAYR).is_none() {
             return Err(Error::new(Check::PresenceLayr, "no LAYR chunk"));
         }
@@ -699,6 +713,7 @@ impl<'a> Ctx<'a> {
                 TIME_MS_FIELDS.iter().copied(),
                 Check::LrovTimeInteger,
             )?;
+            check_pwm_object(object, "LROV")?;
         }
         Ok(())
     }
@@ -839,7 +854,7 @@ impl<'a> Ctx<'a> {
             let bound = chunks::allocation_bound(slices, total_pixels);
             if size > bound {
                 return Err(Error::new(
-                    Check::LayrAllocationBound,
+                    Check::FrameAllocationBound,
                     format!(
                         "the frame at directory index {index} declares {size} bytes; {slices} \
                          slices of {total_pixels} pixels bound it at {bound}"
@@ -1271,6 +1286,51 @@ fn check_hdr(head: &Head) -> Result<()> {
     Ok(())
 }
 
+/// Every PWM a parsed payload carries is a duty over `0..=255` (section 4.2).
+///
+/// The range is checked rather than clamped: a duty of `3000` is a slicer that has
+/// mistaken a percentage or a wider scale for the field, and silently clamping it
+/// would print at a different power from a reader that used it as written.
+fn check_pwm(timing: &Timing, at: &str) -> Result<()> {
+    for (name, value) in [
+        ("light_pwm", timing.light_pwm),
+        ("bottom_light_pwm", timing.bottom_light_pwm),
+    ] {
+        if let Some(value) = value {
+            if value > PWM_MAX {
+                return Err(Error::new(
+                    Check::PwmRange,
+                    format!("{at}: {name} is {value}, outside 0..={PWM_MAX}"),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// [`check_pwm`] for a payload that is still raw JSON, which is how an `LROV`
+/// delta is read: it is a sparse object, not a `Timing`.
+fn check_pwm_object(object: &Map<String, Value>, at: &str) -> Result<()> {
+    for name in ["light_pwm", "bottom_light_pwm"] {
+        let Some(value) = object.get(name) else {
+            continue;
+        };
+        if value.is_null() {
+            continue;
+        }
+        if !value
+            .as_u64()
+            .is_some_and(|duty| duty <= u64::from(PWM_MAX))
+        {
+            return Err(Error::new(
+                Check::PwmRange,
+                format!("{at}: {name} is {value}, outside the integer range 0..={PWM_MAX}"),
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// `META` rules from section 11.2.
 fn check_meta(meta: &Meta) -> Result<()> {
     match meta.meta_version {
@@ -1324,6 +1384,13 @@ fn check_meta(meta: &Meta) -> Result<()> {
     if let Some(curve) = timing.cure_curve.as_ref() {
         check_cure_curve(curve, Check::MetaCureCurve)?;
     }
+    check_pwm(timing, "META")?;
+    for sector in meta.sectors.as_deref().unwrap_or_default() {
+        check_pwm(
+            &sector.timing,
+            &format!("META.sectors entry for sector {}", sector.sector_id),
+        )?;
+    }
     for temperature in [timing.chamber_temperature_c, timing.vat_temperature_c]
         .into_iter()
         .flatten()
@@ -1370,6 +1437,7 @@ fn check_profile(profile: &Profile) -> Result<()> {
             "the profile's layer_height_um is not positive",
         ));
     }
+    check_pwm(&profile.settings, "PROF.settings")?;
     if let Some(curve) = profile.settings.cure_curve.as_ref() {
         check_cure_curve(curve, Check::ProfCureCurve)?;
     }

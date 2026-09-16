@@ -30,6 +30,29 @@ Use cases:
   opt-in, its own `material_index` into `META.materials`: a support region cured differently
   from the model, or, on future multi-vat hardware, two resins in one layer.
 
+**Print sequence within a layer.** A layer that carries more than one sector is exposed
+one sector at a time, in ascending `sector_id`, and each sector performs its own resolved
+cure-and-move cycle: it exposes its mask for its own exposure time, at its own PWM, and then
+runs its own lift, retract and pause profile from
+[§8](14-layer-timing.md#8-per-layer-settings-model) before the next sector begins. The
+platform returns to the same layer height for each of them - the layer's Z is one fact, its
+exposures are several - so a two-resin layer is two complete cycles at one Z, not two layers.
+
+Two things follow, and they are why the sequence is stated rather than left to the printer:
+
+- **The masks are disjoint, so the order cannot change the geometry.** A pixel belongs to one
+  sector ([§7.3](#73-sector-mask-invariant)), so exposing sector 0 first and sector 1 second
+  cures the same pixels as the reverse order, and no pixel is cured twice.
+- **A printer that cannot make more than one exposure per layer cannot print the file as it
+  stands.** It prints sector 0 and reports the print as incomplete
+  ([§7.2](#72-sector-0-convention-and-single-material-degradation)); it must not merge sectors,
+  average them, or print one of them at the other's exposure.
+
+A multi-vat printer likewise exposes the sectors in ascending `sector_id`; which vat is active
+during which exposure is hardware state, not file data, and this specification carries no
+per-sector machine or vat binding. A file's sectors are ordered by their ids and by nothing
+else.
+
 ### 7.2 Sector 0 Convention and Single-Material Degradation
 
 Sector 0 is the **primary** or **default** sector, and it is implicitly present on every
@@ -60,12 +83,26 @@ and say so" rather than silent infidelity.
 
 ### 7.3 Sector Mask Invariant
 
-For a given layer, all sector masks are pairwise non-overlapping and their union is
-exactly the layer's exposed image: every exposed pixel belongs to exactly one
-sector. Encoders MUST guarantee this; readers SHOULD verify it in strict mode. An
-empty layer is one whose every entry carries `data_size == 0`.
+For a given layer, the sector masks are pairwise disjoint: no pixel is exposed by two sectors
+of the same layer. Two obligations sit on either side of that, and only the first is something
+a reader can check.
 
-The invariant is unchanged in substance, and it now spans chunks: two sectors of one layer
+- **What a reader verifies (strict mode).** The masks of one layer's sectors do not overlap.
+  This is decidable from the file: decode the slices the layer's entries name and look for a
+  pixel two of them expose. A validator rejects the layer under `sector.partition`
+  ([§11.3](17-validation.md#113-layer-data-validation-post-decompression)).
+- **What an encoder guarantees.** The masks together are the layer's exposed image: every
+  pixel the slice's geometry exposes belongs to exactly one sector. No reader can check this,
+  because the file does not carry the geometry the masks were derived from - there is nothing
+  to compare the union against - so it is an encoder obligation of the same kind as "the mask
+  is the slice of the model at this Z". A file whose sector 0 carries the model's left half and
+  whose sector 1 carries nothing passes the overlap check and is still not a print of the
+  model.
+
+An empty layer is one whose every entry carries `data_size == 0`, and its sector masks are
+empty, which is trivially disjoint.
+
+The invariant is unchanged in substance, and it spans chunks: two sectors of one layer
 are never slices of the same `LAYR` chunk, since a chunk carries one sector's data, so
 verifying a layer means decoding the slices its entries name and comparing them - not
 walking one stream that holds them all.

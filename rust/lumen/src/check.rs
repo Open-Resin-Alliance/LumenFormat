@@ -22,8 +22,6 @@ pub enum Check {
     HeaderVersion,
     /// `header.dir_offset` is outside the file, or the directory does not fit.
     HeaderDirOffset,
-    /// `header.chunk_count` does not match the directory.
-    HeaderChunkCount,
     /// `header.flags` sets a reserved bit (0, 2 or 4).
     HeaderFlagsReserved,
     /// `header.total_uncompressed_size` is non-zero and wrong.
@@ -102,6 +100,9 @@ pub enum Check {
     MetaCureCurve,
     /// A temperature is outside `[0.0, 120.0]`.
     MetaTemperatureRange,
+    /// A `light_pwm` or `bottom_light_pwm` is outside `0..=255`, in any payload
+    /// that carries one (section 4.2).
+    PwmRange,
 
     // -- group: prof (section 4.3) -----------------------------------------
     /// `profile_type` is not one of `material`, `printer`, `combined`.
@@ -187,8 +188,8 @@ pub enum Check {
     LayrContentSizePresent,
     /// A frame did not decompress to the size it declares.
     LayrFrameDecompressedSize,
-    /// A frame's declared output exceeds the bound derived from its slices.
-    LayrAllocationBound,
+    /// A frame's declared output exceeds what its stored size may expand to.
+    FrameAllocationBound,
     /// A frame's dictionary ID disagrees with `ZDIC`.
     LayrDictIdMatch,
     /// A frame reports no dictionary while the file carries `ZDIC`.
@@ -288,7 +289,6 @@ impl Check {
             HeaderMagic => "header.magic",
             HeaderVersion => "header.version",
             HeaderDirOffset => "header.dir_offset",
-            HeaderChunkCount => "header.chunk_count",
             HeaderFlagsReserved => "header.flags_reserved",
             HeaderTotalUncompressedSize => "header.total_uncompressed_size",
             DirDescriptor => "dir.descriptor",
@@ -322,6 +322,7 @@ impl Check {
             MetaSectorMaterialIndex => "meta.sector_material_index",
             MetaCureCurve => "meta.cure_curve",
             MetaTemperatureRange => "meta.temperature_range",
+            PwmRange => "pwm.range",
             ProfProfileType => "prof.profile_type",
             ProfProfileIdentity => "prof.profile_identity",
             ProfSettingsTimeInteger => "prof.settings_time_integer",
@@ -356,7 +357,7 @@ impl Check {
             LayrVersion => "layr.version",
             LayrContentSizePresent => "layr.content_size_present",
             LayrFrameDecompressedSize => "layr.frame_decompressed_size",
-            LayrAllocationBound => "layr.allocation_bound",
+            FrameAllocationBound => "frame.allocation_bound",
             LayrDictIdMatch => "layr.dict_id_match",
             LayrDictIdAbsent => "layr.dict_id_absent",
             ZdicVersion => "zdic.version",

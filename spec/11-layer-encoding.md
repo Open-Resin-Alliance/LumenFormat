@@ -64,6 +64,18 @@ All variable-length integers use Protocol Buffers-style continuation-bit varints
 Examples: `0` → `[0x00]`, `128` → `[0x80, 0x01]`,
 `1920×1080 = 2 073 600` → 3 bytes, `11520×6480 = 74 649 600` → 4 bytes.
 
+**Four bytes is the ceiling inside a plane array.** A varint array is stored as four
+significance planes ([§5.3.1](#531-significance-planes)), so a *stored* value - a run
+length, or an anti-aliasing overlay delta - is at most 268 435 455, and a fifth byte has
+nowhere to go: a decoder rejects a varint that continues past plane 3 (`ree.varint`), and
+an encoder refuses to write one. The ten-byte maximum above applies to the varints a
+stream carries outside a plane array - `run_count` and `aa_pixel_count`, whose values this
+revision bounds by `total_pixels + 1`. The practical consequence is a bound on the mask
+grid: a layer of more than 2²⁸ pixels cannot be run-end encoded, because a single run
+could need a five-byte length. The largest display this specification can carry is
+therefore 268 435 455 mask pixels, about 3.6× a 12K panel; a grid that wide is a v2
+matter, not a v1 one.
+
 **Practical bounds:** `run_count` and `aa_pixel_count` must not exceed `total_pixels + 1`
 (a run cannot be shorter than one pixel). Readers should reject values exceeding this bound
 before allocating decode buffers.
@@ -172,7 +184,9 @@ PLANES(n varints):
 A decoder reads the four lengths, then walks the planes in step: to read a varint it
 takes one byte from plane 0, another from plane 1 while the continuation bit is set,
 and so on. No count of varints is needed to find the end of a plane, and a varint's
-length is implied by its own bytes.
+length is implied by its own bytes. Because there are four planes and no fifth, every
+value an array stores is at most `0x0FFF_FFFF` ([§5.2](#52-varint-encoding)), which is
+what bounds the mask grid the format can carry.
 
 The arrangement exists for the compressor. A run length of a few thousand pixels is
 two or three bytes whose high bytes are nearly constant along a scanline, and whose
@@ -356,7 +370,11 @@ therefore uniquely determined by the pixel content and cannot be padded or reord
   both, which is a cost/ratio trade-off rather than a correctness one. An encoder that
   evaluates both SHOULD break ties in favour of tag `0x01`.
 - Required of every encoder: identical input and settings produce identical output, so
-  re-slicing the same scene yields the same file and the same `LHAS` hashes.
+  re-slicing the same scene yields the same file and the same `LHAS` hashes. Two things are
+  inputs rather than derived values, and a file that differs only in them is still the same
+  file in every other byte: the creation timestamp an encoder stamps into `HEAD`, and - for
+  sealed output - the random keys and nonces of [§9.4](15-encryption.md#94-session-key-lifecycle)
+  ([§4.1](04-head.md#41-head---file-header-chunk)).
 - Not claimed: that two different encoders produce identical bytes, or identical `LHAS`
   hashes, for the same layer.
 

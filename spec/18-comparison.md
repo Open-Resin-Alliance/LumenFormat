@@ -20,7 +20,7 @@
 | Embedded source scene | No | No | No | No | Yes (VOXL chunk - round-trip re-editable) |
 | Multi-material | No | No | No | No | Yes (per-sector layer chunks, and per-sector timing and material in META) |
 | Extensibility | No (must reverse-engineer) | No | No | No | Yes (EXTD chunks, vendor IDs) |
-| Max resolution | ~16K (32-bit offsets) | Fixed header limit | Unlimited (ZIP64) | Unlimited | Unlimited (64-bit offsets) |
+| Max resolution | ~16K (32-bit offsets) | Fixed header limit | Unlimited (ZIP64) | Unlimited | 2²⁸ mask pixels (64-bit offsets) |
 | Preview images | 2× RGB15 RLE (fixed size) | 2× PNG in header (fixed size) | 3× PNG in ZIP | 1× PNG in ZIP | 1+N PNG in PREV chunks (flexible) |
 | AA support | Grayscale RLE | Grayscale RLE | 4-bit PW0 | Full 8-bit PNG | Full 8-bit REE + split encoding + zstd |
 | Temperature control | No | No | No | No | Yes (chamber + vat, Celsius) |

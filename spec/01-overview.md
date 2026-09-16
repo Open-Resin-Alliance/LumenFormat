@@ -114,3 +114,28 @@ To avoid confusion with other parts of the ORA ecosystem, LUMEN is explicitly
 | Range notation | `a..b` is half-open `[a, b)`. `for i in 0..N` iterates `i = 0, 1, ..., N-1`. |
 
 Format detection: a `.lumen` file begins with the four ASCII bytes `LUMN`.
+
+### 2.1 Requirement Keywords
+
+The words **MUST**, **MUST NOT**, **REQUIRED**, **SHOULD**, **SHOULD NOT**, **MAY** and
+**OPTIONAL** are used in the sense of [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119),
+and a requirement's force does not depend on how it is capitalized: where this document
+writes "a reader must reject" or "an encoder should prefer", the obligation is the same one
+the keyword in capitals would carry, because the alternative - a reader deciding which
+sentences are load-bearing from their typography - is exactly the ambiguity a specification
+exists to remove.
+
+- **MUST**: a hard requirement. An implementation that does not meet it is not conforming,
+  and a file whose bytes depend on it being met is not a conforming file.
+- **SHOULD**: a recommendation. An implementation may deviate, but the reason it deviates
+  is worth writing down, and a reader that finds one behaviour where this document describes
+  another has found a bug before it has found a freedom.
+- **MAY**: a genuine choice, where two conforming implementations legitimately differ. Where
+  a `MAY` sits on the writer's side, the file says which way it went - a chunk is present or
+  not, a flag is set or not - so a reader never has to guess which choice was made.
+
+Rules that carry no keyword are descriptions of the format rather than obligations on an
+implementation: field layouts, worked examples, and the rationale in the design notes. Where
+a rule's force matters, it carries a keyword or is listed as a check in
+[§11](17-validation.md#11-reader-validation-requirements), which is the complete set of
+things a validator is expected to enforce.

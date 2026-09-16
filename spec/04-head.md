@@ -50,3 +50,27 @@ by the time the file exists:
 A mask grid is the finest grid a print has to name, because it is the one the printer drives: a
 panel whose controller or LCD drives more than one pixel per mask pixel expands the grid itself,
 from the value it was given, and no field is needed to say so.
+
+**Layer thickness.** `HEAD.layer_height_um` and `META.layer_height_um` state the same nominal
+figure - the thickness the print was sliced at - and an encoder MUST write the same value in
+both. They are two views of one fact rather than two settings: a reader that prints resolves
+the thickness through the pipeline of [§8](14-layer-timing.md#8-per-layer-settings-model),
+which starts from META (or the sector's override, or an `LROV` payload) and never consults
+`HEAD`, and a reader that only summarizes a file - a file manager showing a layer count and a
+layer height - reads the header without opening a `META` chunk. Where a file disagrees with
+itself the resolved value governs and no check depends on the pair; the encoder obligation is
+what keeps the two from drifting.
+
+**Writer identity.** `encoder_name` identifies the program that wrote the file, for support
+and for provenance: UTF-8, free-form, at most 256 bytes, typically a product name and its
+version (`"DragonFruit 1.0"`). Nothing in the format depends on it, no two encoders need to
+agree on its spelling, and a reader MUST NOT attach meaning to it beyond displaying it. An
+encoder SHOULD write a stable name for itself rather than a per-build or per-user string.
+
+**Timestamps.** `created_unix_sec` is the wall-clock time the file was written, and an encoder
+writes it. It is an input rather than a derived value, so it is one of the two things left out
+of the byte-reproducibility guarantee of [§5.6](11-layer-encoding.md#56-canonical-encoding): an
+encoder given the same scene and the same settings and the same `created_unix_sec` produces the
+same file, and one that stamps the current time produces a file that differs in this field and
+in the trailer CRC. The other exception is sealed output, whose keys and nonces come from a
+random source ([§9.4](15-encryption.md#94-session-key-lifecycle)).

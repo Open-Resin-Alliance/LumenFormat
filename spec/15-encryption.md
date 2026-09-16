@@ -10,15 +10,17 @@
 - **AEAD only.** Authenticated encryption prevents undetected tampering.
 - **Compress-then-encrypt.** zstd compression is applied first, then the compressed
   frame is encrypted.
-- **Content-scoped encryption.** The directory, HEAD, AUTH, LTBL, and the `LAYR` version
-  field remain plaintext. Everything that carries content or content-derived
-  data (the `LAYR` frames, ZDIC, META, PROF, LROV, VOXL) is encrypted. PREV and
-  EXTD are optionally encrypted: a file may carry either sealed or in the clear, and a
-  reader that skips them never needs the key. When `AUTH` is present every content chunk
-  MUST be encrypted; v1 has no partial-encryption mode, so the `ENCRYPTED` flag is set on
-  all of them. Conversely the chunk-level `ENCRYPTED` flag requires `AUTH` in the same
-  file: a chunk MUST NOT set it when the file header does not, because no key exists to
-  open it.
+- **Content-scoped encryption.** The directory, `HEAD`, `AUTH`, `LTBL`, `LHAS` and the `LAYR`
+  version field remain plaintext. The chunks that carry the print's content - the `LAYR`
+  frames, `ZDIC`, `META`, `PROF`, `LROV`, `VOXL` - MUST be sealed whenever `AUTH` is present;
+  v1 has no partial-encryption mode, so the chunk-level `ENCRYPTED` flag is set on every one
+  of them. `PREV` and `EXTD` are the two that may go either way: a file may carry them sealed
+  or in the clear, and a reader that skips them never needs the key. `LHAS` stays plaintext
+  although its hashes derive from layer content, because it is the one content-derived
+  structure a reader is expected to use *before* it has a key - a verification pass checks the
+  tree and reports what is intact without decrypting anything - so a sealed `LHAS` is a
+  `crypt.chunk_flags` failure ([§11.4](17-validation.md#114-encryption-validation)). Conversely the chunk-level `ENCRYPTED` flag requires `AUTH` in the same file: a chunk MUST NOT set it
+  when the file header does not, because no key exists to open it.
 - **Confidentiality and per-chunk integrity, not authenticity.** Encryption hides
   content and detects modification of each sealed unit, and the AAD binds a unit to its
   chunk type and index ([§9.3](#93-encryption-format)). It does **not** authenticate the file: the fixed header,
@@ -35,6 +37,11 @@ Two options, identified in the AUTH chunk:
 |-------------|-----------|------------|----------|-------|
 | `A256` | AES-256-GCM | 12 bytes | 16 bytes | Hardware-accelerated on x86 (AES-NI) and ARM (AES extensions). |
 | `C20P` | ChaCha20-Poly1305 | 12 bytes | 16 bytes | Faster in software; constant-time on all platforms. |
+
+Neither is preferred. The file names the one it used in `AUTH.cipher_id` and a reader
+follows that, so the choice is the writer's and a reader that implements only one of the two
+rejects the other's files under `auth.cipher_known` rather than guessing. A writer picks
+for the platform it runs on.
 
 ### 9.3 Encryption Format
 
@@ -85,6 +92,13 @@ key is used without a decompression pass. The container's `size_compressed` incl
    - **Machine mode:** For each authorized machine, derive KEK via X25519 ECDH +
      HKDF-SHA-256, wrap with AES-256-KW.
 4. Store wrapping metadata in AUTH chunk.
+
+The derivation cost is the writer's choice inside the ceilings a reader enforces
+([§11.4](17-validation.md#114-encryption-validation)): the reference implementation derives
+with 3 iterations, 64 MiB of memory and one lane, which keeps a password-mode file openable in
+well under a second on a printer's CPU while leaving a stolen file expensive to attack. A
+writer SHOULD NOT raise those parameters past what its target hardware can afford, because a
+file whose derivation exceeds a reader's budget is a file that reader must refuse.
 
 The session key is the same for all chunks in the file. Multiple wrapping entries
 enable multiple authorized machines without re-encrypting the entire payload.

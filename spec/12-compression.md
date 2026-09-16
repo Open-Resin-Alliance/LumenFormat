@@ -47,8 +47,8 @@ compression of REE data.
 4. Train a zstd dictionary with `ZDICT_trainFromBuffer()`.
 5. Store the dictionary in a `ZDIC` chunk ([§4.8](09-layer-data.md#48-zdic---zstd-dictionary-chunk)) -
    if it earns its bytes back. A dictionary is worth its own ~110 KB only when it fits the
-   data it is used on, and the specification permits omitting it, so an encoder is expected
-   to check rather than assume: compress a bounded probe of the print with and without the
+   data it is used on, and the specification permits omitting it, so an encoder SHOULD check
+   rather than assume: compress a bounded probe of the print with and without the
    candidate dictionary and write the chunk only when the dictionary wins. The reference
    encoder compresses a share of the first, middle and last frames both ways and keeps the
    dictionary when it wins by more than noise, with the dictionary's own bytes charged

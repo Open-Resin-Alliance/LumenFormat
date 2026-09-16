@@ -102,15 +102,17 @@ The integration, as the engine's traits are actually implemented:
 | Setting | Default | Why |
 |---------|---------|-----|
 | `layers_per_chunk` (`lumen.layersPerChunk`) | 64 | §6.2's grouping: enough layers for cross-layer matching to pay for itself, few enough that a reader's working set stays bounded. |
-| `zstd_level` (`lumen.zstdLevel`) | 6 | §6.3 recommends level 3 for interactive work and level 6 for a final export. On a measured 3,688-layer print - 122.8 MB of REE to compress - level 3 costs 0.60 s and 8.7% more file size than level 19, level 6 costs 1.08 s and 2.8% more, and level 19 costs 15.45 s. The last is the difference between a slice that takes longer than the format it replaces and one that does not, for two percent of the file, so 6 is the default and a profile can ask for 19. |
-| `encoder_name` | `DragonFruit` | §4.1 leaves the field to the writer. |
+| `zstd_level` (`lumen.zstdLevel`) | 6 | §6.3 recommends level 3 for interactive work and level 6 for a final export. On a measured 3,688-layer 16K print - 122.8 MB of REE to compress - level 3 costs 0.60 s and 8.7% more file size than level 19, level 6 costs 1.08 s and 2.8% more, and level 19 costs 15.45 s. An anti-aliased print has more to gain: on an 800-layer 12K print whose 75.9 MB of streams are anti-aliased, against the same print at level 6, level 9 is 3% smaller and 0.2 s slower, level 12 is 6% smaller and 1.2 s slower, and level 19 is 17% smaller and 9.0 s slower. Level 6 is the default so a slice does not take longer than the format it replaces, and a profile can ask for 19 (or 9, or 12) when file size is what matters. |
+| dictionary (`Encoder::set_dictionary`, no setting) | on, and conditional in effect | §6.2's step 5: the writer samples the print, trains a dictionary and writes it only when a probe of the print says it earns its own bytes back, so "on" means "considered" rather than "written". An anti-aliased print's planes are high-entropy enough that a dictionary loses to no dictionary, and the writer omits the chunk there. The adapter always asks for it; the decision is the crate's, which is what keeps two DragonFruit versions writing the same file. |
+| layer hashes (`Encoder::set_layer_hashes`, no setting) | on | §4.10's integrity tree is optional and the writer emits it: 32 bytes per layer, the thing that makes a partial file verifiable, and a printer that does not want it skips the chunk. |
+| `encoder_name` (constant) | `DragonFruit` | §4.1 leaves the field to the writer. |
 
 ### B.5 What is deliberately not here
 
 The plugin contains no container code: no chunk assembly, no framing, no cryptography.
 Those would be a second implementation of sections 3 to 9, and the point of one reference
-crate is that there is one - REE canonicalization, dictionary IDs and the per-block AAD
-that binds a sealed frame to its chunk and index are exactly the details two
+crate is that there is one - REE canonicalization, dictionary IDs and the per-chunk AAD
+that binds a sealed frame to its chunk and directory index are exactly the details two
 implementations disagree about.
 
 Also out of scope here, and stated as such by the specification: `VOXL` parsing (the

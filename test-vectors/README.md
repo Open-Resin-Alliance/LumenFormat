@@ -57,14 +57,29 @@ So this corpus pins:
 
 - **Exactly** - the file header, `HEAD`, `AUTH`, the `LTBL` header and every 28-byte entry,
   each `LAYR` chunk's version field, `LHAS`, every REE stream, the chunk directory and the
-  trailer CRC-32C, plus the decompressed bytes of every layer, the Merkle root over them,
+  trailer CRC-32C, plus the decompressed bytes of every layer (the manifest's
+  `decompressed_sha256`, a bare SHA-256 of each layer's slice bytes - **not** the `LHAS`
+  leaf, which hashes `0x00 || d`, so an implementation checking one against the other is
+  comparing two different digests), the Merkle root over them,
   every sealed unit (nonce, ciphertext and tag, whose associated data binds a `LAYR` frame to
   the directory index of its chunk), and the plaintext payload bytes of every `PROF`, `LROV`,
   `PREV`, `VOXL` and `EXTD` chunk (`chunk_payload_sha256` in the manifest; `LROV`, `PREV` and
   `EXTD` are lists in file order).
 - **By property** - compressed payload bytes. The manifest records the
   zstd version and level, each frame's dictionary ID and declared content size;
-  `verify_vectors` asserts those instead of byte equality.
+  `verify_vectors` asserts those instead of byte equality. The vector's `file_sha256` does
+  pin the whole file, compressed frames included, for the zstd version that built it - it is
+  the property assertions that survive a version bump, which is why both are recorded.
+
+## Validation levels
+
+Every valid vector is accepted at both levels, and every invalid vector fails at the level
+its check names, which is `Loose` unless the manifest marks it `strict_only`. The five
+`strict_only` vectors take the opposite direction as well: the corpus asserts that a loose
+read **accepts** them, so the loose/strict split is pinned rather than described. A third
+party self-testing against this corpus should therefore run its own reader twice - once
+loose, expecting `valid/` to pass and the five `strict_only` files to pass too, and once
+strict, expecting every file in `invalid/` to fail the check its manifest entry names.
 
 Re-running `make_vectors` under a different zstd version may change
 `file_sha256`, the chunk sizes and the trailer CRC-32C. The uncompressed
@@ -148,13 +163,15 @@ layer 2 and sector 1's own ends at layer 5.
 | `layr-container-version` | A LAYR container declares version 2, which no reader implements; the frame behind it is well formed, so only the version refuses the file. | `layr.version` |
 | `layr-content-size-absent` | The LAYR frames are compressed without their content size. A writer MUST declare it (spec 4.9), because the descriptor's size_uncompressed is the container's length and the reader has nothing else to size the frame's output from. | `layr.content_size_present` |
 | `layr-frame-size-lie` | The first LAYR frame's header declares one byte more than the frame decompresses to, so its output cannot be allocated or checked against the declaration. | `layr.frame_decompressed_size` |
-| `layr-frame-corrupt` | The first block header of the first LAYR frame is rewritten to the reserved block type 3, so the frame cannot be decompressed. | `layr.frame_decompressed_size` |
+| `layr-frame-corrupt` | The first zstd block header of the first LAYR frame is rewritten to the reserved block type 3, so the frame cannot be decompressed. | `layr.frame_decompressed_size` |
 | `layr-dict-id-mismatch` | ZDIC.dict_id is rewritten while the frames keep the id of the dictionary they were compressed with, so every LAYR frame disagrees with the file's dictionary. | `layr.dict_id_match` |
 | `layr-dict-id-without-zdic` | The frames are compressed with a trained dictionary but the file carries no ZDIC chunk, so their dictionary ids name a dictionary no reader can find. | `layr.dict_id_absent` |
 | `crypt-unit-index-binding` | Every sealed LAYR frame is bound to unit index 0 instead of the directory index of the chunk that carries it. Each frame is intact, but a reader that authenticates it under the chunk's own index must refuse the file - which is what stops a ciphertext from being swapped between two LAYR chunks, since with one unit per chunk an all-zero index would authenticate in either place. | `crypt.unit_index_binding` |
 | `ltbl-layer-index-range` | Layer 1's entry claims one further entry, so the walk takes layer 1 and layer 2 for one layer and reaches layer 2 of a four-layer file; the entries no longer cover every layer the header declares. The merged layer also holds sector 0 twice, which is what the entries it swallowed carry. | `ltbl.layer_index_range` |
-| `layr-allocation-bound` | The file's only LAYR frame declares a decompressed size of 2147483647 bytes, some four thousand times what the slices pointing into it could hold, so a reader that sizes its buffer from the declaration allocates two gigabytes for a layer group of a 64 by 48 display. | `layr.allocation_bound` |
+| `layr-allocation-bound` | The file's only LAYR frame declares a decompressed size of 2147483647 bytes, some four thousand times what the slices pointing into it could hold, so a reader that sizes its buffer from the declaration allocates two gigabytes for a layer group of a 64 by 48 display. | `frame.allocation_bound` |
 | `presence-zdic-unused` | The file carries a ZDIC chunk while every LAYR frame declares no dictionary (dictionary id 0), so the dictionary is present but nothing in the file refers to it. | `presence.zdic` |
+| `meta-pwm-range` | META.light_pwm is 3000. The field is a duty over 0..=255, so this is a slicer that has written a percentage or a wider scale into it; a reader that clamps would print at a different power from one that did not, which is why the range is checked. | `pwm.range` |
+| `ltbl-two-chunks` | The file carries two LTBL chunks, byte-identical. Two layer tables can disagree about which chunk holds a layer's data and where its slice starts, and nothing in the file resolves that. | `presence.ltbl` |
 | `meta-sectors-shape` | META.sectors has two entries with sector_id 1, so the sector's timing is defined twice over. | `meta.sectors_shape` |
 | `meta-sector-material-index` | META.sectors[0].material_index is 3 while META.materials holds one entry, so the sector names a material that is not there. | `meta.sector_material_index` |
 | `merkle-root-mismatch` | One byte of merkle_root is flipped, so recomputation from layer_hashes disagrees. | `lhas.root_recompute` |
@@ -218,7 +235,8 @@ The spec fixes the algorithms and leaves the rest to these vectors:
   `machine_fp` is the SHA-256 of the recipient's 32-byte X25519 public key.
 - Unit framing: `nonce[12] || ciphertext || tag[16]`, AAD
   `chunk_type || 0x00 || unit_index_le_u32`, with `unit_index` 0 for every chunk
-  except `LAYR`, where it is the block index.
+  except `LAYR`, where it is the directory index of the chunk itself - counted from 0
+  over every descriptor, `HEAD` included ([§9.3](../spec/15-encryption.md#93-encryption-format)).
 - Compress-then-encrypt: a compressed chunk's unit seals the zstd frame, so
   `size_uncompressed` is the length of the plaintext JSON, not of the frame.
 

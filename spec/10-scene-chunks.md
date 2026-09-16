@@ -56,7 +56,13 @@ and a print reader that skips the chunk entirely is conforming.
 
 **Type tag:** `EXTD` (`0x45 0x58 0x54 0x44`). Optional, multiple allowed.
 
-**Flags:** zstd-compressed (unless the extension specifies otherwise).
+**Flags:** compression is per-extension, and the descriptor says which way it went: an
+unsealed `EXTD` whose `size_compressed` is non-zero holds a zstd frame, and one with
+`size_compressed == 0` holds its extension payload as it is
+([§3.2](02-file-structure.md#32-chunk-descriptor)). A sealed `EXTD` is left as stored after it
+is opened, because its framing hides whether a frame is inside - and no ORA-standard extension
+is compressed today, so a reader has nothing to lose by that. An extension that wants the other
+convention declares it in its own specification, alongside its payload.
 
 Vendor or future-standard extension data.
 

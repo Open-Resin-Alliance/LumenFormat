@@ -42,7 +42,10 @@ blended over the ranges its own sector supplies.
 
    Interpolatable values are exposure times, lift/retract distances and speeds, and wait
    times. A `bottom_*` value that is absent equals its normal counterpart, which makes
-   that field's interpolation a no-op. The values that do **not** interpolate are PWM and
+   that field's interpolation a no-op - an absence is never read as zero, because a zero
+   `bottom_lift_slow_distance_um` is a burn-in layer with no peel, a different print from
+   one that lifts like the rest of them ([§4.2](05-meta.md#42-meta---metadata-chunk)
+   step 4). The values that do **not** interpolate are PWM and
    the layer counts: `light_pwm`/`bottom_light_pwm` switch to the normal value at the
    first non-bottom layer, and `bottom_layer_count` and `transition_layer_count` are
    taken verbatim from the base the sector resolves - META's, or a `META.sectors` entry's
