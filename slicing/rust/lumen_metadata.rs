@@ -16,10 +16,11 @@
 //! `material` node of the manifest.
 //!
 //! Units: LUMEN stores integer micrometres and whole milliseconds, and nothing below
-//! one micrometre or one millisecond is expressible, so every value is rounded to the
-//! nearest unit here rather than truncated, and the last two rows of Appendix B's
-//! conversion table are the live ones: `liftDistanceMm`/`liftDistance2Mm` are already
-//! the two segments LUMEN wants.
+//! one micrometre or one millisecond is expressible, so every value is converted and
+//! rounded to the nearest unit here rather than truncated. The app's own settings
+//! already speak LUMEN's motion model - `liftDistanceMm`/`liftDistance2Mm` are the two
+//! segments of the peel, and the retract has its own pair - so the conversion is a unit
+//! change and not a reshuffle.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -294,10 +295,10 @@ pub fn build(job: &SliceJobV3) -> Result<LumenMetadata, SlicerV3Error> {
     };
 
     // Motion. LUMEN keeps the peel and the remainder as two segments per direction
-    // (Appendix B), and DragonFruit's settings already carry both, so these map one
-    // to one. A second segment of zero is the specification's way of saying the
-    // motion is single-stage, which is what a profile that leaves the fast segment
-    // at zero asks for.
+    // (section 8), and DragonFruit's settings already carry both, so these map one to
+    // one. A second segment of zero is the specification's way of saying the motion is
+    // single-stage, which is what a profile that leaves the fast segment at zero asks
+    // for.
     timing.lift_slow_distance_um = Some(um_from_mm(values.number("liftDistanceMm").unwrap_or(0.0)));
     timing.lift_slow_speed_um_min = Some(um_from_mm(values.number("liftSpeedMmMin").unwrap_or(0.0)));
     timing.lift_fast_distance_um = Some(um_from_mm(values.number("liftDistance2Mm").unwrap_or(0.0)));
@@ -327,13 +328,16 @@ pub fn build(job: &SliceJobV3) -> Result<LumenMetadata, SlicerV3Error> {
     timing.bottom_lift_fast_speed_um_min = values.number("bottomLiftSpeed2MmMin").map(um_from_mm);
     timing.bottom_retract_fast_distance_um = values.number("bottomRetractDistanceMm").map(um_from_mm);
     timing.bottom_retract_fast_speed_um_min = values.number("bottomRetractSpeedMmMin").map(um_from_mm);
-    // Appendix B's closing note: ChiTuBox's second retract height is the same
-    // quantity as LUMEN's slow retract distance, bottom or not.
+    // ChiTuBox's second retract *height* is the same quantity as LUMEN's slow retract
+    // *distance* - a distance the platform travels, named for where it ends - bottom or
+    // not, which is why this key maps here beside the normal-lift one above.
     timing.bottom_retract_slow_distance_um = values.number("bottomRetractHeight2Mm").map(um_from_mm);
     timing.bottom_retract_slow_speed_um_min = values.number("bottomRetractSpeed2MmMin").map(um_from_mm);
 
-    // Waits. LUMEN has no light-off field: ChiTuBox's light-off delay is the pause
-    // after the cure, which is `wait_time_after_cure_ms` (Appendix B).
+    // Waits. LUMEN has no light-off field because the quantity is already here under
+    // its own name: a light-off delay is the pause after the cure, which is
+    // `wait_time_after_cure_ms`, so a profile that carries the older key keeps its
+    // timing.
     timing.wait_time_before_cure_ms = Some(ms_from_sec(values.number("waitTimeBeforeCureSec").unwrap_or(0.0)));
     timing.wait_time_after_cure_ms = Some(ms_from_sec(
         values

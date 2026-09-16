@@ -10,7 +10,7 @@ pub const DEFAULT_LAYERS_PER_CHUNK: u32 = 64;
 
 /// zstd level for `LAYR` frames.
 ///
-/// Section 9 suggests 3 for interactive work and 6 for a final export, and a real
+/// Section 6.3 suggests 3 for interactive work and 6 for a final export, and a real
 /// 16K model says the same thing with numbers. On a 3 688-layer print, 122.8 MB of
 /// REE to compress: level 3 costs 0.60 s and 8.7% more file size than level 19,
 /// level 6 costs 1.08 s and 2.8% more, and level 19 costs 15.45 s. The last of those

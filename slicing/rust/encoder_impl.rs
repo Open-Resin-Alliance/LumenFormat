@@ -10,10 +10,9 @@
 //! The container itself - HEAD, META, LTBL, LAYR, ZDIC, LHAS, the chunk directory,
 //! the CRC-32C trailer - is written by the `lumen` reference crate rather than
 //! reimplemented here, so a file this plugin produces is a file the reference
-//! encoder would have produced. That is a deliberate difference from Appendix B's
-//! sketch of a plugin with its own `lumen_layout.rs` and `lumen_crypto.rs`: those
-//! modules would be a second implementation of sections 3 to 9, and the whole point
-//! of a reference encoder is that there is one.
+//! encoder would have produced. That is why this plugin has no `lumen_layout.rs` and no
+//! `lumen_crypto.rs`: those modules would be a second implementation of sections 3 to 9,
+//! and the whole point of a reference encoder is that there is one (Appendix B).
 //!
 //! Registration is by folder convention: this repository is imported into DragonFruit
 //! as the submodule at `plugins/lumen`, where `scripts/generate-plugin-registry.mjs`
