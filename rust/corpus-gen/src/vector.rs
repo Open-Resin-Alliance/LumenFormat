@@ -381,6 +381,11 @@ pub struct VectorSpec<'a> {
     /// references: a chunk whose overrides can never be attributed.
     pub orphan_lrov: Option<Vec<(&'a str, Value)>>,
     pub extds: Vec<(Vec<u8>, u32)>,
+    /// Zero bytes appended to the `HEAD` payload, so the chunk is longer than the
+    /// fields this revision defines - the layout `HEAD` had while it still carried
+    /// `physical_width_px` and `physical_height_px`. Section 11.2 makes the frame
+    /// exact (`head.frame`), so the corpus needs a way to write one that is not.
+    pub head_padding: usize,
 }
 
 impl VectorSpec<'_> {
@@ -439,6 +444,7 @@ impl<'a> Default for VectorSpec<'a> {
             lrov_raw: None,
             orphan_lrov: None,
             extds: Vec::new(),
+            head_padding: 0,
         }
     }
 }
@@ -463,18 +469,19 @@ pub struct Content {
 /// the indices the chunk finally lands on.
 pub fn content_chunks(spec: &VectorSpec, enc: &Layers, auth: Option<Chunk>) -> Content {
     let (w, h) = spec.display;
+    let mut head = payload::head(&payload::Header {
+        encoder_name: ENCODER_NAME,
+        display_w: w as u32,
+        display_h: h as u32,
+        layer_height_um: spec.layer_height_um,
+        total_layers: spec.layers.len() as u32,
+        ..Default::default()
+    });
+    // See [`VectorSpec::head_padding`]: the one vector that writes a `HEAD` longer
+    // than this revision's fields, which section 11.2 refuses.
+    head.resize(head.len() + spec.head_padding, 0);
     let mut chunks = vec![
-        Chunk::new(
-            b"HEAD",
-            payload::head(&payload::Header {
-                encoder_name: ENCODER_NAME,
-                display_w: w as u32,
-                display_h: h as u32,
-                layer_height_um: spec.layer_height_um,
-                total_layers: spec.layers.len() as u32,
-                ..Default::default()
-            }),
-        ),
+        Chunk::new(b"HEAD", head),
         Chunk::new(b"META", json::dumps(&spec.meta_value(enc.multi_sector))).compressed(),
     ];
     if let Some(prof) = &spec.prof {

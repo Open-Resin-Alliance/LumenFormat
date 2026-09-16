@@ -1066,8 +1066,6 @@ mod tests {
             created_unix_sec: 1_750_000_000,
             display_width_px: WIDTH,
             display_height_px: HEIGHT,
-            physical_width_px: WIDTH,
-            physical_height_px: HEIGHT,
             build_width_um: 40_000,
             build_depth_um: 20_000,
             build_height_um: 20_000,

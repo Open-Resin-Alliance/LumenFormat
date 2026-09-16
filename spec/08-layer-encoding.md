@@ -28,9 +28,7 @@ Encoders MUST emit the canonical byte stream for the tag they choose; [§5.6](#5
 canonical form of each tag and the rules for choosing one.
 
 `total_pixels`, used throughout this section, is the number of pixels in a layer
-mask: `HEAD.display_width_px × HEAD.display_height_px`. The panel's own dimensions
-(`physical_width_px`, `physical_height_px`) may be integer multiples of those and do
-not change the mask grid.
+mask: `HEAD.display_width_px × HEAD.display_height_px`.
 
 ### 5.1 Rationale
 

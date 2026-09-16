@@ -29,8 +29,6 @@ fn head(layers: u32) -> Head {
         created_unix_sec: 1_750_000_000,
         display_width_px: WIDTH,
         display_height_px: HEIGHT,
-        physical_width_px: WIDTH,
-        physical_height_px: HEIGHT,
         build_width_um: 143_000,
         build_depth_um: 89_000,
         build_height_um: 175_000,

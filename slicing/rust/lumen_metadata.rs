@@ -276,8 +276,6 @@ pub fn build(job: &SliceJobV3) -> Result<LumenMetadata, SlicerV3Error> {
         created_unix_sec,
         display_width_px: width,
         display_height_px: height,
-        physical_width_px: width,
-        physical_height_px: height,
         build_width_um,
         build_depth_um,
         build_height_um,

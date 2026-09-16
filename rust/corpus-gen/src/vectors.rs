@@ -631,7 +631,31 @@ can express.",
         .base("binary-basic"),
     );
 
-    // x33: corrupted trailer CRC (the only failure that is not repacked)
+    // x33: a HEAD longer than this revision's fields
+    let padded_head = vector::build_vector(&VectorSpec {
+        name: "x-head-padded",
+        description: "source",
+        display: (64, 48),
+        layers: vector::repeated(4, &[(0, 255, 255)]),
+        layers_per_chunk: 2,
+        head_padding: 8,
+        ..Default::default()
+    });
+    emit(
+        &invalid_dir,
+        &mut manifest_invalid,
+        Invalid::new(
+            "head-frame-extra-bytes",
+            "HEAD carries eight bytes past the fields this revision defines, which is the layout \
+the chunk had while it still carried physical_width_px and physical_height_px. Section 11.2 makes \
+the frame exact, so a reader must refuse it: parsing the prefix reports the build height as the \
+layer count, and the layer count as the build width.",
+            "head.frame",
+            padded_head.raw,
+        ),
+    );
+
+    // x34: corrupted trailer CRC (the only failure that is not repacked)
     let mut b = binary_basic.raw.clone();
     b[binary_basic.layout.trailer_offset + 4] ^= 0xFF;
     emit(

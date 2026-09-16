@@ -157,8 +157,6 @@ fn head() -> Head {
         created_unix_sec: 0,
         display_width_px: WIDTH,
         display_height_px: HEIGHT,
-        physical_width_px: WIDTH,
-        physical_height_px: HEIGHT,
         build_width_um: 1,
         build_depth_um: 1,
         build_height_um: 1,

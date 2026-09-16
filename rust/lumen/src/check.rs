@@ -56,7 +56,8 @@ pub enum Check {
     // -- group: head (section 4.1) ------------------------------------------
     /// `head_version` is not recognized.
     HeadVersion,
-    /// `encoder_name_len` exceeds 256, or the chunk is too short for its fields.
+    /// `encoder_name_len` exceeds 256, or the chunk is not exactly the fixed
+    /// fields plus the name.
     HeadFrame,
     /// `total_layers == 0`, or disagrees with `LTBL.layer_count`.
     HeadTotalLayers,
@@ -69,8 +70,6 @@ pub enum Check {
     /// `MULTI_SECTOR` is set without a layer carrying more than one sector, or
     /// clear while one does.
     HeadMultiSectorFlag,
-    /// A physical dimension is not an integer multiple of the display dimension.
-    HeadPhysicalMultiple,
 
     // -- group: auth (section 4.4) -----------------------------------------
     /// `auth_version` is not recognized.
@@ -308,7 +307,6 @@ impl Check {
             HeadBuildDims => "head.build_dims",
             HeadDisplayPixels => "head.display_pixels",
             HeadMultiSectorFlag => "head.multi_sector_flag",
-            HeadPhysicalMultiple => "head.physical_multiple",
             AuthVersion => "auth.version",
             AuthCipherKnown => "auth.cipher_known",
             AuthFrame => "auth.frame",

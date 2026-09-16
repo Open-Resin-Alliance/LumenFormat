@@ -1278,18 +1278,6 @@ fn check_hdr(head: &Head) -> Result<()> {
             "the display has no pixels",
         ));
     }
-    if head.display_width_px != 0 && head.physical_width_px % head.display_width_px != 0 {
-        return Err(Error::new(
-            Check::HeadPhysicalMultiple,
-            "physical_width_px is not a multiple of display_width_px",
-        ));
-    }
-    if head.display_height_px != 0 && head.physical_height_px % head.display_height_px != 0 {
-        return Err(Error::new(
-            Check::HeadPhysicalMultiple,
-            "physical_height_px is not a multiple of display_height_px",
-        ));
-    }
     Ok(())
 }
 

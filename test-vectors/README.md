@@ -159,6 +159,7 @@ layer 2 and sector 1's own ends at layer 5.
 | `layer-hash-mismatch` | Layer 0's stored leaf hash is altered and merkle_root recomputed to match, so only hashing the actual bytes catches it. | `lhas.leaf_match` *(strict)* |
 | `multi-sector-flag-clear` | The file's layers carry two sectors but the header does not set MULTI_SECTOR, so a reader that trusts the flag prints one sector per layer and never notices the rest. | `head.multi_sector_flag` |
 | `multi-sector-flag-set` | No layer of the file carries more than one sector, but the header sets MULTI_SECTOR, so the flag promises a structure the file does not have. | `head.multi_sector_flag` |
+| `head-frame-extra-bytes` | HEAD carries eight bytes past the fields this revision defines - the layout the chunk had while it still carried `physical_width_px` and `physical_height_px`. Section 11.2 makes the frame exact, so a reader must refuse it rather than parse the prefix, which would report the build height as the layer count and the layer count as the build width. | `head.frame` |
 | `trailer-crc-mismatch` | The trailer CRC-32C does not match the file bytes. | `trailer.crc32c` |
 | `meta-exposure-fractional` | META carries normal_exposure_ms = 2500.5. Durations are exact whole milliseconds, so a fractional value is not a duration this format can express. | `meta.time_integer` |
 | `encrypted-flag-without-auth` | The file header sets ENCRYPTED but there is no AUTH chunk, so no session key can ever be derived. | `presence.auth` |

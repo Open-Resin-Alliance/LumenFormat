@@ -904,6 +904,7 @@ fn check_by_name(name: &str) -> Option<Check> {
         ("layr.allocation_bound", Check::LayrAllocationBound),
         ("layr.dict_id_match", Check::LayrDictIdMatch),
         ("layr.dict_id_absent", Check::LayrDictIdAbsent),
+        ("head.frame", Check::HeadFrame),
         ("head.multi_sector_flag", Check::HeadMultiSectorFlag),
         ("zdic.dict_size", Check::ZdicDictSize),
         ("zdic.dict_id_match", Check::ZdicDictIdMatch),

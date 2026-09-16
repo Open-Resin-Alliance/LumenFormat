@@ -69,12 +69,7 @@ pub fn head(header: &Header) -> Vec<u8> {
     out.extend_from_slice(&(header.encoder_name.len() as u32).to_le_bytes());
     out.extend_from_slice(header.encoder_name.as_bytes());
     out.extend_from_slice(&CREATED_UNIX_SEC.to_le_bytes());
-    for value in [
-        header.display_w,
-        header.display_h,
-        header.display_w,
-        header.display_h,
-    ] {
+    for value in [header.display_w, header.display_h] {
         out.extend_from_slice(&value.to_le_bytes());
     }
     for value in [

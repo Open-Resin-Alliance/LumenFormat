@@ -387,24 +387,22 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
     checks.check("head.version", head_version == 1);
     checks.check(
         "head.frame",
-        head.len() >= 52 + name_len as usize && name_len <= 256,
+        head.len() == 44 + name_len as usize && name_len <= 256,
     );
     let name_len = name_len as usize;
-    let (Some(_created), Some(display_w), Some(display_h), Some(physical_w), Some(physical_h)) = (
+    let (Some(_created), Some(display_w), Some(display_h)) = (
         u64_at(head, 8 + name_len),
         u32_at(head, 16 + name_len),
         u32_at(head, 20 + name_len),
-        u32_at(head, 24 + name_len),
-        u32_at(head, 28 + name_len),
     ) else {
         return checks;
     };
     let (Some(build_w), Some(build_d), Some(build_h), Some(layer_h), Some(total_layers)) = (
+        u32_at(head, 24 + name_len),
+        u32_at(head, 28 + name_len),
         u32_at(head, 32 + name_len),
         u32_at(head, 36 + name_len),
         u32_at(head, 40 + name_len),
-        u32_at(head, 44 + name_len),
-        u32_at(head, 48 + name_len),
     ) else {
         return checks;
     };
@@ -414,13 +412,6 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
     checks.check(
         "head.display_pixels",
         display_w as usize * display_h as usize > 0,
-    );
-    checks.check(
-        "head.physical_multiple",
-        display_w != 0
-            && display_h != 0
-            && physical_w % display_w == 0
-            && physical_h % display_h == 0,
     );
     let total_pixels = display_w as usize * display_h as usize;
 

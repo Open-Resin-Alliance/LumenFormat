@@ -5,8 +5,8 @@ use crate::check::Check;
 use crate::error::{Error, Result};
 use crate::io::{Reader, Writer};
 
-/// Bytes of `HEAD` other than `encoder_name`: 4 before it and 48 after.
-pub const HEAD_FIXED_LEN: usize = 52;
+/// Bytes of `HEAD` other than `encoder_name`: 4 before it and 40 after.
+pub const HEAD_FIXED_LEN: usize = 44;
 /// Longest permitted `encoder_name`.
 pub const ENCODER_NAME_MAX: usize = 256;
 
@@ -19,14 +19,10 @@ pub struct Head {
     pub encoder_name: String,
     /// Creation timestamp in Unix seconds.
     pub created_unix_sec: u64,
-    /// Logical display width: the layer mask grid.
+    /// Display width in pixels: the layer mask grid.
     pub display_width_px: u32,
-    /// Logical display height.
+    /// Display height in pixels: the layer mask grid.
     pub display_height_px: u32,
-    /// Physical panel width, an integer multiple of the display width.
-    pub physical_width_px: u32,
-    /// Physical panel height, an integer multiple of the display height.
-    pub physical_height_px: u32,
     /// Build plate X dimension in micrometers.
     pub build_width_um: u32,
     /// Build plate Y dimension in micrometers.
@@ -63,21 +59,31 @@ impl Head {
         let created_unix_sec = r.u64()?;
         let display_width_px = r.u32()?;
         let display_height_px = r.u32()?;
-        let physical_width_px = r.u32()?;
-        let physical_height_px = r.u32()?;
         let build_width_um = r.u32()?;
         let build_depth_um = r.u32()?;
         let build_height_um = r.u32()?;
         let layer_height_um = r.u32()?;
         let total_layers = r.u32()?;
+        // Section 11.2: the chunk holds the fixed fields and the name and nothing
+        // else. A longer one is a layout this reader does not know - a `HEAD` written
+        // against another revision of these fields - and parsing its prefix would
+        // report values that are not the ones they are named for.
+        let expected = HEAD_FIXED_LEN + encoder_name_len as usize;
+        if payload.len() != expected {
+            return Err(Error::new(
+                Check::HeadFrame,
+                format!(
+                    "HEAD is {} bytes, not the {expected} its fields and name total",
+                    payload.len()
+                ),
+            ));
+        }
         Ok(Head {
             head_version,
             encoder_name,
             created_unix_sec,
             display_width_px,
             display_height_px,
-            physical_width_px,
-            physical_height_px,
             build_width_um,
             build_depth_um,
             build_height_um,
@@ -95,8 +101,6 @@ impl Head {
         w.u64(self.created_unix_sec);
         w.u32(self.display_width_px);
         w.u32(self.display_height_px);
-        w.u32(self.physical_width_px);
-        w.u32(self.physical_height_px);
         w.u32(self.build_width_um);
         w.u32(self.build_depth_um);
         w.u32(self.build_height_um);
@@ -122,8 +126,6 @@ mod tests {
             created_unix_sec: 1_710_000_000,
             display_width_px: 64,
             display_height_px: 48,
-            physical_width_px: 128,
-            physical_height_px: 96,
             build_width_um: 218_000,
             build_depth_um: 123_000,
             build_height_um: 250_000,
@@ -173,16 +175,28 @@ mod tests {
             Head::parse(&bytes[..4]).unwrap_err().check(),
             Check::HeadFrame
         );
+
+        // A `HEAD` longer than these fields is a layout this revision does not know,
+        // not padding: a reader that parsed the prefix would report values under names
+        // they do not have, which is how a pre-removal 52-byte `HEAD` turned into a
+        // layer count of 235000 instead of the 800 the file holds.
+        let mut longer = bytes.clone();
+        longer.extend_from_slice(&[0u8; 8]);
+        assert_eq!(Head::parse(&longer).unwrap_err().check(), Check::HeadFrame);
     }
 
     #[test]
-    fn hdr_rejects_unknown_versions_but_tolerates_trailing_bytes() {
+    fn hdr_rejects_unknown_versions_and_any_extra_bytes() {
         let mut bytes = sample("X").to_bytes();
         bytes[0..4].copy_from_slice(&2u32.to_le_bytes());
         assert_eq!(Head::parse(&bytes).unwrap_err().check(), Check::HeadVersion);
 
+        // Section 11.2 makes the frame exact, and the rule earns its keep: these fields
+        // were eight bytes longer once, so a reader that ignored what followed them read
+        // the old build height as `total_layers` and reported a file of 800 layers as one
+        // of 235000.
         let mut bytes = sample("X").to_bytes();
         bytes.push(0);
-        assert_eq!(Head::parse(&bytes).unwrap(), sample("X"));
+        assert_eq!(Head::parse(&bytes).unwrap_err().check(), Check::HeadFrame);
     }
 }

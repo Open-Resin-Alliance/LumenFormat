@@ -64,9 +64,8 @@ companion field left to contradict. What replaced them is named in the lists bel
 - [ ] The `MULTI_SECTOR` flag (header bit 1) is set exactly when some layer carries more than one sector (`head.multi_sector_flag`).
 - [ ] `HEAD.layer_height_um > 0` (`head.layer_height`).
 - [ ] `HEAD.build_width_um > 0`, `HEAD.build_depth_um > 0`, `HEAD.build_height_um > 0` (`head.build_dims`).
-- [ ] `HEAD.encoder_name_len <= 256`, and `HEAD.size_uncompressed >= 52 + encoder_name_len` (`head.frame`) - the fixed fields before and after the name total 52 bytes, so a v1 `HEAD` chunk is exactly `52 + encoder_name_len` bytes.
+- [ ] `HEAD.encoder_name_len <= 256`, and `HEAD.size_uncompressed == 44 + encoder_name_len` (`head.frame`): the fixed fields before and after the name total 44 bytes, so a v1 `HEAD` chunk is exactly `44 + encoder_name_len` bytes and there is no room in it for a field this revision does not define.
 - [ ] `HEAD.display_width_px × display_height_px > 0` (`head.display_pixels`).
-- [ ] `HEAD.physical_width_px` is an integer multiple of `display_width_px`, and `physical_height_px` is an integer multiple of `display_height_px` (`head.physical_multiple`). A ratio of 1 means one display pixel per physical pixel.
 - [ ] The META payload is a JSON object (`meta.json`).
 - [ ] META JSON contains all required fields (`meta.required_fields`): `meta_version`, `normal_exposure_ms`, `bottom_exposure_ms`, `bottom_layer_count`, `transition_layer_count`, `layer_height_um`, `lift_slow_distance_um`, `lift_slow_speed_um_min`, `retract_fast_distance_um`, `retract_fast_speed_um_min`.
 - [ ] Every `*_ms` field in META, and `estimated_print_time_sec`, is a JSON integer (`meta.time_integer`). A value with a fractional part such as `2500.5` is invalid; the rule covers the timing fields of META's `sectors` entries too, since they are META's fields. See [§4.2](03-chunks.md#42-meta---metadata-chunk) for the encoders' and readers' obligations.

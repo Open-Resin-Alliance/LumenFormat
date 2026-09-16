@@ -194,8 +194,6 @@ fn head(layer_count: u32) -> Head {
         created_unix_sec: 1_767_000_000,
         display_width_px: WIDTH,
         display_height_px: HEIGHT,
-        physical_width_px: WIDTH,
-        physical_height_px: HEIGHT,
         build_width_um: 143_000,
         build_depth_um: 89_000,
         build_height_um: 175_000,
@@ -551,12 +549,10 @@ fn describe(bytes: &[u8], password: Option<&str>) {
         file.header().total_uncompressed_size
     );
     println!(
-        "HEAD: encoder {:?}, {}x{} px, physical {}x{}, {} layers of {} um",
+        "HEAD: encoder {:?}, {}x{} px, {} layers of {} um",
         file.head().encoder_name,
         file.head().display_width_px,
         file.head().display_height_px,
-        file.head().physical_width_px,
-        file.head().physical_height_px,
         file.head().total_layers,
         file.head().layer_height_um
     );
