@@ -59,6 +59,15 @@ export const LUMEN_COMPLEX_PLUGIN_DEFINITION: ComplexPluginDefinition = {
             standard: LUMEN_LOCAL_MATERIAL_SETTINGS_STANDARD_ADAPTER,
         },
     },
+    // `lumen.embedVoxlScene` asks for the editor scene; the host bakes it into the job
+    // as VOXL V2 bytes and LUMEN's encoder copies it into a `VOXL` chunk.
+    jobMetadataPayloads: [
+        {
+            settingPath: 'lumen.embedVoxlScene',
+            payloadPath: 'lumen.voxlSceneBase64',
+            payload: 'voxl-scene',
+        },
+    ],
 };
 
 export default LUMEN_COMPLEX_PLUGIN_DEFINITION;

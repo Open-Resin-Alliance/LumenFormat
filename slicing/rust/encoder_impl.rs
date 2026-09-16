@@ -18,9 +18,9 @@
 //! Registration is by folder convention: this repository is imported into DragonFruit
 //! as the submodule at `plugins/lumen`, where `scripts/generate-plugin-registry.mjs`
 //! finds `pluginDefinition.ts`, `#[path]`-includes this file into the engine crate,
-//! and so finds the reference crate in the same checkout - the engine declares
-//! `plugins/lumen/rust/lumen`, because a path dependency cannot be expressed in
-//! `slicing/rust/requiredCrates.toml`, which the generator validates as semver.
+//! and merges the crate this module needs - declared beside this file in
+//! `slicing/rust/requiredCrates.toml` as a path into the same checkout - into the
+//! engine's manifest, the same route every other plugin's crates take.
 
 mod lumen_metadata;
 mod lumen_preview;

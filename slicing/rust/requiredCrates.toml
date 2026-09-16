@@ -1,0 +1,17 @@
+[dependencies]
+# The LUMEN reference crate. It lives in this plugin's own checkout rather than on
+# crates.io, and the engine's registry generator compiles plugin encoders into the
+# engine, so the crate an encoder needs is declared here and merged into the
+# engine's manifest during the build - the same route every other plugin's crates
+# take.
+
+lumen-format = { path = "../../rust/lumen" }
+
+[optional-dependencies]
+
+[features]
+default = []
+
+[notes]
+purpose = "LUMEN container encoding: HEAD, META, ZDIC, LTBL, LAYR, LHAS, PREV and the embedded VOXL scene"
+minimum-rust = "1.85"

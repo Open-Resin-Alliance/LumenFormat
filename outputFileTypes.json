@@ -1,0 +1,68 @@
+[
+  {
+    "fileExtension": ".lumen",
+    "mimeType": "application/vnd.openresin.lumen",
+    "uti": "org.openresinalliance.lumen",
+    "displayName": "DragonFruit LUMEN Print",
+    "thumbnail": {
+      "magic": "LUMN",
+      "version": {
+        "type": "u32",
+        "at": 4,
+        "equals": 1
+      },
+      "directory": {
+        "offset": {
+          "type": "u64",
+          "at": 8
+        },
+        "count": {
+          "type": "u32",
+          "at": 16
+        },
+        "entrySize": 32
+      },
+      "entry": {
+        "type": {
+          "at": 0
+        },
+        "offset": {
+          "type": "u64",
+          "at": 4
+        },
+        "size": [
+          {
+            "type": "u64",
+            "at": 20
+          },
+          {
+            "type": "u64",
+            "at": 12
+          }
+        ],
+        "flags": {
+          "at": 28,
+          "sealedBit": 4,
+          "roleMask": 15,
+          "roleOrder": [
+            1,
+            0,
+            2,
+            3
+          ],
+          "type": "u32"
+        }
+      },
+      "previewChunks": [
+        "PREV"
+      ],
+      "payload": {
+        "encoding": "png"
+      },
+      "trailer": {
+        "magic": "LEND",
+        "size": 8
+      }
+    }
+  }
+]
