@@ -258,10 +258,12 @@ impl Encoder {
 
     /// Attach the per-(layer, sector) timing deltas.
     ///
-    /// Each becomes its own `LROV` chunk, and the matching `LTBL` entry points at
-    /// it. A layer emitted here also gets a table entry for that sector even when
-    /// the layer holds no data for it, which is how an override reaches a sector
-    /// a layer does not print.
+    /// Each pair's matching `LTBL` entry points at an `LROV` chunk, and pairs
+    /// whose deltas are equal share one: a delta set on a range - or on any set of
+    /// pairs - costs one chunk, and every entry that names it applies it. A layer
+    /// emitted here also gets a table entry for that sector even when the layer
+    /// holds no data for it, which is how an override reaches a sector a layer does
+    /// not print.
     pub fn set_overrides(&mut self, overrides: Vec<Override>) -> Result<()> {
         let mut overrides = overrides;
         overrides.sort_by_key(|over| (over.layer, over.sector_id));
@@ -654,16 +656,26 @@ impl Encoder {
         if let Some(auth) = self.build_auth()? {
             pending.push(Pending::raw(ChunkType::AUTH, crypto::encode_auth(&auth)));
         }
-        // The overrides are already sorted by (layer, sector), so their chunks
-        // are too, and each (layer, sector) remembers which index it landed at.
+        // The overrides are already sorted by (layer, sector), so their chunks are
+        // too, and each (layer, sector) remembers which index it landed at. Two pairs
+        // whose deltas are identical share one chunk: a delta that covers a range, or
+        // any set of pairs, is written once and every entry that names it applies it
+        // (section 4.5). The map is keyed by the serialized payload, so a slicer that
+        // builds each pair's delta the same way gets the sharing for free.
         let mut lrov_index: HashMap<(u32, u32), u32> = HashMap::new();
+        let mut shared: HashMap<Vec<u8>, u32> = HashMap::new();
         for over in &self.overrides {
-            lrov_index.insert((over.layer, over.sector_id), pending.len() as u32);
-            pending.push(self.seal_if_needed(
-                ChunkType::LROV,
-                json_chunks::lrov_to_bytes(&over.timing)?,
-                true,
-            )?);
+            let payload = json_chunks::lrov_to_bytes(&over.timing)?;
+            let index = match shared.get(&payload) {
+                Some(index) => *index,
+                None => {
+                    let index = pending.len() as u32;
+                    pending.push(self.seal_if_needed(ChunkType::LROV, payload.clone(), true)?);
+                    shared.insert(payload, index);
+                    index
+                }
+            };
+            lrov_index.insert((over.layer, over.sector_id), index);
         }
         if let Some(dictionary) = dictionary.as_ref() {
             pending.push(self.seal_if_needed(ChunkType::ZDIC, dictionary.to_bytes(), false)?);
@@ -1210,6 +1222,102 @@ mod tests {
             sectors.finish().expect("a writable file"),
             from_masks.finish().expect("a writable file")
         );
+    }
+
+    /// The META minima section 11.2 requires, so a test can validate a file it
+    /// wrote rather than only read its structure back.
+    fn conforming_meta() -> Meta {
+        Meta {
+            meta_version: Some(1),
+            timing: Timing {
+                normal_exposure_ms: Some(2500),
+                bottom_exposure_ms: Some(30000),
+                bottom_layer_count: Some(2),
+                transition_layer_count: Some(2),
+                layer_height_um: Some(50),
+                lift_slow_distance_um: Some(5000),
+                lift_slow_speed_um_min: Some(65000),
+                retract_fast_distance_um: Some(5000),
+                retract_fast_speed_um_min: Some(150000),
+                ..Timing::default()
+            },
+            ..Meta::default()
+        }
+    }
+
+    /// Overrides whose deltas are equal share one `LROV` chunk, so a delta set on a
+    /// range costs one chunk while a delta that differs by one field is its own; and
+    /// each pair still resolves from the chunk its own entry names (section 4.5).
+    #[test]
+    fn equal_override_deltas_share_one_chunk() {
+        use crate::reader::LumenFile;
+        use crate::validate::Level;
+
+        let exposure = |ms: u32| Timing {
+            normal_exposure_ms: Some(ms),
+            ..Timing::default()
+        };
+        let mut encoder = Encoder::new(head(4), conforming_meta());
+        for _ in 0..4 {
+            encoder.push_layer(&[0u8; PIXELS]).expect("a layer");
+        }
+        encoder
+            .set_overrides(vec![
+                Override {
+                    layer: 0,
+                    sector_id: 0,
+                    timing: exposure(2800),
+                },
+                Override {
+                    layer: 1,
+                    sector_id: 0,
+                    timing: exposure(2800),
+                },
+                Override {
+                    layer: 2,
+                    sector_id: 0,
+                    timing: exposure(2800),
+                },
+                Override {
+                    layer: 3,
+                    sector_id: 0,
+                    timing: exposure(3000),
+                },
+            ])
+            .expect("one override set per (layer, sector)");
+
+        let bytes = encoder.finish().expect("a writable file");
+        let file =
+            LumenFile::open(&bytes, Level::Strict).expect("a shared chunk is a conforming file");
+        let first_lrov = |layer: u32| {
+            file.layer_table()
+                .entry(layer, 0)
+                .expect("an entry for every layer")
+                .first_lrov
+        };
+        assert_eq!(first_lrov(0), first_lrov(1), "equal deltas share a chunk");
+        assert_eq!(first_lrov(1), first_lrov(2), "equal deltas share a chunk");
+        assert_ne!(
+            first_lrov(2),
+            first_lrov(3),
+            "a delta that differs is its own chunk"
+        );
+        let chunks = file
+            .directory()
+            .entries()
+            .filter(|d| d.chunk_type == crate::container::ChunkType::LROV)
+            .count();
+        assert_eq!(chunks, 2, "four overrides with two distinct deltas");
+
+        // The sharing is an encoding detail: every pair still resolves from the
+        // chunk its entry names.
+        for layer in 0..3 {
+            assert_eq!(
+                file.timing_for(layer, 0).expect("resolvable").exposure_ms,
+                2800
+            );
+        }
+        assert_eq!(file.timing_for(3, 0).expect("resolvable").exposure_ms, 3000);
     }
 
     /// A stream that carries no tag is not a layer, and the encoder says so

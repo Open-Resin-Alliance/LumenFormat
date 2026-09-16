@@ -974,9 +974,10 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
                     .filter(|(chunk, _)| !named.contains(&chunk.index))
                     .all(|(_, plain)| applied.contains(&plain.as_slice())),
             );
-            // Every `LROV` chunk is named by exactly one entry. A chunk nobody
-            // names is a set that will never be applied; one that two entries
-            // name would be applied to a pair it never described.
+            // Every `LROV` chunk is named by at least one entry. A chunk nobody
+            // names is a set that will never be applied; a chunk several entries
+            // name is one delta covering all of them, which is how a range is
+            // written (4.5).
             let mut references: HashMap<u32, usize> = HashMap::new();
             for entry in &sectors {
                 if entry.first_lrov != 0 {
@@ -985,9 +986,11 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
             }
             checks.check(
                 "lrov.orphan",
-                lrov_chunks
-                    .iter()
-                    .all(|chunk| references.get(&(chunk.index as u32)) == Some(&1)),
+                lrov_chunks.iter().all(|chunk| {
+                    references
+                        .get(&(chunk.index as u32))
+                        .is_some_and(|n| *n > 0)
+                }),
             );
             payloads.insert(*b"LROV", Payload::Many(plaintexts));
         }

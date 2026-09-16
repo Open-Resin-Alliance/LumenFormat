@@ -15,9 +15,10 @@
 //!
 //! The pipeline's inputs moved when the layout did. A sector's base timing is a
 //! `META.sectors` entry rather than a `SECT` chunk, field by field over META's
-//! base (§4.2); an override set belongs to exactly one `(layer, sector)`, which
-//! is what `LTBL.first_lrov` says, rather than to a layer or a layer range that
-//! a reader has to match against (§4.5). One place, one answer.
+//! base (§4.2); an override set is placed by the entries that name it - what
+//! `LTBL.first_lrov` says - rather than by a layer or a layer range in the payload
+//! that a reader has to match against, and one chunk may serve every pair whose
+//! delta is the same (§4.5). One place, one answer.
 
 use std::collections::{BTreeMap, BTreeSet};
 

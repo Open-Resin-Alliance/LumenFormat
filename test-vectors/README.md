@@ -98,10 +98,12 @@ So a vector's points include each sector's bottom range, first interpolation ste
 fully-normal layer, last layer, and each override boundary next to the layer it does not
 reach.
 
-`layer-overrides` is the one to read first for the overrides: seven `LROV` chunks cover layer
-2, a range of three layers written one chunk per layer, a second range and layer 4, which the
-first range covers as well - and because an override set belongs to the pair that names it,
-layer 4 keeps the range's exposure and gains only the single-layer chunk's wait.
+`layer-overrides` is the one to read first for the overrides: four `LROV` chunks cover layer 2, a
+range of three whose middle layer carries one field more - so layers 3 and 5 share a chunk and
+layer 4 cannot - and a second range of three that shares one chunk because its delta is the same on
+every layer. A layer resolves from the chunk its own entry names and from nothing else, so layer 4
+keeps the range's exposure and gains only the field its own set adds. `lrov-per-pair` is the same
+idea written the other way: three pairs with one identical delta, a different chunk for each.
 `sector-blend-ranges` is the one for the ranges themselves, where META's bottom range ends at
 layer 2 and sector 1's own ends at layer 5.
 
@@ -118,7 +120,8 @@ layer 2 and sector 1's own ends at layer 5.
 | `encrypted-machine` | 4 | 1 | ChaCha20-Poly1305, machine binding | Machine-mode ChaCha20-Poly1305 with three recipient entries: a foreign machine, a decoy entry for our own fingerprint whose ephemeral key is the low-order point, and the real entry. A reader that unwraps the decoy without rejecting the all-zero shared secret recovers a different session key and cannot decrypt the file. |
 | `encrypted-both` | 6 | 6 | AES-256-GCM, password, machine binding | Both wrapping modes set in one AUTH chunk, with two sectors whose frames are sealed one by one, each under the directory index of the chunk that carries it. |
 | `print-profile` | 4 | 2 | AES-256-GCM, password | Password-mode AES-256-GCM with a sealed PROF chunk: profile identity, a material library, and a settings block reusing META's field names, including the experimental cure curve. |
-| `layer-overrides` | 10 | 2 | - | Ten layers of one sector with seven LROV chunks: a single layer, a range of three layers written as one chunk per layer, a second range, and layer 4, which the first range covers too. An override set belongs to exactly one (layer, sector) - the entry that names the chunk is the only thing that places it - so nothing folds: layer 4 resolves to the values of its own set, which keeps the range's exposure and wait while taking the single-layer chunk's wait after the lift. |
+| `layer-overrides` | 10 | 2 | - | Ten layers of one sector with four LROV chunks: one layer with a delta of its own, a range of three whose middle layer carries one field more - so its neighbours share one chunk and it cannot - and a second range of three whose delta is identical on every layer, which is one chunk named by all three. An entry names one chunk or none, so nothing folds: the middle layer resolves from its own set while its neighbours resolve from the shared one. |
+| `lrov-per-pair` | 5 | 1 | - | Five layers of one sector whose three overridden layers carry the very same delta, written as one chunk per pair. Sharing an override chunk is the encoder's choice rather than a rule, so a file that names a different chunk for every pair - and no chunk twice - has to keep working: a reader applies what each entry names either way. |
 | `previews` | 4 | 2 | AES-256-GCM, password | Password-mode AES-256-GCM with two PREV chunks: a large preview in the clear and a sealed icon. Preview sealing is optional even when the file is encrypted, so both forms are valid in the same file. |
 | `embedded-scene` | 4 | 2 | AES-256-GCM, password | Password-mode AES-256-GCM with a sealed VOXL chunk: the scene bytes are copied in and must come back out unchanged, while LUMEN itself never parses them. |
 | `extensions` | 4 | 2 | - | Two non-critical EXTD chunks - one reserved ORA type code and one vendor extension - exercising the frame, the vendor id and critical flag bit, and the rule that readers skip extensions they do not implement. |
@@ -137,7 +140,6 @@ layer 2 and sector 1's own ends at layer 5.
 | `ltbl-slices-overlap` | Entries 2 and 3 are two slices of one frame and both now start at offset 0, so layers 2 and 3 would be read out of the same bytes. | `ltbl.slices_disjoint` |
 | `ltbl-first-lrov-zero` | Layer 2's entry names no LROV chunk although the file carries one for that point: first_lrov is 0 exactly when a (layer, sector) has no overrides. Because an LROV payload carries no identity, that chunk is now unreachable - this file violates lrov.orphan as well, and the check order decides which is reported. | `ltbl.first_lrov_null` |
 | `ltbl-first-lrov-not-lrov` | Entry 0 names directory index 2, which is the LTBL chunk, as the override set of its point, so the entry points at a chunk that carries no overrides. | `ltbl.first_lrov_in_range` |
-| `lrov-shared-chunk` | Entry 0 names the same LROV chunk as layer 2's entry, so one override set is claimed by two points at once. The payload carries no layer and no sector, so a reader cannot tell which of the two it belongs to - it would have to apply layer 2's override to layer 0 as well, or ignore one of them. | `lrov.orphan` |
 | `lrov-orphan-chunk` | The file carries an LROV chunk that no entry names. An LROV payload carries no layer and no sector - the entry that names the chunk is what places it - so these overrides can never be applied to anything, and a reader that silently ignores them prints the wrong timings. | `lrov.orphan` |
 | `lrov-not-json` | An LROV payload is truncated JSON, so the override set cannot be read at all. | `lrov.json` |
 | `lrov-wait-fractional` | An LROV payload carries wait_time_before_cure_ms = 500.5. A wait time is a whole number of milliseconds, so a fractional value is not a duration this format can express. | `lrov.time_integer` |
@@ -261,9 +263,10 @@ decrypt the file at all. Only entry 2 recovers the real key.
   `encrypted-password`, which use 256×192 (49 152 pixels) so that the zstd
   dictionary has enough sample data to train on. Display size is irrelevant to
   every rule the vectors exercise.
-- An `LROV` chunk belongs to exactly one `(layer, sector)`: the layer table entry that names
-  it is what places it, and the payload carries no layer and no sector of its own. A `PREV`
-  chunk carries its role in its descriptor's flag bits 0-3, with bits
+- An `LROV` chunk is placed by the layer table entries that name it, and any number of them may:
+  the payload carries no layer and no sector of its own, so one chunk named by 500 entries is a
+  delta that covers those 500 pairs, while an encoder that gives every pair its own chunk is
+  equally conforming. A `PREV` chunk carries its role in its descriptor's flag bits 0-3, with bits
   5-31 reserved, and there may be several `PREV` chunks in a file.
 - `EXTD` is pinned at the frame level: `ext_version`, `ext_type`, the `vendor_id` field
   and the `critical` bit, plus the rule that a reader must refuse a critical extension it

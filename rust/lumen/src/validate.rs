@@ -995,29 +995,19 @@ impl<'a> Ctx<'a> {
             }
         }
 
-        // Every LROV chunk is referenced by exactly one entry (`lrov.orphan`).
+        // Every LROV chunk is referenced by at least one entry (`lrov.orphan`). A
+        // chunk several entries name is an override set that covers all of them -
+        // how a range, or any set of pairs sharing one delta, is written (4.5) - so
+        // only a chunk nobody names fails here.
         for (index, descriptor) in self.dir.descriptors.iter().enumerate() {
             if descriptor.is_null() || descriptor.chunk_type != Tag::LROV {
                 continue;
             }
-            match references.get(&(index as u32)).copied().unwrap_or(0) {
-                1 => {}
-                0 => {
-                    return Err(Error::new(
-                        Check::LrovOrphan,
-                        format!(
-                            "the LROV chunk at directory index {index} is referenced by no entry"
-                        ),
-                    ))
-                }
-                n => {
-                    return Err(Error::new(
-                        Check::LrovOrphan,
-                        format!(
-                            "the LROV chunk at directory index {index} is referenced by {n} entries"
-                        ),
-                    ))
-                }
+            if references.get(&(index as u32)).copied().unwrap_or(0) == 0 {
+                return Err(Error::new(
+                    Check::LrovOrphan,
+                    format!("the LROV chunk at directory index {index} is referenced by no entry"),
+                ));
             }
         }
 

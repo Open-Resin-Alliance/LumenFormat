@@ -5,7 +5,7 @@
 ## 4.5 LROV - Layer Override Chunk
 
 **Type tag:** `LROV` (`0x4C 0x52 0x4F 0x56`). Optional, multiple allowed - one chunk per
-`(layer, sector)` pair that has overrides.
+distinct delta, each named by the one or more `(layer, sector)` pairs that apply it.
 
 **Flags:** zstd-compressed. Encrypted if `AUTH` present.
 
@@ -20,11 +20,15 @@ META's field names:
 }
 ```
 
-Which pair the chunk belongs to is not in the payload: the pair's layer table entry carries
+Which pairs the chunk applies to is not in the payload: each pair's layer table entry carries
 `first_lrov`, either `0` (no overrides) or the directory index of the chunk holding them
-([§4.7](09-layer-data.md#47-ltbl---layer-table-chunk)). Nothing else points at the chunk, and
-every `LROV` chunk is named by exactly one entry, so a chunk's values are applied to the pair
-that names it and to no other.
+([§4.7](09-layer-data.md#47-ltbl---layer-table-chunk)). Nothing else points at the chunk, so the
+entries that name it are what places it - and any number of entries may name one chunk. That is
+how a range is written: a delta set on 500 layers is one chunk, and the 500 entries naming it are
+the range, no field in the payload saying where it starts or ends. Sharing is the encoder's choice
+rather than a rule - a chunk per pair is equally conforming - and either way a reader applies the
+chunk that the entry it is printing names, so a file says nothing about which form its encoder
+chose beyond the directory indices themselves.
 
 - The object carries **only** the fields that pair overrides. A field it omits keeps the
   value the pair resolves without it: the object is a sparse delta, never a replacement

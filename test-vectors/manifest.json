@@ -92,8 +92,8 @@
       "description": "Layer 2's entry names no LROV chunk although the file carries one for that point: first_lrov is 0 exactly when a (layer, sector) has no overrides. Because an LROV payload carries no identity, that chunk is now unreachable - this file violates lrov.orphan as well, and the check order decides which is reported.",
       "expected_failure": "ltbl.first_lrov_null",
       "file": "invalid/ltbl-first-lrov-zero.lumen",
-      "file_sha256": "35b40de2f1cd416438d73d3ea1221acda456e8dc22b46c4884481ce7bd56b6f1",
-      "file_size": 1891,
+      "file_sha256": "e3784228960b6bf634d55c98f81cc3033d47221d1743f87097c32cbd44d981db",
+      "file_size": 1619,
       "name": "ltbl-first-lrov-zero",
       "strict_only": false
     },
@@ -105,16 +105,6 @@
       "file_sha256": "fac10c5d55a2bbfbb5c6811469330c1c6caa90c6cec00ca599a01cac4ea750be",
       "file_size": 1095,
       "name": "ltbl-first-lrov-not-lrov",
-      "strict_only": false
-    },
-    {
-      "base_vector": "layer-overrides",
-      "description": "Entry 0 names the same LROV chunk as layer 2's entry, so one override set is claimed by two points at once. The payload carries no layer and no sector, so a reader cannot tell which of the two it belongs to - it would have to apply layer 2's override to layer 0 as well, or ignore one of them.",
-      "expected_failure": "lrov.orphan",
-      "file": "invalid/lrov-shared-chunk.lumen",
-      "file_sha256": "bfed06faf123d49ba205f13d8303746a9764aaa9a342778c8c4b56ff327c700c",
-      "file_size": 1891,
-      "name": "lrov-shared-chunk",
       "strict_only": false
     },
     {
@@ -5441,25 +5431,22 @@
       "trailer_crc32c": "0x05F74EFA"
     },
     {
-      "chunk_count": 13,
+      "chunk_count": 10,
       "chunk_payload_sha256": {
         "LROV": [
           "e8d774c20a147ca80200f0a3feea8f7c2f3b40ec8c63af562085b4214f2524f9",
           "dc9fafbfc8aada08b3f5fddc88dcf28efb1d9df1737ce6219c7497962f36b773",
           "b6c06e6f176fd73b09915bd38da0dc7ec30d2c7c1b1e692ca0e92591fa410d6b",
-          "dc9fafbfc8aada08b3f5fddc88dcf28efb1d9df1737ce6219c7497962f36b773",
-          "fd61f28b3e0a8a16ed07e1b9f7b629426144c48fc2edc3ae07d0f95572e0fbbc",
-          "fd61f28b3e0a8a16ed07e1b9f7b629426144c48fc2edc3ae07d0f95572e0fbbc",
           "fd61f28b3e0a8a16ed07e1b9f7b629426144c48fc2edc3ae07d0f95572e0fbbc"
         ]
       },
-      "description": "Ten layers of one sector with seven LROV chunks: a single layer, a range of three layers written as one chunk per layer, a second range, and layer 4, which the first range covers too. An override set belongs to exactly one (layer, sector) - the entry that names the chunk is the only thing that places it - so nothing folds: layer 4 resolves to the values of its own set, which keeps the range's exposure and wait while taking the single-layer chunk's wait after the lift.",
+      "description": "Ten layers of one sector with four LROV chunks: one layer with a delta of its own, a range of three whose middle layer carries one field more - so its neighbours share one chunk and it cannot - and a second range of three whose delta is identical on every layer, which is one chunk named by all three. An entry names one chunk or none, so nothing folds: the middle layer resolves from its own set while its neighbours resolve from the shared one.",
       "dict": {
         "dict_id": 0,
         "dict_size": 0,
         "present": false
       },
-      "dir_offset": 1467,
+      "dir_offset": 1291,
       "display_height_px": 48,
       "display_width_px": 64,
       "features": [
@@ -5469,8 +5456,8 @@
         "sector-scoped-override"
       ],
       "file": "valid/layer-overrides.lumen",
-      "file_sha256": "75d3858dac240e6161be3852b9b9331b6796b147f4abc41fb10238ac5251c1e0",
-      "file_size": 1891,
+      "file_sha256": "915d58cda2a46f661bd1d41286e8ee3e402a75da1ea22bd42b4d708f3af2dd31",
+      "file_size": 1619,
       "header_flags": 0,
       "layer_height_um": 50,
       "layers": [
@@ -5592,7 +5579,7 @@
           "dict_id": 0,
           "first_layer": 0,
           "frame_size": 23,
-          "index": 11,
+          "index": 8,
           "layer_count": 5,
           "sealed": false,
           "sector_id": 0,
@@ -5604,7 +5591,7 @@
           "dict_id": 0,
           "first_layer": 5,
           "frame_size": 23,
-          "index": 12,
+          "index": 9,
           "layer_count": 5,
           "sealed": false,
           "sector_id": 0,
@@ -5618,7 +5605,7 @@
           "data_offset": 0,
           "data_size": 8,
           "entry_index": 0,
-          "first_layr": 11,
+          "first_layr": 8,
           "first_lrov": 0,
           "layer": 0,
           "sector_id": 0
@@ -5628,7 +5615,7 @@
           "data_offset": 8,
           "data_size": 8,
           "entry_index": 1,
-          "first_layr": 11,
+          "first_layr": 8,
           "first_lrov": 0,
           "layer": 1,
           "sector_id": 0
@@ -5638,7 +5625,7 @@
           "data_offset": 16,
           "data_size": 8,
           "entry_index": 2,
-          "first_layr": 11,
+          "first_layr": 8,
           "first_lrov": 2,
           "layer": 2,
           "sector_id": 0
@@ -5648,7 +5635,7 @@
           "data_offset": 24,
           "data_size": 8,
           "entry_index": 3,
-          "first_layr": 11,
+          "first_layr": 8,
           "first_lrov": 3,
           "layer": 3,
           "sector_id": 0
@@ -5658,7 +5645,7 @@
           "data_offset": 32,
           "data_size": 8,
           "entry_index": 4,
-          "first_layr": 11,
+          "first_layr": 8,
           "first_lrov": 4,
           "layer": 4,
           "sector_id": 0
@@ -5668,8 +5655,8 @@
           "data_offset": 0,
           "data_size": 8,
           "entry_index": 5,
-          "first_layr": 12,
-          "first_lrov": 5,
+          "first_layr": 9,
+          "first_lrov": 3,
           "layer": 5,
           "sector_id": 0
         },
@@ -5678,8 +5665,8 @@
           "data_offset": 8,
           "data_size": 8,
           "entry_index": 6,
-          "first_layr": 12,
-          "first_lrov": 6,
+          "first_layr": 9,
+          "first_lrov": 5,
           "layer": 6,
           "sector_id": 0
         },
@@ -5688,8 +5675,8 @@
           "data_offset": 16,
           "data_size": 8,
           "entry_index": 7,
-          "first_layr": 12,
-          "first_lrov": 7,
+          "first_layr": 9,
+          "first_lrov": 5,
           "layer": 7,
           "sector_id": 0
         },
@@ -5698,8 +5685,8 @@
           "data_offset": 24,
           "data_size": 8,
           "entry_index": 8,
-          "first_layr": 12,
-          "first_lrov": 8,
+          "first_layr": 9,
+          "first_lrov": 5,
           "layer": 8,
           "sector_id": 0
         },
@@ -5708,7 +5695,7 @@
           "data_offset": 32,
           "data_size": 8,
           "entry_index": 9,
-          "first_layr": 12,
+          "first_layr": 9,
           "first_lrov": 0,
           "layer": 9,
           "sector_id": 0
@@ -5900,8 +5887,259 @@
         }
       ],
       "total_layers": 10,
-      "total_uncompressed_size": 1501,
-      "trailer_crc32c": "0xA51B96A0"
+      "total_uncompressed_size": 1360,
+      "trailer_crc32c": "0x5F575EDA"
+    },
+    {
+      "chunk_count": 8,
+      "chunk_payload_sha256": {
+        "LROV": [
+          "dc9fafbfc8aada08b3f5fddc88dcf28efb1d9df1737ce6219c7497962f36b773",
+          "dc9fafbfc8aada08b3f5fddc88dcf28efb1d9df1737ce6219c7497962f36b773",
+          "dc9fafbfc8aada08b3f5fddc88dcf28efb1d9df1737ce6219c7497962f36b773"
+        ]
+      },
+      "description": "Five layers of one sector whose three overridden layers carry the very same delta, written as one chunk per pair. Sharing is the encoder's choice, not a rule: this file names a different chunk for every pair and no chunk twice, and a conforming reader applies what each entry names either way.",
+      "dict": {
+        "dict_id": 0,
+        "dict_size": 0,
+        "present": false
+      },
+      "dir_offset": 907,
+      "display_height_px": 48,
+      "display_width_px": 64,
+      "features": [
+        "lrov-chunk",
+        "layer-override",
+        "unshared-chunk"
+      ],
+      "file": "valid/lrov-per-pair.lumen",
+      "file_sha256": "47e6752bc74613f768da7915ffca9549c6c5acf595a594281f1486bd25987a0c",
+      "file_size": 1171,
+      "header_flags": 0,
+      "layer_height_um": 50,
+      "layers": [
+        {
+          "decompressed_sha256": "a921fb8ebc1da8ab0c2a16e9c198309e79061b877fe9062194dc223a3a490cc2",
+          "empty": false,
+          "index": 0,
+          "lhas_leaf": "707eb5c9715d5a4ec209775a866f90726f4954dd987b97fc341c57819301ac78",
+          "sector_count": 1,
+          "sector_tags": [
+            0
+          ],
+          "tag": 0
+        },
+        {
+          "decompressed_sha256": "a921fb8ebc1da8ab0c2a16e9c198309e79061b877fe9062194dc223a3a490cc2",
+          "empty": false,
+          "index": 1,
+          "lhas_leaf": "707eb5c9715d5a4ec209775a866f90726f4954dd987b97fc341c57819301ac78",
+          "sector_count": 1,
+          "sector_tags": [
+            0
+          ],
+          "tag": 0
+        },
+        {
+          "decompressed_sha256": "a921fb8ebc1da8ab0c2a16e9c198309e79061b877fe9062194dc223a3a490cc2",
+          "empty": false,
+          "index": 2,
+          "lhas_leaf": "707eb5c9715d5a4ec209775a866f90726f4954dd987b97fc341c57819301ac78",
+          "sector_count": 1,
+          "sector_tags": [
+            0
+          ],
+          "tag": 0
+        },
+        {
+          "decompressed_sha256": "a921fb8ebc1da8ab0c2a16e9c198309e79061b877fe9062194dc223a3a490cc2",
+          "empty": false,
+          "index": 3,
+          "lhas_leaf": "707eb5c9715d5a4ec209775a866f90726f4954dd987b97fc341c57819301ac78",
+          "sector_count": 1,
+          "sector_tags": [
+            0
+          ],
+          "tag": 0
+        },
+        {
+          "decompressed_sha256": "a921fb8ebc1da8ab0c2a16e9c198309e79061b877fe9062194dc223a3a490cc2",
+          "empty": false,
+          "index": 4,
+          "lhas_leaf": "707eb5c9715d5a4ec209775a866f90726f4954dd987b97fc341c57819301ac78",
+          "sector_count": 1,
+          "sector_tags": [
+            0
+          ],
+          "tag": 0
+        }
+      ],
+      "layers_per_chunk": 5,
+      "layr_chunks": [
+        {
+          "content_size": 40,
+          "dict_id": 0,
+          "first_layer": 0,
+          "frame_size": 23,
+          "index": 7,
+          "layer_count": 5,
+          "sealed": false,
+          "sector_id": 0,
+          "stored_len": 27,
+          "version": 1
+        }
+      ],
+      "ltbl": [
+        {
+          "additional_sector_count": 0,
+          "data_offset": 0,
+          "data_size": 8,
+          "entry_index": 0,
+          "first_layr": 7,
+          "first_lrov": 0,
+          "layer": 0,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 8,
+          "data_size": 8,
+          "entry_index": 1,
+          "first_layr": 7,
+          "first_lrov": 2,
+          "layer": 1,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 16,
+          "data_size": 8,
+          "entry_index": 2,
+          "first_layr": 7,
+          "first_lrov": 3,
+          "layer": 2,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 24,
+          "data_size": 8,
+          "entry_index": 3,
+          "first_layr": 7,
+          "first_lrov": 4,
+          "layer": 3,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 32,
+          "data_size": 8,
+          "entry_index": 4,
+          "first_layr": 7,
+          "first_lrov": 0,
+          "layer": 4,
+          "sector_id": 0
+        }
+      ],
+      "merkle_root": "0d954cdd0afc6387630a14188137d0eb14be6ca204c43bd12b810958432898a3",
+      "multi_sector": false,
+      "name": "lrov-per-pair",
+      "resolved_timing": [
+        {
+          "exposure_ms": 30000,
+          "layer": 0,
+          "layer_height_um": 50,
+          "lift_fast_distance_um": 0,
+          "lift_fast_speed_um_min": 0,
+          "lift_slow_distance_um": 5000,
+          "lift_slow_speed_um_min": 65000,
+          "light_pwm": 255,
+          "retract_fast_distance_um": 5000,
+          "retract_fast_speed_um_min": 150000,
+          "retract_slow_distance_um": 0,
+          "retract_slow_speed_um_min": 0,
+          "sector": 0,
+          "wait_time_after_cure_ms": 0,
+          "wait_time_after_lift_ms": 0,
+          "wait_time_before_cure_ms": 0
+        },
+        {
+          "exposure_ms": 2200,
+          "layer": 1,
+          "layer_height_um": 50,
+          "lift_fast_distance_um": 0,
+          "lift_fast_speed_um_min": 0,
+          "lift_slow_distance_um": 5000,
+          "lift_slow_speed_um_min": 65000,
+          "light_pwm": 255,
+          "retract_fast_distance_um": 5000,
+          "retract_fast_speed_um_min": 150000,
+          "retract_slow_distance_um": 0,
+          "retract_slow_speed_um_min": 0,
+          "sector": 0,
+          "wait_time_after_cure_ms": 0,
+          "wait_time_after_lift_ms": 0,
+          "wait_time_before_cure_ms": 500
+        },
+        {
+          "exposure_ms": 2200,
+          "layer": 2,
+          "layer_height_um": 50,
+          "lift_fast_distance_um": 0,
+          "lift_fast_speed_um_min": 0,
+          "lift_slow_distance_um": 5000,
+          "lift_slow_speed_um_min": 65000,
+          "light_pwm": 255,
+          "retract_fast_distance_um": 5000,
+          "retract_fast_speed_um_min": 150000,
+          "retract_slow_distance_um": 0,
+          "retract_slow_speed_um_min": 0,
+          "sector": 0,
+          "wait_time_after_cure_ms": 0,
+          "wait_time_after_lift_ms": 0,
+          "wait_time_before_cure_ms": 500
+        },
+        {
+          "exposure_ms": 2200,
+          "layer": 3,
+          "layer_height_um": 50,
+          "lift_fast_distance_um": 0,
+          "lift_fast_speed_um_min": 0,
+          "lift_slow_distance_um": 5000,
+          "lift_slow_speed_um_min": 65000,
+          "light_pwm": 255,
+          "retract_fast_distance_um": 5000,
+          "retract_fast_speed_um_min": 150000,
+          "retract_slow_distance_um": 0,
+          "retract_slow_speed_um_min": 0,
+          "sector": 0,
+          "wait_time_after_cure_ms": 0,
+          "wait_time_after_lift_ms": 0,
+          "wait_time_before_cure_ms": 500
+        },
+        {
+          "exposure_ms": 2500,
+          "layer": 4,
+          "layer_height_um": 50,
+          "lift_fast_distance_um": 0,
+          "lift_fast_speed_um_min": 0,
+          "lift_slow_distance_um": 5000,
+          "lift_slow_speed_um_min": 65000,
+          "light_pwm": 255,
+          "retract_fast_distance_um": 5000,
+          "retract_fast_speed_um_min": 150000,
+          "retract_slow_distance_um": 0,
+          "retract_slow_speed_um_min": 0,
+          "sector": 0,
+          "wait_time_after_cure_ms": 0,
+          "wait_time_after_lift_ms": 0,
+          "wait_time_before_cure_ms": 0
+        }
+      ],
+      "total_layers": 5,
+      "total_uncompressed_size": 964,
+      "trailer_crc32c": "0x9AA00C03"
     },
     {
       "chunk_count": 9,

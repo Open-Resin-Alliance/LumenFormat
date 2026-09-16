@@ -390,8 +390,8 @@ fn multi_sector_meta() -> Meta {
     meta
 }
 
-/// The per-layer settings: one `(layer, sector)` delta per entry, each becoming
-/// its own `LROV` chunk that the layer table points at.
+/// The per-layer settings: one `(layer, sector)` delta per entry, each pair pointing at
+/// the `LROV` chunk for its delta - and pairs whose deltas are equal share one chunk.
 fn multi_sector_overrides() -> Vec<Override> {
     let mut overrides = Vec::new();
 
@@ -408,9 +408,9 @@ fn multi_sector_overrides() -> Vec<Override> {
         },
     });
 
-    // A taper towards the top: the same three layers at a lower exposure. A range
-    // is still one chunk per layer - the entry that names a chunk is what places
-    // it - so this is three `LROV` chunks and not one.
+    // A taper towards the top: the same three layers at a lower exposure. One delta,
+    // so the writer shares one `LROV` chunk between the three entries that apply it
+    // (section 4.5), which is what a range costs.
     for layer in 6..=8 {
         overrides.push(Override {
             layer,

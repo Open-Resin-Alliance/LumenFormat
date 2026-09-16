@@ -152,7 +152,7 @@ independently of the specification's own encoder:
 
 | Path | Contents |
 |------|----------|
-| `valid/*.lumen` | 13 files a conforming reader must accept, each pinning the structures it contains |
+| `valid/*.lumen` | 14 files a conforming reader must accept, each pinning the structures it contains |
 | `invalid/*.lumen` | 57 files a conforming reader must reject, each failing the check its manifest entry names - and failing it *first* |
 | `manifest.json` | Golden data for every vector: sizes, offsets, the layer table, each `LAYR` chunk's frame, per-layer hashes, Merkle root, CRC-32C, the timing a conforming reader must resolve for a sample of `(layer, sector)` points, and the credentials for encrypted vectors |
 | [`rust/corpus-gen/`](rust/corpus-gen/) | `make_vectors`: reference encoder that regenerates the corpus from the specification |

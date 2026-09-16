@@ -242,32 +242,6 @@ pub fn run() -> i32 {
         .base("binary-basic"),
     );
 
-    // x11: two entries naming one LROV chunk
-    let mut b = overridden.raw.clone();
-    let shared = container::read_u32(
-        &b,
-        overridden_ltbl
-            + container::LTBL_HEADER_SIZE
-            + 2 * container::LTBL_ENTRY_SIZE
-            + container::LTBL_FIRST_LROV,
-    );
-    container::write_u32(
-        &mut b,
-        overridden_ltbl + container::LTBL_HEADER_SIZE + container::LTBL_FIRST_LROV,
-        shared,
-    );
-    emit(
-        &invalid_dir,
-        &mut manifest_invalid,
-        Invalid::new(
-            "lrov-shared-chunk",
-            "Entry 0 names the same LROV chunk as layer 2's entry, so one override set is claimed by two points at once. The payload carries no layer and no sector, so a reader cannot tell which of the two it belongs to - it would have to apply layer 2's override to layer 0 as well, or ignore one of them.",
-            "lrov.orphan",
-            container::repack(&b, &overridden.layout),
-        )
-        .base("layer-overrides"),
-    );
-
     // x12: an LROV chunk no entry names
     emit(
         &invalid_dir,
@@ -1169,7 +1143,7 @@ fn prune(dir: &Path, written: &BTreeSet<PathBuf>, removed: &mut usize) {
 // valid vectors
 // --------------------------------------------------------------------------
 
-/// The thirteen valid vectors, in the order the manifest lists them.
+/// The fourteen valid vectors, in the order the manifest lists them.
 pub fn valid_vectors() -> Vec<Built> {
     vec![
         binary_basic(),
@@ -1182,6 +1156,7 @@ pub fn valid_vectors() -> Vec<Built> {
         encrypted_both(),
         print_profile(),
         layer_overrides(),
+        lrov_per_pair(),
         previews(),
         embedded_scene(),
         extensions(),
@@ -1488,11 +1463,12 @@ fn print_profile() -> Built {
     )
 }
 
-/// Plaintext, one override chunk per point.
+/// Plaintext, with an override chunk per distinct delta.
 fn layer_overrides() -> Built {
-    // A range is one chunk per layer it covers now: an override set belongs to
-    // exactly one (layer, sector), and nothing folds several of them onto a
-    // point's timing.
+    // A delta is written once and every pair carrying it names the same chunk, so
+    // the range 6..=8 costs one chunk (section 4.5). The range 3..=5 does not
+    // collapse: layer 4's set carries one field more, and a shared chunk would apply
+    // that field to 3 and 5 as well.
     let ranged = |layers: std::ops::RangeInclusive<u32>, fields: Vec<(&'static str, Value)>| {
         layers
             .map(|layer| Override {
@@ -1521,8 +1497,9 @@ fn layer_overrides() -> Built {
         6..=8,
         vec![("wait_time_after_lift_ms", Value::from(1000))],
     ));
-    // Layer 4 is covered by the range and by a set of its own: one chunk, so the
-    // set is written out with the field the single-layer override adds.
+    // Layer 4 is covered by the range and by a set of its own: the generator writes
+    // one delta per pair, so layer 4's set is the range's fields plus the one the
+    // single-layer override adds, and it cannot share its neighbours' chunk.
     for over in overrides.iter_mut().filter(|over| over.layer == 4) {
         over.fields
             .push(("wait_time_after_lift_ms", Value::from(900)));
@@ -1530,7 +1507,7 @@ fn layer_overrides() -> Built {
 
     vector::build_vector(&VectorSpec {
         name: "layer-overrides",
-        description: "Ten layers of one sector with seven LROV chunks: a single layer, a range of three layers written as one chunk per layer, a second range, and layer 4, which the first range covers too. An override set belongs to exactly one (layer, sector) - the entry that names the chunk is the only thing that places it - so nothing folds: layer 4 resolves to the values of its own set, which keeps the range's exposure and wait while taking the single-layer chunk's wait after the lift.",
+        description: "Ten layers of one sector with four LROV chunks: one layer with a delta of its own, a range of three whose middle layer carries one field more - so its neighbours share one chunk and it cannot - and a second range of three whose delta is identical on every layer, which is one chunk named by all three. An entry names one chunk or none, so nothing folds: the middle layer resolves from its own set while its neighbours resolve from the shared one.",
         features: &[
             "lrov-chunk",
             "layer-override",
@@ -1541,6 +1518,36 @@ fn layer_overrides() -> Built {
         layers: vector::repeated(10, &[(0, 120, 255)]),
         layers_per_chunk: 5,
         overrides,
+        ..Default::default()
+    })
+}
+
+/// Plaintext, one override chunk per pair even where the deltas are equal.
+///
+/// Sharing a chunk between pairs is the encoder's choice (section 4.5), so the
+/// unshared form has to keep working: a reader must not require the reuse, and a
+/// validator must not demand that every chunk be named once.
+fn lrov_per_pair() -> Built {
+    let delta = vec![
+        ("normal_exposure_ms", Value::from(2200)),
+        ("wait_time_before_cure_ms", Value::from(500)),
+    ];
+    let overrides = (1..=3)
+        .map(|layer| Override {
+            layer,
+            sector_id: 0,
+            fields: delta.clone(),
+        })
+        .collect();
+    vector::build_vector(&VectorSpec {
+        name: "lrov-per-pair",
+        description: "Five layers of one sector whose three overridden layers carry the very same delta, written as one chunk per pair. Sharing is the encoder's choice, not a rule: this file names a different chunk for every pair and no chunk twice, and a conforming reader applies what each entry names either way.",
+        features: &["lrov-chunk", "layer-override", "unshared-chunk"],
+        display: (64, 48),
+        layers: vector::repeated(5, &[(0, 120, 255)]),
+        layers_per_chunk: 5,
+        overrides,
+        share_identical_overrides: false,
         ..Default::default()
     })
 }
@@ -1761,7 +1768,7 @@ fn prof_vector(settings: ProfSettings, overrides: ProfOverrides) -> Vec<u8> {
     .raw
 }
 
-/// A plaintext file carrying one `LROV` chunk per override set, over ten layers.
+/// A plaintext file carrying one `LROV` chunk per distinct delta, over ten layers.
 fn override_vector(overrides: Vec<Override<'static>>) -> Vec<u8> {
     vector::build_vector(&VectorSpec {
         name: "x-lrov",

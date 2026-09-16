@@ -126,7 +126,8 @@ pub enum Check {
     LrovJson,
     /// An overridden duration is not an integer number of milliseconds.
     LrovTimeInteger,
-    /// An `LROV` chunk is referenced by no entry, or by more than one.
+    /// An `LROV` chunk is referenced by no entry. Several entries naming one
+    /// chunk is how an override set covers a range of pairs, and is legal.
     LrovOrphan,
 
     // -- group: prev (section 4.6) -----------------------------------------

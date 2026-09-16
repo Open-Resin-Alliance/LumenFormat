@@ -15,7 +15,7 @@
 | Cross-layer compression | No | No | No | No | Yes (shared-dictionary frames, one per sector per layer group) |
 | Encryption | AES-256-CBC (optional, v5enc) | No | No | No | Optional AEAD (AES-256-GCM / ChaCha20-Poly1305) |
 | Encryption purpose | Vendor file binding (enforced by the printer) | - | - | - | User security (opt-in) |
-| Per-layer overrides | No (bottom/normal/transition) | No | No | No | Yes (LROV, arbitrary overrides of one `(layer, sector)`) |
+| Per-layer overrides | No (bottom/normal/transition) | No | No | No | Yes (LROV, arbitrary overrides of any set of `(layer, sector)` pairs) |
 | Embedded print profile | No | No | No | No | Yes (PROF chunk - importable by Odyssey firmware) |
 | Embedded source scene | No | No | No | No | Yes (VOXL chunk - round-trip re-editable) |
 | Multi-material | No | No | No | No | Yes (per-sector layer chunks, and per-sector timing and material in META) |

@@ -381,6 +381,11 @@ pub struct VectorSpec<'a> {
     /// references: a chunk whose overrides can never be attributed.
     pub orphan_lrov: Option<Vec<(&'a str, Value)>>,
     pub extds: Vec<(Vec<u8>, u32)>,
+    /// Whether overrides whose deltas are equal share one `LROV` chunk, as the
+    /// reference encoder writes them (`true`, the default). `false` writes one
+    /// chunk per pair, which section 4.5 also permits - sharing is the encoder's
+    /// choice - and is what `lrov-per-pair` pins.
+    pub share_identical_overrides: bool,
     /// Zero bytes appended to the `HEAD` payload, so the chunk is longer than the
     /// fields this revision defines - the layout `HEAD` had while it still carried
     /// `physical_width_px` and `physical_height_px`. Section 11.2 makes the frame
@@ -444,6 +449,7 @@ impl<'a> Default for VectorSpec<'a> {
             lrov_raw: None,
             orphan_lrov: None,
             extds: Vec::new(),
+            share_identical_overrides: true,
             head_padding: 0,
         }
     }
@@ -492,8 +498,11 @@ pub fn content_chunks(spec: &VectorSpec, enc: &Layers, auth: Option<Chunk>) -> C
         chunks.push(auth);
     }
 
-    // One LROV chunk per (layer, sector) that carries overrides, ascending, so an
-    // entry can name its own chunk by directory index (spec 4.5).
+    // One LROV chunk per distinct delta, ascending, so an entry can name its own
+    // chunk by directory index (spec 4.5). Deltas that are equal share one chunk -
+    // that is how a range, or any set of pairs, is written - unless the vector asks
+    // for the one-chunk-per-pair form, which is equally conforming.
+    let mut shared: std::collections::HashMap<Vec<u8>, u32> = std::collections::HashMap::new();
     let mut points: Vec<(u32, u32, u32)> = Vec::with_capacity(spec.overrides().len());
     for (index, over) in spec.overrides().iter().enumerate() {
         let point = (over.layer, over.sector_id);
@@ -507,13 +516,25 @@ pub fn content_chunks(spec: &VectorSpec, enc: &Layers, auth: Option<Chunk>) -> C
                 .is_none_or(|(layer, sector, _)| (*layer, *sector) < point),
             "the overrides ascend by (layer, sector)"
         );
-        points.push((point.0, point.1, chunks.len() as u32));
         // The first chunk's payload stands in for the malformed one.
         let bytes = match spec.lrov_raw.as_ref().filter(|_| index == 0) {
             Some(raw) => raw.clone(),
             None => payload::lrov(&over.fields),
         };
-        chunks.push(Chunk::new(b"LROV", bytes).compressed());
+        let reused = spec
+            .share_identical_overrides
+            .then(|| shared.get(&bytes).copied())
+            .flatten();
+        let chunk_index = match reused {
+            Some(chunk_index) => chunk_index,
+            None => {
+                let chunk_index = chunks.len() as u32;
+                chunks.push(Chunk::new(b"LROV", bytes.clone()).compressed());
+                shared.insert(bytes, chunk_index);
+                chunk_index
+            }
+        };
+        points.push((point.0, point.1, chunk_index));
     }
     if let Some(fields) = &spec.orphan_lrov {
         chunks.push(Chunk::new(b"LROV", payload::lrov(fields)).compressed());
