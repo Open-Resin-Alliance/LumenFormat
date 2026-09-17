@@ -36,5 +36,15 @@ pub const DEFAULT_LAYERS_PER_CHUNK: u32 = 64;
 /// spells the trade out rather than hiding it behind "compression".
 pub const DEFAULT_ZSTD_LEVEL: i32 = 6;
 
+/// Whether the writer weighs tag `0x03` against the tag `EncodeMode::Auto` picks
+/// for every layer group.
+///
+/// On, because the choice is made by measuring the frames the file will actually
+/// hold (section 5.7), so a group where the new tag loses keeps the encoding it had.
+/// A profile turns it off through `lumen.tagProbe` to write a file only tags
+/// `0x00`-`0x02` - which is what a reader written against an earlier revision
+/// accepts, since section 5.7 makes an unknown tag a refusal.
+pub const DEFAULT_TAG_PROBE: bool = true;
+
 /// `HEAD.encoder_name`, which the specification leaves to the writer.
 pub const ENCODER_NAME: &str = "DragonFruit";

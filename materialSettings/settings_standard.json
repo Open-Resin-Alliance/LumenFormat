@@ -235,6 +235,22 @@
       "description": "How hard the layer frames are compressed, traded against slicing time. Measured on an anti-aliased 800-layer 12K print, against Standard: High is 3% smaller, Very High 17% smaller and about nine seconds slower to encode on that print. Low gives the largest file and slices fastest."
     },
     {
+      "key": "tagProbe",
+      "label": "Cross-Layer Encoding Probe",
+      "kind": "boolean",
+      "defaultValue": true,
+      "rowKey": null,
+      "rowWeight": null,
+      "placement": {
+        "tabId": "meta",
+        "sectionId": "file",
+        "cardId": "scene-settings",
+        "order": 21
+      },
+      "metadataPath": "lumen.tagProbe",
+      "description": "Whether the writer also encodes every layer group with tag 0x03, whose anti-aliasing overlay hangs off the run boundaries of the thresholded mask, and keeps it when its compressed frame is smaller. On by default and free of risk to file size: the frames are compared, so a group where the new encoding loses keeps the one it had, and measured whole files written by the reference encoder are 5-12% smaller where it wins and byte-identical where it does not. Turn it off when the print is going to a printer whose firmware predates the tag, which section 5.7 obliges it to refuse."
+    },
+    {
       "key": "bottomLayerCount",
       "label": "Burn-in Layers",
       "kind": "integer",

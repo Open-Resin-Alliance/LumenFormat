@@ -31,6 +31,7 @@ mod old {
     const TAG_BINARY: u8 = 0x00;
     const TAG_GRAYSCALE: u8 = 0x01;
     const TAG_SPLIT: u8 = 0x02;
+    const TAG_ATTACHED: u8 = 0x03;
     const PLANES: usize = 4;
 
     /// The binary threshold of section 5.5: `255 if v >= 128 else 0`.
@@ -66,6 +67,7 @@ mod old {
             TAG_BINARY => decode_binary(&mut reader, total_pixels, strict)?,
             TAG_GRAYSCALE => decode_grayscale(&mut reader, total_pixels, strict)?,
             TAG_SPLIT => decode_split(&mut reader, total_pixels, strict)?,
+            TAG_ATTACHED => decode_attached(&mut reader, total_pixels, strict)?,
             other => {
                 return Err(Error::new(
                     Check::ReeTag,
@@ -393,6 +395,373 @@ mod old {
         }
         Ok(mask)
     }
+
+    /// Zigzag's inverse: the signed difference an attached stream stores a run
+    /// length or an overlay value as.
+    fn unzigzag(value: u64) -> i64 {
+        ((value >> 1) as i64) ^ -((value & 1) as i64)
+    }
+
+    /// The two attachment bits of every core run (section 5.6).
+    ///
+    /// Run `r` owns the two bits at `2 * (r % 4)` of byte `r / 4`: the first says
+    /// the run's first pixel is an overlay pixel, the second that its last one is.
+    struct AttachBits<'a> {
+        bytes: &'a [u8],
+    }
+
+    impl<'a> AttachBits<'a> {
+        /// Read `ceil(runs / 4)` bytes, addressing `runs` runs.
+        ///
+        /// The count is the stream's own `run_count`, so the non-canonical
+        /// `run_count == 0` form reads no bits and its walk asks for none.
+        fn read(reader: &mut Reader<'a>, runs: u64) -> Result<AttachBits<'a>> {
+            Ok(AttachBits {
+                bytes: reader.bytes(runs.div_ceil(4) as usize)?,
+            })
+        }
+
+        /// Whether the stream carries no bits at all, which only the non-canonical
+        /// `run_count == 0` form does.
+        fn is_empty(&self) -> bool {
+            self.bytes.is_empty()
+        }
+
+        /// Bit `end` of run `index`: 0 is the run's first pixel, 1 its last.
+        #[inline]
+        fn get(&self, index: u64, end: u64) -> bool {
+            self.bytes[(index / 4) as usize] & (1 << ((index % 4) * 2 + end)) != 0
+        }
+
+        /// Whether the bits past the last run are clear. They address no run, so a
+        /// stream that sets them carries something the encoder did not mean.
+        fn padding_clear(&self, runs: u64) -> bool {
+            match runs % 4 {
+                0 => true,
+                used => {
+                    let last = self.bytes[(runs / 4) as usize];
+                    last & (!0u8 << (used * 2)) == 0
+                }
+            }
+        }
+    }
+
+    /// An attached stream's overlay values, in the order its pixels are placed.
+    ///
+    /// The first is stored as it is; every later one is the previous value plus a
+    /// zigzagged difference.
+    struct AttachValues<'a> {
+        planes: Planes<'a>,
+        /// How many values have been handed out.
+        index: u64,
+        previous: u8,
+    }
+
+    impl<'a> AttachValues<'a> {
+        fn read(reader: &mut Reader<'a>, strict: bool) -> Result<AttachValues<'a>> {
+            Ok(AttachValues {
+                planes: Planes::read(reader, strict)?,
+                index: 0,
+                previous: 0,
+            })
+        }
+
+        /// The next value, which the stream's own count says is there.
+        ///
+        /// Asking past the count is how a stream whose bits and escapes describe
+        /// more pixels than it stores values reports itself.
+        fn next_within(&mut self, count: u64) -> Result<u8> {
+            if self.index == count {
+                return Err(Error::new(
+                    Check::ReeAttachCount,
+                    format!(
+                        "the attachment bits and escapes describe more overlay pixels than the {count}                      the stream stores values for"
+                    ),
+                ));
+            }
+            let stored = self.planes.varint()?;
+            let value = if self.index == 0 {
+                // The first value is stored as it is: there is nothing before it to
+                // be a difference from.
+                u8::try_from(stored).map_err(|_| {
+                    Error::new(
+                        Check::ReeAttachCount,
+                        format!("attached REE overlay value {stored} is not a byte"),
+                    )
+                })?
+            } else {
+                let sum = i64::from(self.previous) + unzigzag(stored);
+                u8::try_from(sum).map_err(|_| {
+                    Error::new(
+                        Check::ReeAttachCount,
+                        format!("attached REE overlay value {sum} is not a byte"),
+                    )
+                })?
+            };
+            self.index += 1;
+            self.previous = value;
+            Ok(value)
+        }
+    }
+
+    /// The strict rule that an overlay pixel is a real anti-aliasing pixel:
+    /// neither `0x00` nor `0xFF`, and on the side of the threshold its core run
+    /// is on.
+    fn check_attached_value(value: u8, core_value: u8, position: u64) -> Result<()> {
+        if value == 0x00 || value == 0xFF || threshold(value) != core_value {
+            return Err(Error::new(
+                Check::ReeAttachThreshold,
+                format!(
+                    "attached REE overlay pixel {position} holds 0x{value:02X} over binary                  0x{core_value:02X}"
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Attached split REE (tag `0x03`, section 5.6): a thresholded core whose run
+    /// lengths are split by parity and self-delta coded, then the overlay the
+    /// core's run boundaries imply.
+    fn decode_attached(
+        reader: &mut Reader<'_>,
+        total_pixels: u32,
+        strict: bool,
+    ) -> Result<Vec<u8>> {
+        let total = u64::from(total_pixels);
+        let declared_value = reader.u8()?;
+        if declared_value != 0x00 && declared_value != 0xFF {
+            return Err(Error::new(
+                Check::ReeFirstValue,
+                format!("attached REE first_value is 0x{declared_value:02X}, not 0x00 or 0xFF"),
+            ));
+        }
+        let run_count = read_run_count(reader, total)?;
+        if run_count == 0 && strict {
+            return Err(Error::new(
+                Check::ReeNoRunCountZero,
+                "attached REE uses the non-canonical run_count == 0 form",
+            ));
+        }
+        // A loose read of the non-canonical form is one black run over the whole
+        // layer, exactly as tag 0x00 reads it; the overlay fields that follow then
+        // describe pixels over a core that is black everywhere.
+        let first_value = if run_count == 0 { 0x00 } else { declared_value };
+
+        // The core's lengths but the last, split by parity: stored index `j` even
+        // lives in the first planes array and odd in the second, and every entry
+        // from the third on is a difference from the entry two runs earlier.
+        let mut even = Planes::read(reader, strict)?;
+        let mut odd = Planes::read(reader, strict)?;
+
+        let aa_count = reader.varint()?;
+        let bound = total + 1;
+        if aa_count > bound {
+            return Err(Error::new(
+                Check::ReeAttachCount,
+                format!("aa_pixel_count {aa_count} exceeds total_pixels + 1 ({bound})"),
+            ));
+        }
+        let bits = AttachBits::read(reader, run_count)?;
+        let escape_count = reader.varint()?;
+        if escape_count > aa_count {
+            return Err(Error::new(
+                Check::ReeAttachCount,
+                format!("escape_count {escape_count} exceeds aa_pixel_count {aa_count}"),
+            ));
+        }
+        let mut escapes = Planes::read(reader, strict)?;
+        let mut values = AttachValues::read(reader, strict)?;
+
+        // One walk places every overlay pixel and writes every core pixel: the
+        // run's first pixel when its first bit claims it, then the escapes strictly
+        // inside it in ascending order, then its last pixel when its second bit
+        // claims it - which is the order the value array is stored in.
+        let mut mask = vec![0u8; total_pixels as usize];
+        // The last length each parity produced: what that parity's next length is
+        // a difference from.
+        let mut last = [0i64; 2];
+        let mut start = 0u64;
+        let mut empty_run = false;
+        let mut placed = 0u64;
+        let mut previous_escape = 0u64;
+        let mut escape_index = 0u64;
+        let mut pending: Option<u64> = None;
+
+        let runs = run_count.max(1);
+        for index in 0..runs {
+            // The last run's length is implicit: it ends at `total_pixels`.
+            let end = if index + 1 == runs {
+                total
+            } else {
+                let parity = (index % 2) as usize;
+                let stored = if parity == 0 {
+                    even.varint()?
+                } else {
+                    odd.varint()?
+                };
+                let length = if index < 2 {
+                    i64::try_from(stored).map_err(|_| {
+                        Error::new(
+                            Check::ReeEndPositions,
+                            format!("attached REE run {index} is {stored} pixels long"),
+                        )
+                    })?
+                } else {
+                    last[parity].checked_add(unzigzag(stored)).ok_or_else(|| {
+                        Error::new(Check::ReeEndPositions, "attached REE run lengths overflow")
+                    })?
+                };
+                last[parity] = length;
+                let length = u64::try_from(length).map_err(|_| {
+                    Error::new(
+                        Check::ReeEndPositions,
+                        format!("attached REE run {index} has a negative length"),
+                    )
+                })?;
+                start.checked_add(length).ok_or_else(|| {
+                    Error::new(Check::ReeEndPositions, "attached REE run lengths overflow")
+                })?
+            };
+            if end > total {
+                return Err(Error::new(
+                    Check::ReeEndPositions,
+                    format!("attached REE run {index} ends at {end}, past total_pixels {total}"),
+                ));
+            }
+            empty_run |= end == start;
+            let core_value = if index % 2 == 0 {
+                first_value
+            } else {
+                255 - first_value
+            };
+            fill(&mut mask, start, end, core_value);
+
+            // A run a loose read stepped into can hold no pixel - a stored length
+            // of 0 is legal until a strict reader refuses it - and a bit that
+            // claims such a run's end names a pixel that does not exist.
+            let empty = start == end;
+            if !empty && !bits.is_empty() && bits.get(index, 0) {
+                let value = values.next_within(aa_count)?;
+                if strict {
+                    check_attached_value(value, core_value, start)?;
+                }
+                mask[start as usize] = value;
+                placed += 1;
+            }
+
+            loop {
+                let position = match pending {
+                    Some(position) => position,
+                    None => {
+                        if escape_index == escape_count {
+                            break;
+                        }
+                        let delta = escapes.varint()?;
+                        if escape_index > 0 && delta == 0 {
+                            return Err(Error::new(
+                                Check::ReeAttachPositions,
+                                format!(
+                                    "attached REE escape {escape_index} repeats its predecessor"
+                                ),
+                            ));
+                        }
+                        let position = previous_escape.checked_add(delta).ok_or_else(|| {
+                            Error::new(
+                                Check::ReeAttachPositions,
+                                "attached REE escape positions overflow",
+                            )
+                        })?;
+                        if position >= total {
+                            return Err(Error::new(
+                                Check::ReeAttachPositions,
+                                format!(
+                                    "attached REE escape {position} is not below total_pixels {total}"
+                                ),
+                            ));
+                        }
+                        previous_escape = position;
+                        escape_index += 1;
+                        pending = Some(position);
+                        continue;
+                    }
+                };
+                if position >= end {
+                    break;
+                }
+                if position == start || position + 1 == end {
+                    return Err(Error::new(
+                        Check::ReeAttachPositions,
+                        format!(
+                            "attached REE escape {position} is not strictly inside the core run                          [{start}, {end}) it attaches to"
+                        ),
+                    ));
+                }
+                let value = values.next_within(aa_count)?;
+                if strict {
+                    check_attached_value(value, core_value, position)?;
+                }
+                mask[position as usize] = value;
+                placed += 1;
+                pending = None;
+            }
+
+            if !empty && !bits.is_empty() && bits.get(index, 1) {
+                if strict && end - start == 1 {
+                    return Err(Error::new(
+                        Check::ReeAttachBits,
+                        format!(
+                            "attached REE run {index} holds one pixel and sets both of its bits"
+                        ),
+                    ));
+                }
+                // A one-pixel run with both bits set places the same pixel twice in
+                // a loose read - the second bit names the pixel the first one did -
+                // so a stream that counts the duplicate still balances.
+                let value = values.next_within(aa_count)?;
+                if strict {
+                    check_attached_value(value, core_value, end - 1)?;
+                }
+                mask[(end - 1) as usize] = value;
+                placed += 1;
+            }
+
+            start = end;
+        }
+
+        if let Some(position) = pending {
+            return Err(Error::new(
+                Check::ReeAttachPositions,
+                format!("attached REE escape {position} sits past the last core run"),
+            ));
+        }
+        if placed != aa_count {
+            return Err(Error::new(
+                Check::ReeAttachCount,
+                format!(
+                    "the attachment bits and escapes describe {placed} overlay pixels,                  aa_pixel_count says {aa_count}"
+                ),
+            ));
+        }
+        if strict {
+            if empty_run {
+                return Err(Error::new(
+                    Check::ReeRunLengths,
+                    "attached REE stores an empty run",
+                ));
+            }
+            even.check_consumed()?;
+            odd.check_consumed()?;
+            escapes.check_consumed()?;
+            values.planes.check_consumed()?;
+            if !bits.padding_clear(run_count) {
+                return Err(Error::new(
+                    Check::ReeAttachBits,
+                    "attached REE sets attachment bits past the last run",
+                ));
+            }
+        }
+        Ok(mask)
+    }
 }
 
 /// The corpus' own list of the vectors it holds.
@@ -600,7 +969,12 @@ fn mask_streams() -> Vec<Base> {
                 *pixel = ALPHABET[rest % ALPHABET.len()];
                 rest /= ALPHABET.len();
             }
-            for mode in [EncodeMode::Binary, EncodeMode::Grayscale, EncodeMode::Split] {
+            for mode in [
+                EncodeMode::Binary,
+                EncodeMode::Grayscale,
+                EncodeMode::Split,
+                EncodeMode::Attached,
+            ] {
                 let Ok(Some((_, data))) = ree::encode(&pixels, total, mode) else {
                     continue;
                 };
@@ -624,9 +998,9 @@ fn mask_streams() -> Vec<Base> {
 /// not prefix-closed, an overlay position at `total_pixels`, a repeated position,
 /// a varint that does not terminate and a non-minimal one.
 fn variations(data: &[u8]) -> Vec<Change> {
-    /// The two tags that need a value to carry them, both binary ends, a value
-    /// either side of the threshold, and a continuation bit.
-    const BYTES: [u8; 5] = [0x00, 0x01, 0x7F, 0x80, 0xFF];
+    /// Both binary ends, a value either side of the threshold, an overlay value,
+    /// a continuation bit, and the byte that turns a stream into the next tag.
+    const BYTES: [u8; 6] = [0x00, 0x01, 0x03, 0x40, 0x80, 0xFF];
     let mut changes = vec![Change::Stream];
     changes.extend((0..data.len()).map(Change::Truncated));
     for (at, current) in data.iter().enumerate() {

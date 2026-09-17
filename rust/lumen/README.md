@@ -110,9 +110,20 @@ let bytes = encoder.finish()?;
 # Ok::<(), lumen::Error>(())
 ```
 
+A layer's tag is the encoder's choice (§5.7). By default the writer encodes
+each layer group both ways - with the tag `EncodeMode::Auto` picks and with
+`EncodeMode::Attached` (tag `0x03`) - compresses both exactly as the file will
+frame them, and keeps the smaller; `Encoder::set_tag_probe(false)` turns that
+off, and `Encoder::push_layer_with_mode` states a tag instead of choosing one.
+The comparison is what makes the attached encoding safe to have on by default:
+on a print whose layers barely change its raw bytes are the smaller ones and its
+compressed bytes are 23% larger, so an encoder that picked by byte count would
+write the bigger file. A layer that arrives already encoded
+(`push_encoded_layer`) carries one encoding, so it is stored as it is.
+
 The encoder is deterministic: identical input and settings produce identical
 bytes, which is what makes re-slicing a scene produce the same file and the same
-`LHAS` hashes (§5.6). Framing each `LAYR` chunk and hashing each layer are
+`LHAS` hashes (§5.7). Framing each `LAYR` chunk and hashing each layer are
 per-item passes, so `finish` runs them on worker threads - one per core unless
 `Encoder::set_worker_threads` says otherwise - and that count is not one of the
 settings: it moves the wall clock and not a byte. Encrypted output is of course

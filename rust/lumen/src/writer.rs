@@ -1,6 +1,6 @@
 //! Writing a file: [`Encoder`], which assembles a conforming `.lumen` container.
 //!
-//! The encoder owns the choices the specification leaves to it (section 5.6): it
+//! The encoder owns the choices the specification leaves to it (section 5.7): it
 //! picks a tag per layer, picks how many layers a `LAYR` chunk spans, and decides
 //! whether to train a dictionary. Layer masks are encoded as they are pushed, so
 //! the encoder never holds the pixel data of the whole print - only its run-end
@@ -192,18 +192,38 @@ impl EncodedLayer {
 /// An empty stream is not degenerate but different: it is the empty-layer form,
 /// which [`EncodedLayer::Empty`] carries and no sector's data does. The messages
 /// match the reader's, so a caller sees the same words either side of the file.
+/// A single-sector layer record for a maybe-empty encoding.
+///
+/// `None` is the empty-layer form, and the returned mask data carries its tag,
+/// which is what a layer stores.
+fn single_sector(encoded: Option<(u8, Vec<u8>)>) -> EncodedLayer {
+    match encoded {
+        None => EncodedLayer::Empty,
+        Some((_tag, mask)) => EncodedLayer::Sectors(vec![(0, mask)]),
+    }
+}
+
 fn check_stream(stream: &[u8]) -> Result<()> {
     match stream.first() {
         None => Err(Error::new(
             Check::ReeTag,
             "layer mask data is empty: the empty-layer form carries no bytes",
         )),
-        Some(&(ree::TAG_BINARY | ree::TAG_GRAYSCALE | ree::TAG_SPLIT)) => Ok(()),
+        Some(&(ree::TAG_BINARY | ree::TAG_GRAYSCALE | ree::TAG_SPLIT | ree::TAG_ATTACHED)) => {
+            Ok(())
+        }
         Some(&tag) => Err(Error::new(
             Check::ReeTag,
             format!("unknown layer encoding tag 0x{tag:02X}"),
         )),
     }
+}
+
+/// A layer group's plaintext under one candidate encoding, with the entries that
+/// place each layer's slice inside it.
+struct ChunkCandidate {
+    plaintext: Vec<u8>,
+    placement: Vec<(u32, u64, u32)>,
 }
 
 /// A chunk ready to be laid out.
@@ -236,7 +256,13 @@ pub struct Encoder {
     worker_threads: usize,
     encryption: Option<EncryptOptions>,
     session: Option<SessionKey>,
-    layers: Vec<EncodedLayer>,
+    /// Whether each layer group is encoded both ways and the smaller kept
+    /// ([`Encoder::set_tag_probe`]).
+    tag_probe: bool,
+    /// One entry per layer: its mask data as [`EncodeMode::Auto`] chose it, and
+    /// the alternative tag 0x03 encoding the probe compares it against, for a
+    /// layer that was pushed under `Auto` while the probe was on.
+    layers: Vec<(EncodedLayer, Option<EncodedLayer>)>,
 }
 
 impl Encoder {
@@ -259,6 +285,7 @@ impl Encoder {
             worker_threads: 0,
             encryption: None,
             session: None,
+            tag_probe: true,
             layers: Vec::new(),
         }
     }
@@ -323,6 +350,24 @@ impl Encoder {
         self.layers_per_chunk = layers.max(1);
     }
 
+    /// Whether to encode each layer group both ways and keep the smaller.
+    ///
+    /// On by default. A group's layers are encoded with the tag
+    /// [`EncodeMode::Auto`] chooses and with [`EncodeMode::Attached`], both are
+    /// compressed exactly as the file will frame them, and the smaller result is
+    /// kept. The comparison is what makes the attached form a gain rather than a
+    /// gamble: its raw size is not a guide to its compressed size, so an encoder
+    /// that picked it by bytes alone would lose on a print whose layers barely
+    /// change.
+    ///
+    /// The probe costs one extra encoding and one extra compression of every
+    /// layer group, and it measures without the `ZDIC` dictionary, which is only
+    /// trained once the whole print has been pushed. Turning it off means every
+    /// layer is stored with the tag [`EncodeMode::Auto`] picks.
+    pub fn set_tag_probe(&mut self, enabled: bool) {
+        self.tag_probe = enabled;
+    }
+
     /// zstd compression level for the layer chunks.
     pub fn set_zstd_level(&mut self, level: i32) {
         self.zstd_level = level;
@@ -350,7 +395,7 @@ impl Encoder {
     /// already in memory, so a thread beyond the cores available would take time
     /// from another rather than spend a wait. `1` is the serial path, and it
     /// writes the same bytes any other count does - the output of this encoder
-    /// is a function of its input and settings alone, as section 5.6 intends.
+    /// is a function of its input and settings alone, as section 5.7 intends.
     pub fn set_worker_threads(&mut self, threads: usize) {
         self.worker_threads = threads;
     }
@@ -385,14 +430,16 @@ impl Encoder {
     pub fn push_layer_with_mode(&mut self, pixels: &[u8], mode: EncodeMode) -> Result<()> {
         let total_pixels = self.total_pixels();
         check_mask(pixels, total_pixels, "the layer")?;
-        let record = match ree::encode(pixels, total_pixels, mode)? {
-            None => EncodedLayer::Empty,
-            // `ree::encode` returns the mask data with its tag already in front,
-            // which is exactly what a layer stores; the tag is repeated here only
-            // to be dropped.
-            Some((_tag, mask)) => EncodedLayer::Sectors(vec![(0, mask)]),
+        let record = single_sector(ree::encode(pixels, total_pixels, mode)?);
+        let alternative = match (mode, self.tag_probe) {
+            (EncodeMode::Auto, true) => Some(single_sector(ree::encode(
+                pixels,
+                total_pixels,
+                EncodeMode::Attached,
+            )?)),
+            _ => None,
         };
-        self.layers.push(record);
+        self.layers.push((record, alternative));
         Ok(())
     }
 
@@ -406,6 +453,7 @@ impl Encoder {
     pub fn push_layer_sectors(&mut self, sectors: &[(u32, Vec<u8>)]) -> Result<()> {
         let total_pixels = self.total_pixels();
         let mut masks: Vec<(u32, Vec<u8>)> = Vec::new();
+        let mut alternatives: Vec<(u32, Vec<u8>)> = Vec::new();
         for (sector_id, pixels) in sectors {
             check_mask(
                 pixels,
@@ -420,13 +468,24 @@ impl Encoder {
             }
             if let Some((_tag, mask)) = ree::encode(pixels, total_pixels, EncodeMode::Auto)? {
                 masks.push((*sector_id, mask));
+                if self.tag_probe {
+                    if let Some((_tag, other)) =
+                        ree::encode(pixels, total_pixels, EncodeMode::Attached)?
+                    {
+                        alternatives.push((*sector_id, other));
+                    }
+                }
             }
         }
         if masks.is_empty() {
-            self.layers.push(EncodedLayer::Empty);
+            self.layers.push((EncodedLayer::Empty, None));
         } else {
             masks.sort_by_key(|(sector_id, _)| *sector_id);
-            self.layers.push(EncodedLayer::Sectors(masks));
+            alternatives.sort_by_key(|(sector_id, _)| *sector_id);
+            let alternative =
+                (!alternatives.is_empty()).then_some(EncodedLayer::Sectors(alternatives));
+            self.layers
+                .push((EncodedLayer::Sectors(masks), alternative));
         }
         Ok(())
     }
@@ -438,14 +497,17 @@ impl Encoder {
     /// output goes straight to the encoder. The runs must be canonical and cover
     /// the layer, as [`ree::encode_runs`] requires.
     pub fn push_layer_runs(&mut self, runs: &[Run], mode: EncodeMode) -> Result<()> {
-        let record = match ree::encode_runs(runs, self.total_pixels(), mode)? {
-            None => EncodedLayer::Empty,
-            // `ree::encode_runs` returns the mask data with its tag already in
-            // front, which is exactly what a layer stores; the tag is repeated
-            // here only to be dropped.
-            Some((_tag, mask)) => EncodedLayer::Sectors(vec![(0, mask)]),
+        let total_pixels = self.total_pixels();
+        let record = single_sector(ree::encode_runs(runs, total_pixels, mode)?);
+        let alternative = match (mode, self.tag_probe) {
+            (EncodeMode::Auto, true) => Some(single_sector(ree::encode_runs(
+                runs,
+                total_pixels,
+                EncodeMode::Attached,
+            )?)),
+            _ => None,
         };
-        self.layers.push(record);
+        self.layers.push((record, alternative));
         Ok(())
     }
 
@@ -457,6 +519,36 @@ impl Encoder {
     /// encoding tag, the sectors are sorted by id as the layer table requires,
     /// and a layer with no sector data becomes the empty-layer form.
     pub fn push_encoded_layer(&mut self, layer: EncodedLayer) -> Result<()> {
+        self.push_encoded_layer_pair(layer, None)
+    }
+
+    /// Push a layer that is already encoded, with the other encoding the tag probe
+    /// should weigh it against.
+    ///
+    /// [`Encoder::push_encoded_layer`] is this with no alternative. A caller that
+    /// encodes layers on its own threads - the slicer adapter does, one worker per
+    /// layer - can hand over the tag `0x03` stream of the same layer as well, and
+    /// the probe then has two candidates to compress when the group closes. Both
+    /// must describe the same pixels: the probe's choice is a choice of encoding,
+    /// and nothing checks that they agree.
+    ///
+    /// The alternative is stored as it is when the probe is off, which costs the
+    /// caller nothing but the encoding it computed.
+    pub fn push_encoded_layer_pair(
+        &mut self,
+        layer: EncodedLayer,
+        alternative: Option<EncodedLayer>,
+    ) -> Result<()> {
+        if let Some(other) = alternative.as_ref() {
+            match other {
+                EncodedLayer::Empty => {}
+                EncodedLayer::Sectors(list) => {
+                    for (_, stream) in list {
+                        check_stream(stream)?;
+                    }
+                }
+            }
+        }
         let record = match layer {
             EncodedLayer::Empty => EncodedLayer::Empty,
             EncodedLayer::Sectors(mut list) => {
@@ -479,7 +571,7 @@ impl Encoder {
                 }
             }
         };
-        self.layers.push(record);
+        self.layers.push((record, alternative));
         Ok(())
     }
 
@@ -534,8 +626,16 @@ impl Encoder {
         //    sector, concatenated in ascending layer order. The placement of each
         //    layer's run inside its chunk is what LTBL records.
         let group_size = self.layers_per_chunk.max(1) as usize;
+        // Per (group, sector): the plaintext the file frames, the placement of
+        // each layer's slice inside it, and - when the probe computed one - the
+        // same pair for the tag 0x03 encoding of the very same layers. The choice
+        // between them is made in step 5, with the dictionary the frames will
+        // actually use: an encoding's raw size is no guide, and neither is its
+        // compressed size without the dictionary that will compress it.
         let mut chunk_plaintexts: Vec<Vec<u8>> = Vec::new();
-        let mut placement: HashMap<(u32, u32), (u32, u64, u32)> = HashMap::new();
+        let mut chunk_placements: Vec<Vec<(u32, u64, u32)>> = Vec::new();
+        let mut chunk_alternatives: Vec<Option<ChunkCandidate>> = Vec::new();
+        let mut chunk_sectors: Vec<u32> = Vec::new();
         for group_start in (0..pushed as usize).step_by(group_size) {
             let group_end = (group_start + group_size).min(pushed as usize);
             let mut sectors: Vec<u32> = sector_sets[group_start..group_end]
@@ -545,10 +645,15 @@ impl Encoder {
                 .collect();
             sectors.sort_unstable();
             sectors.dedup();
+            let probed = self.layers[group_start..group_end]
+                .iter()
+                .any(|(_, alternative)| alternative.is_some());
             for sector in sectors {
                 let mut plaintext = Vec::new();
                 let mut placed: Vec<(u32, u64, u32)> = Vec::new();
-                for (index, record) in self
+                let mut alternative_text = Vec::new();
+                let mut alternative_placed: Vec<(u32, u64, u32)> = Vec::new();
+                for (index, (record, alternative)) in self
                     .layers
                     .iter()
                     .enumerate()
@@ -559,6 +664,17 @@ impl Encoder {
                         placed.push((index as u32, plaintext.len() as u64, mask.len() as u32));
                         plaintext.extend_from_slice(mask);
                     }
+                    // A layer without an alternative is its own alternative, so
+                    // the two candidates always describe the same layers.
+                    let chosen = alternative.as_ref().unwrap_or(record);
+                    if let Some(mask) = chosen.stream(sector) {
+                        alternative_placed.push((
+                            index as u32,
+                            alternative_text.len() as u64,
+                            mask.len() as u32,
+                        ));
+                        alternative_text.extend_from_slice(mask);
+                    }
                 }
                 // A sector enters a layer's entries for other reasons too - an
                 // override with no data behind it - so a group may name a sector
@@ -566,17 +682,25 @@ impl Encoder {
                 if plaintext.is_empty() {
                     continue;
                 }
-                let ordinal = chunk_plaintexts.len() as u32;
-                for (layer, offset, size) in placed {
-                    placement.insert((layer, sector), (ordinal, offset, size));
-                }
                 chunk_plaintexts.push(plaintext);
+                chunk_placements.push(placed);
+                chunk_alternatives.push(
+                    (probed && alternative_text != chunk_plaintexts[chunk_plaintexts.len() - 1])
+                        .then_some(ChunkCandidate {
+                            plaintext: alternative_text,
+                            placement: alternative_placed,
+                        }),
+                );
+                chunk_sectors.push(sector);
             }
         }
         // A file carries at least one LAYR chunk even when every layer is empty
         // (section 3's presence rule).
         if chunk_plaintexts.is_empty() {
             chunk_plaintexts.push(Vec::new());
+            chunk_placements.push(Vec::new());
+            chunk_alternatives.push(None);
+            chunk_sectors.push(0);
         }
 
         // 4. The dictionary: trained on samples spread across the print, and written
@@ -612,14 +736,49 @@ impl Encoder {
         //    dictionary, and no frame is a function of another.
         let workers = self.workers();
         let level = self.zstd_level;
-        let frames: Vec<Vec<u8>> = map_ordered(&chunk_plaintexts, workers, |_, plaintext| {
-            let frame = chunks::compress(plaintext, level, dict_bytes)?;
-            // A reader sizes the frame's output from the frame's own header,
-            // so a writer must set its content size; refusing here keeps the
-            // guarantee in the writer rather than in a comment.
-            chunks::frame_content_size(&frame)?;
-            Ok(frame)
-        })?;
+        let alternatives = &chunk_alternatives;
+        let choices: Vec<(Vec<u8>, bool)> =
+            map_ordered(&chunk_plaintexts, workers, |index, plaintext| {
+                let frame = |text: &[u8]| -> Result<Vec<u8>> {
+                    let frame = chunks::compress(text, level, dict_bytes)?;
+                    // A reader sizes the frame's output from the frame's own
+                    // header, so a writer must set its content size; refusing here
+                    // keeps the guarantee in the writer rather than in a comment.
+                    chunks::frame_content_size(&frame)?;
+                    Ok(frame)
+                };
+                let primary = frame(plaintext)?;
+                match &alternatives[index] {
+                    // The smaller frame wins, and a tie keeps the encoding
+                    // `EncodeMode::Auto` chose.
+                    Some(candidate) => match frame(&candidate.plaintext) {
+                        Ok(other) if other.len() < primary.len() => Ok((other, true)),
+                        Ok(_) | Err(_) => Ok((primary, false)),
+                    },
+                    None => Ok((primary, false)),
+                }
+            })?;
+
+        // The placement a reader needs is the chosen encoding's, and LTBL is the
+        // only thing that says where a slice sits.
+        let mut placement: HashMap<(u32, u32), (u32, u64, u32)> = HashMap::new();
+        let mut frames: Vec<Vec<u8>> = Vec::with_capacity(choices.len());
+        for (index, (frame, chose_alternative)) in choices.into_iter().enumerate() {
+            let sector = chunk_sectors[index];
+            let entries = if chose_alternative {
+                let candidate = chunk_alternatives[index]
+                    .take()
+                    .expect("an alternative that was compressed");
+                chunk_plaintexts[index] = candidate.plaintext;
+                candidate.placement
+            } else {
+                std::mem::take(&mut chunk_placements[index])
+            };
+            for (layer, offset, size) in entries {
+                placement.insert((layer, sector), (index as u32, offset, size));
+            }
+            frames.push(frame);
+        }
 
         // 6. LHAS, over each layer's slices concatenated in ascending sector_id -
         //    read back out of the chunk plaintexts, so the leaves are over the
@@ -658,7 +817,7 @@ impl Encoder {
         if self
             .layers
             .iter()
-            .any(|record| matches!(record, EncodedLayer::Sectors(list) if list.len() > 1))
+            .any(|(record, _)| matches!(record, EncodedLayer::Sectors(list) if list.len() > 1))
         {
             flags |= FLAG_MULTI_SECTOR;
         }
@@ -811,7 +970,7 @@ impl Encoder {
         let mut sets: Vec<Vec<u32>> = self
             .layers
             .iter()
-            .map(|record| match record {
+            .map(|(record, _)| match record {
                 EncodedLayer::Empty => Vec::new(),
                 EncodedLayer::Sectors(list) => list.iter().map(|(id, _)| *id).collect(),
             })
@@ -1478,10 +1637,156 @@ mod tests {
 
     /// A stream that carries no tag is not a layer, and the encoder says so
     /// before it reaches the layer table.
+    /// A print whose layers barely move: a white band per row whose left edge
+    /// advances one pixel per layer, so every layer's run lengths are close to its
+    /// neighbours' without being equal. This is the shape the attached encoding is
+    /// for, and the shape a byte-counting encoder would get wrong the other way -
+    /// on a print this smooth the plain form's bytes are the ones that compress.
+    fn moving_band_layers(count: u32) -> Vec<Vec<u8>> {
+        const SIDE: usize = 64;
+        let mut layers = Vec::new();
+        for index in 0..count as usize {
+            let mut pixels = vec![0u8; SIDE * SIDE];
+            for (row, line) in pixels.chunks_mut(SIDE).enumerate() {
+                // A lens that walks one pixel to the right per layer: its chord
+                // grows and shrinks smoothly down the rows, and its boundaries
+                // move between layers without the run lengths repeating.
+                let half = if row < 32 { row / 2 } else { (63 - row) / 2 };
+                let centre = 24 + index;
+                let start = centre.saturating_sub(half);
+                let end = (centre + half + 1).min(SIDE);
+                if start < end {
+                    line[start..end].fill(255);
+                }
+            }
+            layers.push(pixels);
+        }
+        layers
+    }
+
+    /// The band fixture's pixels per layer.
+    const PIXELS_BAND: u32 = 64 * 64;
+
+    fn band_head(layers: u32) -> Head {
+        Head {
+            display_width_px: 64,
+            display_height_px: 64,
+            ..head(layers)
+        }
+    }
+
+    fn written_with_probe(probe: bool) -> (Vec<u8>, Vec<Vec<u8>>) {
+        let layers = moving_band_layers(8);
+        let mut encoder = Encoder::new(band_head(layers.len() as u32), conforming_meta());
+        encoder.set_tag_probe(probe);
+        for layer in &layers {
+            encoder.push_layer(layer).expect("a pushable layer");
+        }
+        (encoder.finish().expect("a writable file"), layers)
+    }
+
+    #[test]
+    fn the_tag_probe_keeps_the_smaller_encoding() {
+        let (probed, layers) = written_with_probe(true);
+        let (plain, _) = written_with_probe(false);
+
+        // The probe changes bytes, never content: both files decode to the layers
+        // that were pushed.
+        for bytes in [&probed, &plain] {
+            let file = crate::LumenFile::open(bytes, crate::validate::Level::Strict)
+                .expect("a conforming file");
+            for (index, mask) in layers.iter().enumerate() {
+                assert_eq!(&file.layer(index as u32).unwrap().pixels, mask);
+            }
+        }
+
+        // Whichever way it decided, it did not write a larger file, and on this
+        // print it decided the other way from the plain encoding.
+        assert!(
+            probed.len() <= plain.len(),
+            "the probe must not write a larger file: {} against {}",
+            probed.len(),
+            plain.len()
+        );
+        assert!(
+            probed.len() < plain.len(),
+            "a print whose layers barely move is where the attached form wins: \
+             {} against {}",
+            probed.len(),
+            plain.len()
+        );
+    }
+
+    #[test]
+    fn a_pre_encoded_layer_can_carry_its_alternative() {
+        // The parallel path: a caller encodes a layer on its own thread and hands
+        // over both encodings, so the probe still has something to weigh when the
+        // group closes. Both files decode to the same layers, and the pair is never
+        // larger than the plain one.
+        let layers = moving_band_layers(8);
+        let mut paired = Encoder::new(band_head(layers.len() as u32), conforming_meta());
+        let mut plain = Encoder::new(band_head(layers.len() as u32), conforming_meta());
+        for layer in &layers {
+            let (tag, primary) = ree::encode(layer, PIXELS_BAND, EncodeMode::Auto)
+                .unwrap()
+                .expect("a non-empty layer");
+            assert_eq!(tag, ree::TAG_BINARY);
+            let (other_tag, alternative) = ree::encode(layer, PIXELS_BAND, EncodeMode::Attached)
+                .unwrap()
+                .expect("a non-empty layer");
+            assert_eq!(other_tag, ree::TAG_ATTACHED);
+            paired
+                .push_encoded_layer_pair(
+                    EncodedLayer::single(primary).unwrap(),
+                    Some(EncodedLayer::single(alternative).unwrap()),
+                )
+                .expect("a pair of encodings of one layer");
+            plain
+                .push_encoded_layer_pair(
+                    EncodedLayer::single(
+                        ree::encode(layer, PIXELS_BAND, EncodeMode::Auto)
+                            .unwrap()
+                            .expect("a non-empty layer")
+                            .1,
+                    )
+                    .unwrap(),
+                    None,
+                )
+                .expect("one encoding");
+        }
+        let paired = paired.finish().expect("a writable file");
+        let plain = plain.finish().expect("a writable file");
+        for bytes in [&paired, &plain] {
+            let file = crate::LumenFile::open(bytes, crate::validate::Level::Strict)
+                .expect("a conforming file");
+            for (index, mask) in layers.iter().enumerate() {
+                assert_eq!(&file.layer(index as u32).unwrap().pixels, mask);
+            }
+        }
+        assert!(
+            paired.len() < plain.len(),
+            "the pair decides what the probe would have decided: {} against {}",
+            paired.len(),
+            plain.len()
+        );
+    }
+
+    #[test]
+    fn the_tag_probe_can_be_turned_off() {
+        let (probed, _) = written_with_probe(true);
+        let (plain, _) = written_with_probe(false);
+        assert_eq!(
+            plain.len(),
+            written_with_probe(false).0.len(),
+            "the same input writes the same file"
+        );
+        assert_ne!(probed.len(), plain.len());
+    }
+
     #[test]
     fn an_encoded_layer_is_checked_before_it_is_stored() {
         let mut encoder = Encoder::new(head(1), meta());
-        for empty_or_unknown in [Vec::new(), vec![0x03, 0x00], vec![0xFF]] {
+        for empty_or_unknown in [Vec::new(), vec![0x04, 0x00], vec![0xFF]] {
             assert_eq!(
                 EncodedLayer::single(empty_or_unknown.clone())
                     .unwrap_err()

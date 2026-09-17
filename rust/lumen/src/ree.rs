@@ -1,7 +1,7 @@
 //! Run-end encoded layer masks ([`spec/11-layer-encoding.md`] section 5).
 //!
-//! Three tags are defined: binary REE (`0x00`), grayscale REE (`0x01`) and split
-//! REE (`0x02`). A layer whose pixels are all zero has no stream at all - the
+//! Four tags are defined: binary REE (`0x00`), grayscale REE (`0x01`), split REE
+//! (`0x02`) and attached split REE (`0x03`). A layer whose pixels are all zero has no stream at all - the
 //! empty-layer form lives in the `LTBL` entry, not in the layer data.
 //!
 //! Every run-length or position array is stored as four significance planes
@@ -20,11 +20,14 @@ pub const TAG_BINARY: u8 = 0x00;
 pub const TAG_GRAYSCALE: u8 = 0x01;
 /// Tag for binary REE plus a sparse anti-aliasing overlay.
 pub const TAG_SPLIT: u8 = 0x02;
+/// Tag for split REE whose core lengths are parity-split and self-delta coded and
+/// whose overlay pixels hang off the core's run boundaries.
+pub const TAG_ATTACHED: u8 = 0x03;
 
 /// Which encoding an encoder should use for a layer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum EncodeMode {
-    /// Smallest of the applicable encodings; ties go to grayscale (section 5.6).
+    /// Smallest of the applicable encodings; ties go to grayscale (section 5.7).
     #[default]
     Auto,
     /// Binary REE. Requires every pixel to be `0x00` or `0xFF`.
@@ -33,6 +36,14 @@ pub enum EncodeMode {
     Grayscale,
     /// Split REE. The thresholded mask thresholds at `v >= 128`.
     Split,
+    /// Attached split REE: the same thresholded core and overlay, with the core's
+    /// lengths parity-split and self-delta coded and the overlay's positions
+    /// implied by the core's run boundaries.
+    ///
+    /// [`EncodeMode::Auto`] never picks this one: its raw size is not a guide to
+    /// its compressed size, so a caller that wants it - or the writer's own probe
+    /// - asks for it and compares the compressed result.
+    Attached,
 }
 
 /// One maximal run of equal pixels, in row-major order.
@@ -101,7 +112,7 @@ pub fn threshold(pixel: u8) -> u8 {
 /// empty: the empty-layer form carries no bytes at all. Bytes past the end of
 /// the stream are not part of the mask and are ignored.
 ///
-/// In `strict` mode the canonical-form rules of section 5.6 are enforced.
+/// In `strict` mode the canonical-form rules of section 5.7 are enforced.
 /// A loose read accepts any stream that satisfies sections 5.3-5.5. A stream
 /// that ends before its structure is complete reports [`Check::ReeVarint`], the
 /// check the varint decoder already uses for a truncated stream.
@@ -140,7 +151,7 @@ pub fn decode_counted(
 
 /// The encoding tag and the stream that follows it.
 ///
-/// The tag is one of the three section 5.1 defines; anything else is rejected
+/// The tag is one of the four section 5.1 defines; anything else is rejected
 /// here, so a caller's arms never see a tag the format does not have.
 fn tag_and_stream(data: &[u8]) -> Result<(u8, Reader<'_>)> {
     let Some((&tag, stream)) = data.split_first() else {
@@ -150,7 +161,7 @@ fn tag_and_stream(data: &[u8]) -> Result<(u8, Reader<'_>)> {
         ));
     };
     match tag {
-        TAG_BINARY | TAG_GRAYSCALE | TAG_SPLIT => {}
+        TAG_BINARY | TAG_GRAYSCALE | TAG_SPLIT | TAG_ATTACHED => {}
         other => {
             return Err(Error::new(
                 Check::ReeTag,
@@ -177,8 +188,9 @@ fn read(
         TAG_BINARY => read_binary(sink, reader, total_pixels, strict),
         TAG_GRAYSCALE => read_grayscale(sink, reader, total_pixels, strict),
         TAG_SPLIT => read_split(sink, reader, total_pixels, strict),
+        TAG_ATTACHED => read_attached(sink, reader, total_pixels, strict),
         // `tag_and_stream` rejects every other tag before its stream is read.
-        _ => unreachable!("tag_and_stream accepts 0x00, 0x01 and 0x02 only"),
+        _ => unreachable!("tag_and_stream accepts 0x00, 0x01, 0x02 and 0x03 only"),
     }
 }
 
@@ -405,7 +417,7 @@ impl Sink<'_> {
 /// threshold rule asks which run holds a pixel - so no two readers of one stream
 /// can disagree about it.
 struct Runs<'a> {
-    planes: Planes<'a>,
+    lengths: LengthSource<'a>,
     /// The lengths still to read, the implicit final run included.
     left: u64,
     /// The run the walk is in, as `[start, end)`.
@@ -421,9 +433,9 @@ struct Runs<'a> {
 }
 
 impl<'a> Runs<'a> {
-    fn new(planes: Planes<'a>, count: u64, total: u64, kind: &'static str) -> Runs<'a> {
+    fn new(lengths: LengthSource<'a>, count: u64, total: u64, kind: &'static str) -> Runs<'a> {
         Runs {
-            planes,
+            lengths,
             left: count,
             start: 0,
             end: 0,
@@ -449,12 +461,15 @@ impl<'a> Runs<'a> {
         let end = if self.left == 0 {
             self.total
         } else {
-            self.end.checked_add(self.planes.varint()?).ok_or_else(|| {
-                Error::new(
-                    Check::ReeEndPositions,
-                    format!("{} run lengths overflow", self.kind),
-                )
-            })?
+            let index = self.walked;
+            self.end
+                .checked_add(self.lengths.next(index)?)
+                .ok_or_else(|| {
+                    Error::new(
+                        Check::ReeEndPositions,
+                        format!("{} run lengths overflow", self.kind),
+                    )
+                })?
         };
         let (start, index) = (self.end, self.walked);
         if end > self.total {
@@ -496,16 +511,126 @@ impl<'a> Runs<'a> {
     }
 
     /// Whether a run held no pixels: every stored length is at least 1 and the
-    /// implicit final run has something left for it (section 5.6).
+    /// implicit final run has something left for it (section 5.7).
     fn empty_run(&self) -> bool {
         self.empty
     }
 
-    /// The length planes, for the strict rule that they hold exactly the lengths
-    /// read from them (section 5.3.1).
-    fn planes(&self) -> &Planes<'a> {
-        &self.planes
+    /// The strict rule that the length array holds exactly the lengths read from
+    /// it (section 5.3.1).
+    fn check_consumed(&self) -> Result<()> {
+        self.lengths.check_consumed()
     }
+}
+
+/// Where a run walk reads its lengths.
+///
+/// Tags `0x00`, `0x01` and `0x02` store one planes array of lengths; tag `0x03`
+/// stores two, split by parity. Everything else about a walk - the end positions,
+/// the implicit final run, the empty-run rule, the ranges a caller asks about -
+/// is the same either way, and lives in [`Runs`] once so no two readers of one
+/// stream can disagree about it.
+enum LengthSource<'a> {
+    /// One planes array, read in order.
+    Planes(Planes<'a>),
+    /// Two planes arrays, one per parity, each self-delta coded.
+    Parity(Parity<'a>),
+}
+
+impl LengthSource<'_> {
+    /// The length of run `index`, which the stream must still hold.
+    fn next(&mut self, index: u64) -> Result<u64> {
+        match self {
+            LengthSource::Planes(planes) => planes.varint(),
+            LengthSource::Parity(parity) => {
+                let length = parity.next(index)?;
+                u64::try_from(length).map_err(|_| {
+                    Error::new(
+                        Check::ReeEndPositions,
+                        format!("attached REE run {index} has a negative length"),
+                    )
+                })
+            }
+        }
+    }
+
+    /// The strict rule that a length array holds exactly the lengths read from it.
+    fn check_consumed(&self) -> Result<()> {
+        match self {
+            LengthSource::Planes(planes) => planes.check_consumed(),
+            LengthSource::Parity(parity) => {
+                parity.streams[0].check_consumed()?;
+                parity.streams[1].check_consumed()
+            }
+        }
+    }
+}
+
+/// The length array of an attached stream (section 5.6): the core's run lengths
+/// with the even stored indices in one planes array and the odd ones in the
+/// other, each entry a difference from the entry two runs earlier.
+///
+/// A row-major run list alternates between the boundary leaving the geometry and
+/// the boundary entering it, so one array interleaves two sequences that are each
+/// smooth; splitting them by parity is what lets the differences be small enough
+/// for the planes to collapse.
+struct Parity<'a> {
+    streams: [Planes<'a>; 2],
+    /// The last length each parity produced: what the next delta of that parity
+    /// is a difference from.
+    last: [i64; 2],
+}
+
+impl<'a> Parity<'a> {
+    /// Read the two planes arrays.
+    fn read(reader: &mut Reader<'a>, strict: bool) -> Result<Parity<'a>> {
+        Ok(Parity {
+            streams: [Planes::read(reader, strict)?, Planes::read(reader, strict)?],
+            last: [0; 2],
+        })
+    }
+
+    /// The length of run `index`, which the stream must still hold.
+    ///
+    /// The first two lengths are stored as they are: a difference needs an entry
+    /// two runs earlier to be a difference from, and the first two runs have none.
+    fn next(&mut self, index: u64) -> Result<i64> {
+        let parity = (index % 2) as usize;
+        let stored = self.streams[parity].varint()?;
+        if index < 2 {
+            let length = i64::try_from(stored).map_err(|_| {
+                Error::new(
+                    Check::ReeEndPositions,
+                    format!("attached REE run {index} is {stored} pixels long"),
+                )
+            })?;
+            self.last[parity] = length;
+            return Ok(length);
+        }
+        let length = self.last[parity]
+            .checked_add(unzigzag(stored))
+            .ok_or_else(|| {
+                Error::new(Check::ReeEndPositions, "attached REE run lengths overflow")
+            })?;
+        self.last[parity] = length;
+        Ok(length)
+    }
+}
+
+/// Zigzag: map a signed difference to an unsigned value, small magnitudes first.
+///
+/// An attached stream differences run lengths and overlay values, and a difference
+/// is negative as often as positive; zigzag is what keeps either sign one varint
+/// wide, which is what the planes of section 5.3.1 then exploit.
+#[inline]
+fn zigzag(value: i64) -> u64 {
+    ((value as u64) << 1) ^ ((value >> 63) as u64)
+}
+
+/// The inverse of [`zigzag`].
+#[inline]
+fn unzigzag(value: u64) -> i64 {
+    ((value >> 1) as i64) ^ -((value & 1) as i64)
 }
 
 /// The binary REE core of section 5.3: the value its runs alternate from, and
@@ -568,10 +693,15 @@ impl<'a> Core<'a> {
 
     /// A walk over the runs, from the first.
     fn runs(&self) -> Runs<'a> {
-        Runs::new(self.planes.rewind(), self.count, self.total, "binary REE")
+        Runs::new(
+            LengthSource::Planes(self.planes.rewind()),
+            self.count,
+            self.total,
+            "binary REE",
+        )
     }
 
-    /// Apply the binary REE rules of sections 5.3 and 5.6: walk every run into
+    /// Apply the binary REE rules of sections 5.3 and 5.7: walk every run into
     /// `sink`, and in strict mode refuse a stream that stores an empty run or
     /// leaves bytes in its planes.
     fn apply(&self, sink: &mut Sink<'_>, strict: bool) -> Result<()> {
@@ -587,7 +717,7 @@ impl<'a> Core<'a> {
                     "binary REE stores an empty run",
                 ));
             }
-            runs.planes().check_consumed()?;
+            runs.check_consumed()?;
         }
         Ok(())
     }
@@ -628,7 +758,7 @@ fn read_grayscale(
     // The values are hoisted out of the run loop, one byte per run.
     let values = reader.bytes(run_count as usize)?;
     let mut runs = Runs::new(
-        Planes::read(reader, strict)?,
+        LengthSource::Planes(Planes::read(reader, strict)?),
         run_count,
         total,
         "grayscale REE",
@@ -653,7 +783,7 @@ fn read_grayscale(
                 "grayscale REE stores a zero-length run",
             ));
         }
-        runs.planes().check_consumed()?;
+        runs.check_consumed()?;
         // Every run covers at least one pixel here, so a value the mask holds is
         // a value this array holds: a stream of nothing but 0x00/0xFF is a layer
         // that must use tag 0x00.
@@ -757,7 +887,7 @@ fn read_split(
         })?;
         // Every overlay pixel is neither 0x00 nor 0xFF, so an overlay that holds
         // no pixel at all is the one case where the decoded slice is all
-        // 0x00/0xFF: it has no anti-aliasing to carry, and section 5.6 asks for
+        // 0x00/0xFF: it has no anti-aliasing to carry, and section 5.7 asks for
         // tag 0x00.
         if aa_count == 0 {
             return Err(Error::new(
@@ -773,6 +903,326 @@ fn read_split(
     walk_positions(&mut positions.rewind(), aa_count, total, |position, i| {
         sink.set(position, values[i])
     })
+}
+
+/// The two attachment bits of every core run (section 5.6).
+///
+/// Run `r` owns the two bits at `2 * (r % 4)` of byte `r / 4`: the first says the
+/// run's first pixel is an overlay pixel, the second that its last one is. Two bits
+/// per run is what a run boundary needs - an overlay pixel either hangs off an end
+/// of its run or is listed among the escapes - and it costs a quarter of a byte per
+/// run where a position per pixel cost a varint.
+struct AttachBits<'a> {
+    bytes: &'a [u8],
+}
+
+impl<'a> AttachBits<'a> {
+    /// Read `ceil(runs / 4)` bytes, addressing `runs` runs.
+    ///
+    /// The count is the stream's own `run_count`, so the non-canonical
+    /// `run_count == 0` form reads no bits and its walk asks for none.
+    fn read(reader: &mut Reader<'a>, runs: u64) -> Result<AttachBits<'a>> {
+        Ok(AttachBits {
+            bytes: reader.bytes(runs.div_ceil(4) as usize)?,
+        })
+    }
+
+    /// Whether the stream carries no bits at all, which only the non-canonical
+    /// `run_count == 0` form does.
+    fn is_empty(&self) -> bool {
+        self.bytes.is_empty()
+    }
+
+    /// Bit `end` of run `index`: 0 is the run's first pixel, 1 its last.
+    ///
+    /// A caller walks runs the array addresses, so the byte is always there.
+    #[inline]
+    fn get(&self, index: u64, end: u64) -> bool {
+        self.bytes[(index / 4) as usize] & (1 << ((index % 4) * 2 + end)) != 0
+    }
+
+    /// Whether the bits past the last run are clear. They address no run, so a
+    /// stream that sets them carries something the encoder did not mean.
+    fn padding_clear(&self, runs: u64) -> bool {
+        match runs % 4 {
+            0 => true,
+            used => {
+                let last = self.bytes[(runs / 4) as usize];
+                last & (!0u8 << (used * 2)) == 0
+            }
+        }
+    }
+}
+
+/// An attached stream's overlay values, in the order its pixels are placed.
+///
+/// The first is stored as it is; every later one is the previous value plus a
+/// zigzagged difference. A band's coverage ramp is therefore a handful of small
+/// numbers rather than eight bits of unrelated magnitude per pixel.
+struct AttachValues<'a> {
+    planes: Planes<'a>,
+    /// How many values have been handed out.
+    index: u64,
+    previous: u8,
+}
+
+impl<'a> AttachValues<'a> {
+    fn read(reader: &mut Reader<'a>, strict: bool) -> Result<AttachValues<'a>> {
+        Ok(AttachValues {
+            planes: Planes::read(reader, strict)?,
+            index: 0,
+            previous: 0,
+        })
+    }
+
+    /// The next value, which the stream's own count says is there.
+    ///
+    /// Asking past the count is how a stream whose bits and escapes describe more
+    /// pixels than it stores values reports itself.
+    fn next_within(&mut self, count: u64) -> Result<u8> {
+        if self.index == count {
+            return Err(Error::new(
+                Check::ReeAttachCount,
+                format!(
+                    "the attachment bits and escapes describe more overlay pixels than the {count}                      the stream stores values for"
+                ),
+            ));
+        }
+        let stored = self.planes.varint()?;
+        let value = if self.index == 0 {
+            // The first value is stored as it is: there is nothing before it to be
+            // a difference from.
+            u8::try_from(stored).map_err(|_| {
+                Error::new(
+                    Check::ReeAttachCount,
+                    format!("attached REE overlay value {stored} is not a byte"),
+                )
+            })?
+        } else {
+            let sum = i64::from(self.previous) + unzigzag(stored);
+            u8::try_from(sum).map_err(|_| {
+                Error::new(
+                    Check::ReeAttachCount,
+                    format!("attached REE overlay value {sum} is not a byte"),
+                )
+            })?
+        };
+        self.index += 1;
+        self.previous = value;
+        Ok(value)
+    }
+}
+
+/// The strict rule that an overlay pixel is a real anti-aliasing pixel: neither
+/// `0x00` nor `0xFF`, and on the side of the threshold its core run is on.
+///
+/// The two halves are one statement about the decoded mask - its thresholded form
+/// is the core the stream carries - seen from the value side: a `0x00` over a
+/// `0xFF` run breaks it, and so does a `0x40` over a `0xFF` run.
+fn check_attached_value(value: u8, core_value: u8, position: u64) -> Result<()> {
+    if value == 0x00 || value == 0xFF || threshold(value) != core_value {
+        return Err(Error::new(
+            Check::ReeAttachThreshold,
+            format!(
+                "attached REE overlay pixel {position} holds 0x{value:02X} over binary                  0x{core_value:02X}"
+            ),
+        ));
+    }
+    Ok(())
+}
+
+/// Attached split REE (tag `0x03`, section 5.6): a thresholded core whose run
+/// lengths are split by parity and self-delta coded, then the overlay the core's
+/// run boundaries imply.
+fn read_attached(
+    mut sink: Sink<'_>,
+    reader: &mut Reader<'_>,
+    total_pixels: u32,
+    strict: bool,
+) -> Result<()> {
+    let total = u64::from(total_pixels);
+    let declared_value = reader.u8()?;
+    if declared_value != 0x00 && declared_value != 0xFF {
+        return Err(Error::new(
+            Check::ReeFirstValue,
+            format!("attached REE first_value is 0x{declared_value:02X}, not 0x00 or 0xFF"),
+        ));
+    }
+    let run_count = read_run_count(reader, total)?;
+    if run_count == 0 && strict {
+        return Err(Error::new(
+            Check::ReeNoRunCountZero,
+            "attached REE uses the non-canonical run_count == 0 form",
+        ));
+    }
+    // A loose read of the non-canonical form is one black run over the whole
+    // layer, exactly as tag 0x00 reads it; the overlay fields that follow then
+    // describe pixels over a core that is black everywhere.
+    let first_value = if run_count == 0 { 0x00 } else { declared_value };
+    let mut runs = Runs::new(
+        LengthSource::Parity(Parity::read(reader, strict)?),
+        run_count.max(1),
+        total,
+        "attached REE",
+    );
+
+    let aa_count = reader.varint()?;
+    let bound = total + 1;
+    if aa_count > bound {
+        return Err(Error::new(
+            Check::ReeAttachCount,
+            format!("aa_pixel_count {aa_count} exceeds total_pixels + 1 ({bound})"),
+        ));
+    }
+    let bits = AttachBits::read(reader, run_count)?;
+    let escape_count = reader.varint()?;
+    if escape_count > aa_count {
+        return Err(Error::new(
+            Check::ReeAttachCount,
+            format!("escape_count {escape_count} exceeds aa_pixel_count {aa_count}"),
+        ));
+    }
+    let mut escapes = Planes::read(reader, strict)?;
+    let mut values = AttachValues::read(reader, strict)?;
+
+    // One walk places every overlay pixel and writes every core pixel: the run's
+    // first pixel when its first bit claims it, then the escapes strictly inside
+    // it in ascending order, then its last pixel when its second bit claims it -
+    // which is the order the value array is stored in.
+    let mut placed = 0u64;
+    let mut previous_escape = 0u64;
+    let mut escape_index = 0u64;
+    let mut pending: Option<u64> = None;
+
+    while let Some(index) = runs.step()? {
+        let (start, end) = runs.range();
+        let core_value = if index % 2 == 0 {
+            first_value
+        } else {
+            255 - first_value
+        };
+        sink.fill(start, end, core_value)?;
+
+        // A run a loose read stepped into can hold no pixel - a stored length of 0
+        // is legal until a strict reader refuses it - and a bit that claims such a
+        // run's first or last pixel names a pixel that does not exist. It places
+        // nothing, which is also why the pixels the bits describe stop matching
+        // `aa_pixel_count`.
+        let empty = start == end;
+        if !empty && !bits.is_empty() && bits.get(index, 0) {
+            let value = values.next_within(aa_count)?;
+            if strict {
+                check_attached_value(value, core_value, start)?;
+            }
+            sink.set(start, value)?;
+            placed += 1;
+        }
+
+        loop {
+            let position = match pending {
+                Some(position) => position,
+                None => {
+                    if escape_index == escape_count {
+                        break;
+                    }
+                    let delta = escapes.varint()?;
+                    if escape_index > 0 && delta == 0 {
+                        return Err(Error::new(
+                            Check::ReeAttachPositions,
+                            format!("attached REE escape {escape_index} repeats its predecessor"),
+                        ));
+                    }
+                    let position = previous_escape.checked_add(delta).ok_or_else(|| {
+                        Error::new(
+                            Check::ReeAttachPositions,
+                            "attached REE escape positions overflow",
+                        )
+                    })?;
+                    if position >= total {
+                        return Err(Error::new(
+                            Check::ReeAttachPositions,
+                            format!(
+                                "attached REE escape {position} is not below total_pixels {total}"
+                            ),
+                        ));
+                    }
+                    previous_escape = position;
+                    escape_index += 1;
+                    pending = Some(position);
+                    continue;
+                }
+            };
+            if position >= end {
+                break;
+            }
+            if position == start || position + 1 == end {
+                return Err(Error::new(
+                    Check::ReeAttachPositions,
+                    format!(
+                        "attached REE escape {position} is not strictly inside the core run                          [{start}, {end}) it attaches to"
+                    ),
+                ));
+            }
+            let value = values.next_within(aa_count)?;
+            if strict {
+                check_attached_value(value, core_value, position)?;
+            }
+            sink.set(position, value)?;
+            placed += 1;
+            pending = None;
+        }
+
+        if !empty && !bits.is_empty() && bits.get(index, 1) {
+            if strict && end - start == 1 {
+                return Err(Error::new(
+                    Check::ReeAttachBits,
+                    format!("attached REE run {index} holds one pixel and sets both of its bits"),
+                ));
+            }
+            // A one-pixel run with both bits set places the same pixel twice in a
+            // loose read - the second bit names the pixel the first one did - so a
+            // stream that counts the duplicate still balances.
+            let value = values.next_within(aa_count)?;
+            if strict {
+                check_attached_value(value, core_value, end - 1)?;
+            }
+            sink.set(end - 1, value)?;
+            placed += 1;
+        }
+    }
+
+    if let Some(position) = pending {
+        return Err(Error::new(
+            Check::ReeAttachPositions,
+            format!("attached REE escape {position} sits past the last core run"),
+        ));
+    }
+    if placed != aa_count {
+        return Err(Error::new(
+            Check::ReeAttachCount,
+            format!(
+                "the attachment bits and escapes describe {placed} overlay pixels,                  aa_pixel_count says {aa_count}"
+            ),
+        ));
+    }
+    if strict {
+        if runs.empty_run() {
+            return Err(Error::new(
+                Check::ReeRunLengths,
+                "attached REE stores an empty run",
+            ));
+        }
+        runs.check_consumed()?;
+        escapes.check_consumed()?;
+        values.planes.check_consumed()?;
+        if !bits.padding_clear(run_count) {
+            return Err(Error::new(
+                Check::ReeAttachBits,
+                "attached REE sets attachment bits past the last run",
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Reject a mask whose length is not the layer's pixel count.
@@ -1165,6 +1615,269 @@ fn write_split_stream(writer: &mut Writer, source: RunSource<'_>) -> Result<()> 
     )
 }
 
+/// Whether a pixel value is an overlay value: neither `0x00` nor `0xFF`.
+#[inline]
+fn is_aa(value: u8) -> bool {
+    value != 0x00 && value != 0xFF
+}
+
+/// The values an attached length array stores, replayed.
+///
+/// The array holds every core run's length but the last, split by parity: a
+/// parity's first entry is a length and every later one is the zigzag of its
+/// difference from the entry two runs earlier. Sizing the planes and writing each
+/// of them walk the same runs and derive the same sequence, so nothing is held
+/// between those walks.
+struct StoredLengths {
+    /// The last length each parity produced.
+    last: [u64; 2],
+    index: u64,
+}
+
+impl StoredLengths {
+    fn new() -> StoredLengths {
+        StoredLengths {
+            last: [0; 2],
+            index: 0,
+        }
+    }
+
+    /// The value the array stores for the next length, and which parity's array
+    /// it belongs to.
+    fn next(&mut self, length: u64) -> (u64, usize) {
+        let parity = (self.index % 2) as usize;
+        let value = if self.index < 2 {
+            length
+        } else {
+            zigzag(length as i64 - self.last[parity] as i64)
+        };
+        self.last[parity] = length;
+        self.index += 1;
+        (value, parity)
+    }
+}
+
+/// Walk the overlay structure of an attached stream over the layer's runs.
+///
+/// `run` sees every core run in order, with whether its first and its last pixel
+/// carry an overlay pixel; `escape` sees every overlay pixel no bit covers, with
+/// its position and its delta from the previous escape. Both are called in the
+/// order the stream stores them, and nothing is kept between walks, so a stream is
+/// sized by walking it once and written by walking it again per plane.
+///
+/// The core run being built closes when a run maps to the other binary value, and
+/// its last pixel is the overlay pixel still pending at that moment - which is why
+/// the pixel is held back rather than emitted: only the close says whether it is
+/// the run's end or a pixel strictly inside it.
+fn walk_overlay(
+    source: RunSource<'_>,
+    mut run: impl FnMut(u64, bool, bool) -> Result<()>,
+    mut escape: impl FnMut(u64, u64) -> Result<()>,
+) -> Result<()> {
+    let mut index = 0u64;
+    let mut at = 0u64;
+    let mut start = 0u64;
+    let mut mapped: Option<u8> = None;
+    let mut first_aa = false;
+    let mut pending: Option<u64> = None;
+    let mut previous_escape = 0u64;
+
+    source.walk(
+        |value| value,
+        |length, value| {
+            let binary = threshold(value);
+            if mapped != Some(binary) {
+                if mapped.is_some() {
+                    run(index, first_aa, pending.is_some())?;
+                    index += 1;
+                }
+                mapped = Some(binary);
+                start = at;
+                first_aa = is_aa(value);
+                pending = None;
+            }
+            if is_aa(value) {
+                for position in at..at + length {
+                    if position == start && first_aa {
+                        // The run's first bit covers it.
+                        continue;
+                    }
+                    if let Some(previous) = pending.take() {
+                        escape(previous, previous - previous_escape)?;
+                        previous_escape = previous;
+                    }
+                    pending = Some(position);
+                }
+            } else if let Some(previous) = pending.take() {
+                // A binary pixel follows inside the same core run, so the overlay
+                // pixel before it is strictly inside the run and needs an escape.
+                escape(previous, previous - previous_escape)?;
+                previous_escape = previous;
+            }
+            at += length;
+            Ok(())
+        },
+    )?;
+    if mapped.is_some() {
+        run(index, first_aa, pending.is_some())?;
+    }
+    Ok(())
+}
+
+/// Write the tagless attached stream of section 5.6 for `source`: the thresholded
+/// core with its lengths split by parity and self-delta coded, then the overlay
+/// the core's run boundaries imply.
+fn write_attached_stream(writer: &mut Writer, source: RunSource<'_>) -> Result<()> {
+    // One walk over the thresholded core sizes the length arrays and fixes the
+    // core's run count and first value. Every run but the last is stored, and a
+    // run is only known not to be the last once another one arrives.
+    let mut first_value: Option<u8> = None;
+    let mut run_count = 0u64;
+    let mut pending: Option<u64> = None;
+    let mut stored = StoredLengths::new();
+    let mut sizes = [PlaneSizes::default(); 2];
+    let mut last: Option<u8> = None;
+    source.walk(threshold, |length, value| {
+        match last {
+            None => {
+                if value != 0x00 && value != 0xFF {
+                    return Err(Error::new(
+                        Check::ReeFirstValue,
+                        format!("attached REE first_value is 0x{value:02X}, not 0x00 or 0xFF"),
+                    ));
+                }
+                first_value = Some(value);
+            }
+            Some(previous) if value != 255 - previous => {
+                return Err(Error::new(
+                    Check::ReeFirstValue,
+                    format!("attached REE cannot hold pixel 0x{value:02X}"),
+                ));
+            }
+            Some(_) => {}
+        }
+        last = Some(value);
+        if let Some(previous) = pending.replace(length) {
+            let (value, parity) = stored.next(previous);
+            sizes[parity].add(value);
+        }
+        run_count += 1;
+        Ok(())
+    })?;
+    let Some(first_value) = first_value else {
+        return Err(Error::new(
+            Check::ReeDataSize,
+            "an attached stream needs at least one pixel",
+        ));
+    };
+
+    // A second walk sizes the attachment bits, the escapes and the values. The
+    // bits are the one thing this stream has to hold: they are written as a byte
+    // array, and a run's second bit is only known when the run closes.
+    let mut bits: Vec<u8> = Vec::new();
+    let mut escape_sizes = PlaneSizes::default();
+    let mut escape_count = 0u64;
+    let mut value_sizes = PlaneSizes::default();
+    let mut value_count = 0u64;
+    let mut previous_value = 0u8;
+    walk_overlay(
+        source,
+        |index, first, last| {
+            let byte = (index / 4) as usize;
+            if bits.len() <= byte {
+                bits.resize(byte + 1, 0);
+            }
+            if first {
+                bits[byte] |= 1 << ((index % 4) * 2);
+            }
+            if last {
+                bits[byte] |= 2 << ((index % 4) * 2);
+            }
+            Ok(())
+        },
+        |_, delta| {
+            escape_sizes.add(delta);
+            escape_count += 1;
+            Ok(())
+        },
+    )?;
+    source.walk(
+        |value| value,
+        |length, value| {
+            if is_aa(value) {
+                for _ in 0..length {
+                    let stored = if value_count == 0 {
+                        u64::from(value)
+                    } else {
+                        zigzag(i64::from(value) - i64::from(previous_value))
+                    };
+                    value_sizes.add(stored);
+                    value_count += 1;
+                    previous_value = value;
+                }
+            }
+            Ok(())
+        },
+    )?;
+    bits.resize(run_count.div_ceil(4) as usize, 0);
+
+    // Then write it: the core's header, the two parity arrays plane by plane, the
+    // bits, the escapes, and the values.
+    writer.u8(first_value);
+    writer.varint(run_count);
+    for (parity, size) in sizes.iter().enumerate() {
+        size.write(writer);
+        for plane in 0..PLANES {
+            let mut replay = StoredLengths::new();
+            let mut pending: Option<u64> = None;
+            source.walk(threshold, |length, _| {
+                if let Some(previous) = pending.replace(length) {
+                    let (value, at) = replay.next(previous);
+                    if at == parity {
+                        write_plane_byte(writer, value, plane)?;
+                    }
+                }
+                Ok(())
+            })?;
+        }
+    }
+    writer.varint(value_count);
+    writer.bytes(&bits);
+    writer.varint(escape_count);
+    escape_sizes.write(writer);
+    for plane in 0..PLANES {
+        walk_overlay(
+            source,
+            |_, _, _| Ok(()),
+            |_, delta| write_plane_byte(writer, delta, plane),
+        )?;
+    }
+    value_sizes.write(writer);
+    for plane in 0..PLANES {
+        let mut index = 0u64;
+        let mut previous = 0u8;
+        source.walk(
+            |value| value,
+            |length, value| {
+                if is_aa(value) {
+                    for _ in 0..length {
+                        let stored = if index == 0 {
+                            u64::from(value)
+                        } else {
+                            zigzag(i64::from(value) - i64::from(previous))
+                        };
+                        write_plane_byte(writer, stored, plane)?;
+                        index += 1;
+                        previous = value;
+                    }
+                }
+                Ok(())
+            },
+        )?;
+    }
+    Ok(())
+}
+
 /// Encode a layer mask, choosing the tag per `mode`.
 ///
 /// Returns `None` for an all-black layer, which is stored as the empty-layer
@@ -1212,11 +1925,12 @@ fn encode_source(source: RunSource<'_>, mode: EncodeMode) -> Result<Option<(u8, 
         EncodeMode::Binary => (TAG_BINARY, encode_binary_source(source)?),
         EncodeMode::Grayscale => (TAG_GRAYSCALE, encode_grayscale_source(source)?),
         EncodeMode::Split => (TAG_SPLIT, encode_split_source(source)?),
+        EncodeMode::Attached => (TAG_ATTACHED, encode_attached_source(source)?),
         EncodeMode::Auto => {
             if source.is_binary() {
                 (TAG_BINARY, encode_binary_source(source)?)
             } else {
-                // Section 5.6: the encoder picks the smaller of the two, and a
+                // Section 5.7: the encoder picks the smaller of the two, and a
                 // tie goes to grayscale.
                 let grayscale = encode_grayscale_source(source)?;
                 let split = encode_split_source(source)?;
@@ -1276,10 +1990,25 @@ fn encode_split_source(source: RunSource<'_>) -> Result<Vec<u8>> {
     Ok(writer.into_vec())
 }
 
+/// Encode with tag `0x03`; the returned bytes include the tag.
+pub fn encode_attached(pixels: &[u8], total_pixels: u32) -> Result<Vec<u8>> {
+    check_mask(pixels, total_pixels)?;
+    require_pixels(pixels)?;
+    encode_attached_source(RunSource::Pixels(pixels))
+}
+
+/// Tag `0x03` for a source already known to hold at least one pixel.
+fn encode_attached_source(source: RunSource<'_>) -> Result<Vec<u8>> {
+    let mut writer = Writer::new();
+    writer.u8(TAG_ATTACHED);
+    write_attached_stream(&mut writer, source)?;
+    Ok(writer.into_vec())
+}
+
 /// Check a stream against the canonical rules and report the bytes it used.
 ///
 /// `data` is the same one-byte tag plus stream that [`decode`] takes - the
-/// canonical rules of section 5.6 depend on the tag - and no mask is built: the
+/// canonical rules of section 5.7 depend on the tag - and no mask is built: the
 /// walk reads the same bytes under the same rules with a sink that keeps
 /// nothing, which is what takes a 16K layer's validation from the 94 MB a slice
 /// decodes to down to the stream itself. The returned length is the stream's
@@ -1376,11 +2105,12 @@ mod tests {
     }
 
     /// Every encoding, so a mismatch in any of them is caught.
-    const MODES: [EncodeMode; 4] = [
+    const MODES: [EncodeMode; 5] = [
         EncodeMode::Auto,
         EncodeMode::Binary,
         EncodeMode::Grayscale,
         EncodeMode::Split,
+        EncodeMode::Attached,
     ];
 
     /// One corpus stream: the hex it is stored as, its mask as `(value, length)`
@@ -1637,13 +2367,349 @@ mod tests {
         );
     }
 
+    /// A mask whose overlay pixels sit in all three places an attached stream can
+    /// put one: the first pixel of a core run, the last pixel of one, and a pixel
+    /// strictly inside a longer run, which only an escape can describe.
+    fn attached_mask() -> Vec<u8> {
+        mask(&[
+            (0x00, 2), // core run 0: black, no overlay
+            (0x80, 1), // core run 1 starts here: the run's first bit
+            (0xFF, 2),
+            (0x40, 1), // core run 2 is this one pixel: its first bit, not its last
+            (0xFF, 2), //             (0x70, 1),   //  | core run 3: an escape inside it
+            (0x90, 1), //  | and its last pixel
+            (0x00, 2),
+            (0x10, 1), // core run 4 ends on its last pixel
+            (0x00, 1),
+        ])
+    }
+
+    #[test]
+    fn attached_round_trips_every_placement() {
+        let pixels = attached_mask();
+        let total = pixels.len() as u32;
+        let (tag, data) = encode(&pixels, total, EncodeMode::Attached)
+            .unwrap()
+            .expect("a mask with overlay pixels has a stream");
+        assert_eq!(tag, TAG_ATTACHED);
+        assert_eq!(decode(&data, total, true).unwrap().pixels, pixels);
+        assert_eq!(
+            validate_stream(&data, total, true),
+            Ok(data.len()),
+            "the stream must use exactly its bytes"
+        );
+        // The run path is the same stream without ever building the mask.
+        assert_eq!(
+            encode_runs(&runs_of(&pixels), total, EncodeMode::Attached),
+            Ok(Some((TAG_ATTACHED, data)))
+        );
+    }
+
+    #[test]
+    fn attached_pins_the_smallest_overlay_stream() {
+        // [0x00, 0x80, 0x40, 0xFF]: four core runs of one pixel each, so the two
+        // overlay pixels are each their run's first pixel; the stored lengths are
+        // the first three runs, split by parity, with run 2's entry a difference
+        // from run 0's.
+        let data: Vec<u8> = vec![
+            TAG_ATTACHED,
+            0x00, // first_value
+            0x04, // run_count
+            0x02,
+            0x00,
+            0x00,
+            0x00,
+            0x01,
+            0x00, // even lengths PLANES(2) = [1, 0]
+            0x01,
+            0x00,
+            0x00,
+            0x00,
+            0x01, // odd lengths PLANES(1) = [1]
+            0x02, // aa_pixel_count
+            0x14, // attachment bits: run 1's first pixel, run 2's first pixel
+            0x00, // escape_count
+            0x00,
+            0x00,
+            0x00,
+            0x00, // escapes PLANES(0)
+            0x02,
+            0x01,
+            0x00,
+            0x00,
+            0x80,
+            0x7F,
+            0x01, // values PLANES(2)
+        ];
+        let pixels = vec![0x00, 0x80, 0x40, 0xFF];
+        assert_eq!(decode(&data, 4, true).unwrap().pixels, pixels);
+        assert_eq!(
+            encode(&pixels, 4, EncodeMode::Attached).unwrap(),
+            Some((TAG_ATTACHED, data.clone()))
+        );
+        assert_eq!(validate_stream(&data, 4, true), Ok(data.len()));
+    }
+
+    #[test]
+    fn attached_accepts_an_all_binary_layer() {
+        // No overlay pixels at all: the form degenerates to the parity-split,
+        // self-delta coded core, and section 5.7 allows it for a binary layer.
+        let pixels = mask(&[(0x00, 5), (0xFF, 7), (0x00, 3)]);
+        let (tag, data) = encode(&pixels, 15, EncodeMode::Attached).unwrap().unwrap();
+        assert_eq!(tag, TAG_ATTACHED);
+        assert_eq!(
+            decode(&data, 15, true).unwrap().pixels,
+            pixels,
+            "strict mode accepts it: unlike split, an empty overlay is not a defect here"
+        );
+        // And it is smaller than the plain binary stream once it is compressed is
+        // not something this test can ask, but it must at least be decodable.
+        assert_eq!(
+            encode(&pixels, 15, EncodeMode::Binary).unwrap().unwrap().0,
+            TAG_BINARY
+        );
+    }
+
+    #[test]
+    fn attached_rejects_broken_overlays() {
+        // The smallest form above, with one field broken at a time.
+        let base: Vec<u8> = vec![
+            TAG_ATTACHED,
+            0x00,
+            0x04,
+            0x02,
+            0x00,
+            0x00,
+            0x00,
+            0x01,
+            0x00,
+            0x01,
+            0x00,
+            0x00,
+            0x00,
+            0x01,
+            0x02,
+            0x14,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x02,
+            0x01,
+            0x00,
+            0x00,
+            0x80,
+            0x7F,
+            0x01,
+        ];
+        assert_eq!(
+            decode(&base, 4, true).unwrap().pixels,
+            vec![0, 0x80, 0x40, 0xFF]
+        );
+
+        // A run of one pixel that claims both of its ends: run 1 is one pixel, so
+        // its two bits name the same pixel and the count carries it twice. Strict
+        // refuses the shape; a loose read places the pixel twice and balances.
+        let both_ends: Vec<u8> = vec![
+            TAG_ATTACHED,
+            0x00,
+            0x04,
+            0x02,
+            0x00,
+            0x00,
+            0x00,
+            0x01,
+            0x00,
+            0x01,
+            0x00,
+            0x00,
+            0x00,
+            0x01,
+            0x03, // aa_pixel_count: run 1's two bits are two entries
+            0x1c, // attachment bits: run 1's first and last pixel, run 2's first
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00, // no escapes
+            0x03,
+            0x01,
+            0x00,
+            0x00,
+            0x80,
+            0x7F,
+            0x00, // three values
+            0x01,
+        ];
+        assert_eq!(check_of(&both_ends, 4, true), Check::ReeAttachBits);
+        assert_eq!(
+            decode(&both_ends, 4, false).unwrap().pixels,
+            vec![0x00, 0x40, 0x40, 0xFF],
+            "the second bit's value is the one the pixel ends up with"
+        );
+
+        // An overlay value that is a binary value: the core would no longer be the
+        // mask's thresholded form.
+        let mut binary_value = base.clone();
+        // Both stored values, because the second is a delta from the first.
+        binary_value[25] = 0x00;
+        binary_value[26] = 0x00;
+        assert_eq!(check_of(&binary_value, 4, true), Check::ReeAttachThreshold);
+        assert!(decode(&binary_value, 4, false).is_ok());
+
+        // An overlay value on the wrong side of the threshold.
+        let mut wrong_side = base.clone();
+        wrong_side[25] = 0x40;
+        assert_eq!(check_of(&wrong_side, 4, true), Check::ReeAttachThreshold);
+
+        // An escape that sits on the first pixel of its run: a bit describes that
+        // pixel, so it is not strictly inside the run.
+        let mut not_inside = vec![
+            TAG_ATTACHED,
+            0x00,
+            0x04,
+            0x02,
+            0x00,
+            0x00,
+            0x00,
+            0x01,
+            0x00,
+            0x01,
+            0x00,
+            0x00,
+            0x00,
+            0x01,
+            0x02,
+            0x14,
+            0x01, // one escape
+            0x01,
+            0x00,
+            0x00,
+            0x00,
+            0x01, // at position 1, run 1's first pixel
+            0x02,
+            0x01,
+            0x00,
+            0x00,
+            0x80,
+            0x7F,
+            0x01,
+        ];
+        assert_eq!(check_of(&not_inside, 4, false), Check::ReeAttachPositions);
+        assert_eq!(check_of(&not_inside, 4, true), Check::ReeAttachPositions);
+
+        // The same escape moved to a position past the layer is the other half of
+        // the rule.
+        not_inside[21] = 0x09; // 9, past total_pixels 4
+        assert_eq!(check_of(&not_inside, 4, false), Check::ReeAttachPositions);
+
+        // A count that disagrees with the bits and escapes: one more pixel than
+        // the stream stores values for.
+        let mut short_values = base.clone();
+        short_values[14] = 0x03;
+        assert_eq!(check_of(&short_values, 4, false), Check::ReeAttachCount);
+
+        // One fewer: a value the walk never spends.
+        let mut long_values = base.clone();
+        long_values[14] = 0x01;
+        assert_eq!(check_of(&long_values, 4, false), Check::ReeAttachCount);
+    }
+
+    #[test]
+    fn attached_ignores_a_bit_on_an_empty_run() {
+        // run_count 2 with one stored length of 3: run 1 is the implicit final run
+        // and covers nothing, and its first bit claims a pixel that is not there.
+        // A loose read steps into that run - a stored length of 0 is legal until a
+        // strict reader refuses it - and reading its end must not be reading the
+        // mask's last pixel plus one.
+        let data: Vec<u8> = vec![
+            TAG_ATTACHED,
+            0x00,
+            0x02, // first_value, run_count
+            0x01,
+            0x00,
+            0x00,
+            0x00,
+            0x03, // even lengths PLANES(1) = [3]
+            0x00,
+            0x00,
+            0x00,
+            0x00, // odd lengths PLANES(0)
+            0x01, // aa_pixel_count
+            0x04, // run 1's first bit
+            0x00, // escape_count
+            0x00,
+            0x00,
+            0x00,
+            0x00, // escapes PLANES(0)
+            0x01,
+            0x00,
+            0x00,
+            0x00,
+            0x40, // values PLANES(1) = [0x40]
+        ];
+        // The bit places nothing, so the pixels the bits describe no longer match
+        // the stream's own count - in either mode, because the count is checked
+        // before the canonical rules that would refuse the empty run.
+        assert_eq!(check_of(&data, 3, false), Check::ReeAttachCount);
+        assert_eq!(check_of(&data, 3, true), Check::ReeAttachCount);
+    }
+
+    #[test]
+    fn attached_padding_bits_are_strict_only() {
+        // A one-run core: the attachment bits are one byte, and only its first two
+        // bits address a run.
+        let pixels = mask(&[(0xFF, 4)]);
+        let (_, data) = encode(&pixels, 4, EncodeMode::Attached).unwrap().unwrap();
+        let mut padded = data.clone();
+        let last = padded.len() - 1 - 4 - 4 - 1; // the bits byte sits before escape_count
+        padded[last] = 0x04;
+        assert_eq!(check_of(&padded, 4, true), Check::ReeAttachBits);
+        assert!(decode(&padded, 4, false).is_ok());
+    }
+
+    #[test]
+    fn attached_run_count_zero_is_loose_only() {
+        // first_value 0x00, run_count 0, no overlay: one black run over the whole
+        // layer, as tag 0x00's non-canonical form reads. The fixed fields still
+        // follow - two empty length arrays, a count, no bits, no escapes, no
+        // values - because a stream's layout does not depend on its counts.
+        let data: Vec<u8> = vec![
+            TAG_ATTACHED,
+            0x00,
+            0x00, // first_value, run_count
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00, // both length arrays
+            0x00, // aa_pixel_count
+            0x00, // escape_count
+            0x00,
+            0x00,
+            0x00,
+            0x00, // escapes PLANES(0)
+            0x00,
+            0x00,
+            0x00,
+            0x00, // values PLANES(0)
+        ];
+        assert_eq!(decode(&data, 4, false).unwrap().pixels, vec![0u8; 4]);
+        assert_eq!(check_of(&data, 4, true), Check::ReeNoRunCountZero);
+    }
+
     #[test]
     fn unknown_or_missing_tags_are_rejected() {
         assert_eq!(check_of(&[], 4, false), Check::ReeTag);
-        assert_eq!(check_of(&[0x03, 0x00], 4, false), Check::ReeTag);
+        assert_eq!(check_of(&[0x04, 0x00], 4, false), Check::ReeTag);
         assert_eq!(check_of(&[0xFF, 0x00], 4, true), Check::ReeTag);
         assert_eq!(check_of(&[TAG_BINARY], 4, false), Check::ReeVarint);
         assert_eq!(check_of(&[TAG_GRAYSCALE], 4, false), Check::ReeVarint);
+        assert_eq!(check_of(&[TAG_ATTACHED], 4, false), Check::ReeVarint);
         assert_eq!(
             check_of(&[TAG_SPLIT, TAG_BINARY, 0x01], 4, false),
             Check::ReeVarint
@@ -1926,7 +2992,7 @@ mod tests {
         );
 
         // An empty overlay over a thresholded core: the slice is all-0x00/0xFF,
-        // so section 5.6 requires tag 0x00 and a strict read refuses the split
+        // so section 5.7 requires tag 0x00 and a strict read refuses the split
         // form. A loose read accepts it, and it still round-trips: the encoder
         // writes what the caller asked for, as it does for a grayscale stream
         // over a binary mask.
@@ -2095,7 +3161,7 @@ mod tests {
         assert_eq!(decode(&split, 7, true).unwrap().pixels, vec![0x80u8; 7]);
 
         // The same core with an empty overlay is the shape a strict read refuses
-        // (section 5.6's tag choice), but a loose read still consumes both four
+        // (section 5.7's tag choice), but a loose read still consumes both four
         // zero plane headers rather than leaving them behind.
         let split = [
             TAG_SPLIT, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -2107,7 +3173,7 @@ mod tests {
 
     #[test]
     fn a_split_over_an_all_binary_mask_is_strict_only() {
-        // Section 5.6's tag choice, enforced for tag 0x02 as it is for tag 0x01:
+        // Section 5.7's tag choice, enforced for tag 0x02 as it is for tag 0x01:
         // an all-0x00/0xFF slice has no anti-aliasing to overlay, so a strict
         // read refuses the split form and a loose read accepts it. The stream is
         // the canonical shape of an empty overlay: PLANES(0) for its positions.

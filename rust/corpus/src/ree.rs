@@ -1,17 +1,20 @@
-//! The three run-length encodings of §5, and the violations each can carry.
+//! The four run-length encodings of §5, and the violations each can carry.
 //!
 //! A decoder either produces a mask plus the list of violations it found, or
 //! fails outright - and the two are different verdicts. A violation is reported
 //! under its own check name; a failure means the stream could not be read at
 //! all, and names the rule the stream ran out against - `ree.data_size` when
 //! the slice was too short, `ree.varint` when a varint is not well formed,
-//! `ree.end_positions` or `ree.split_positions` when a position it decoded
-//! lands outside the layer. Keeping the two apart is what lets the corpus
-//! assert that one specific rule was broken rather than that the layer merely
-//! failed to decode.
+//! `ree.end_positions`, `ree.split_positions` or `ree.attach_positions` when a
+//! position it decoded lands outside the layer, and `ree.attach_count` when the
+//! attached form's overlay describes a number of pixels other than the one it
+//! declares, or a value no mask byte can carry. Keeping the two apart is what
+//! lets the corpus assert that one specific rule was broken rather than that
+//! the layer merely failed to decode.
 //!
 //! Every stored varint array - binary and grayscale run lengths, split overlay
-//! positions - is written as significance planes (§5.3.1) rather than as
+//! positions, and the attached form's parity-split core lengths, escapes and
+//! overlay values - is written as significance planes (§5.3.1) rather than as
 //! interleaved varints: four plane lengths, then the planes. See [`Planes`] for
 //! the walk and [`read_planes`] for the framing.
 //!
@@ -83,6 +86,28 @@ const PLANES_MISSING: DecodeError = DecodeError {
 const PLANES_PAST_END: DecodeError = DecodeError {
     name: "ree.data_size",
     message: "a plane runs past the end of the slice",
+};
+/// The slice ends inside the attachment bits the attached form starts its
+/// overlay with. They are written for the run count the stream declares - one
+/// byte per four runs - so a stream that stops before them is short of the
+/// bytes it says it has.
+const ATTACH_BITS_SHORT: DecodeError = DecodeError {
+    name: "ree.data_size",
+    message: "the slice ends inside the attachment bits",
+};
+/// `aa_pixel_count` disagrees with the pixels the attachment bits and the
+/// escapes describe: a pixel is named twice over, or a value has no pixel to
+/// attach to.
+const ATTACH_COUNT: DecodeError = DecodeError {
+    name: "ree.attach_count",
+    message: "aa_pixel_count disagrees with the attachment bits and escapes",
+};
+/// An overlay value the stream cannot express as a mask byte. The first entry of
+/// the value array is stored as it is and every later one is a step from the
+/// pixel before it, so either can leave `0..=255`.
+const NOT_A_BYTE: DecodeError = DecodeError {
+    name: "ree.attach_count",
+    message: "an overlay value is not a byte",
 };
 
 fn violation(code: &'static str, message: &'static str) -> Violation {
@@ -437,6 +462,301 @@ pub fn split(body: &[u8], total: usize) -> Result<(Vec<u8>, usize, Vec<Violation
         violations.push(violation(
             "ree.split_threshold",
             "overlay is not exactly the set of non-binary pixels",
+        ));
+    }
+    Ok((mask, pos, violations))
+}
+
+/// Unzigzag: the inverse of the map that stores a signed step as a varint the
+/// planes can carry - `0, -1, 1, -2` are stored as `0, 1, 2, 3` - so the sign of
+/// a step costs one bit rather than a whole byte, and a step towards either
+/// value stays cheap.
+fn unzigzag(value: u128) -> i128 {
+    let magnitude = (value >> 1) as i128;
+    if value & 1 == 0 {
+        magnitude
+    } else {
+        -magnitude - 1
+    }
+}
+
+/// Bit `index` of the packed attachment bits, least significant bit first, and
+/// zero past the end.
+///
+/// Two bits per core run are one byte per four runs, so only the last byte is
+/// partial. Reading past the end is what sizes the bits for the non-canonical
+/// `run_count == 0` form, whose core has one run and no bits at all.
+fn attach_bit(bits: &[u8], index: usize) -> bool {
+    bits.get(index >> 3)
+        .is_some_and(|byte| ((*byte >> (index & 7)) & 1) == 1)
+}
+
+/// Attached split REE (tag `0x03`): a thresholded binary core whose AA pixels
+/// are attached to the core's run boundaries (§5.6).
+///
+/// The core is binary REE with its stored lengths split by parity, and each of
+/// those a step from the length two runs back, so the two parities never mix and
+/// a run's length is a difference of like values rather than an absolute end
+/// position. The AA pixels of an edge are then the first and last pixel of the
+/// run their thresholded value lands in, which two bits per run express - a
+/// quarter of a byte a run instead of a delta-coded position each - and only the
+/// pixels strictly inside a run are listed by hand. The overlay's values are in
+/// pixel order and first differenced, so a band of similar coverage costs the
+/// step between its pixels rather than a byte each.
+///
+/// Returns the mask, the position just past the stream, and the violations.
+pub fn attached(
+    body: &[u8],
+    total: usize,
+) -> Result<(Vec<u8>, usize, Vec<Violation>), DecodeError> {
+    let mut violations = Vec::new();
+    let Some((&first_value, _)) = body.split_first() else {
+        return Err(SHORT_STREAM);
+    };
+    let mut pos = 1;
+    if first_value != 0x00 && first_value != 0xFF {
+        violations.push(violation(
+            "ree.first_value",
+            "first_value is neither 0x00 nor 0xFF",
+        ));
+    }
+
+    let (run_count, after) = read_varint(body, pos).map_err(DecodeError::varint)?;
+    pos = after;
+    if run_count == 0 {
+        violations.push(violation(
+            "ree.no_run_count_zero",
+            "run_count == 0 is not canonical",
+        ));
+    }
+
+    // Stored index j of the core's lengths is run j's own length for j < 2 and
+    // zigzag(length[j] - length[j-2]) beyond, and the two parities go to their
+    // own arrays - so a step is always measured against the run two back, which
+    // shares this run's parity.
+    let core = run_count.saturating_sub(1);
+    let (mut even_planes, after, plane_violations) = read_planes(body, pos)?;
+    pos = after;
+    violations.extend(plane_violations);
+    let even = read_array(&mut even_planes, core.div_ceil(2))?;
+    check_leftover(&even_planes, &mut violations);
+    let (mut odd_planes, after, plane_violations) = read_planes(body, pos)?;
+    pos = after;
+    violations.extend(plane_violations);
+    let odd = read_array(&mut odd_planes, core / 2)?;
+    check_leftover(&odd_planes, &mut violations);
+
+    let mut lengths: Vec<i128> = Vec::with_capacity(even.len() + odd.len());
+    for index in 0..even.len() + odd.len() {
+        let stored = if index % 2 == 0 {
+            even[index / 2]
+        } else {
+            odd[index / 2]
+        };
+        let length = if index < 2 {
+            i128::try_from(stored).unwrap_or(i128::MAX)
+        } else {
+            lengths[index - 2].saturating_add(unzigzag(stored))
+        };
+        lengths.push(length);
+    }
+    if lengths.iter().any(|&length| length < 1) {
+        violations.push(violation("ree.run_lengths", "a stored run length is < 1"));
+    }
+
+    // The core, run by run: run i carries first_value when i is even, and the
+    // last run reaches total_pixels with no length of its own.
+    let mut mask = vec![0u8; total];
+    let mut runs: Vec<(usize, usize, u8)> = Vec::with_capacity(lengths.len() + 1);
+    let mut value = first_value;
+    let mut start = 0u128;
+    for &length in &lengths {
+        // A length the stream declares as zero or less describes no pixels; the
+        // run is empty, and the value still alternates.
+        let end = start.saturating_add(u128::try_from(length.max(0)).unwrap_or(u128::MAX));
+        if end > total as u128 {
+            return Err(RUN_END_RANGE);
+        }
+        mask[start as usize..end as usize].fill(value);
+        runs.push((start as usize, end as usize, value));
+        value = 255 - value;
+        start = end;
+    }
+    if run_count > 0 {
+        // The implicit final run reaches the end of the layer.
+        if start > total as u128 {
+            return Err(RUN_END_RANGE);
+        }
+        mask[start as usize..].fill(value);
+        runs.push((start as usize, total, value));
+    }
+    if (total as u128) < start.saturating_add(1) {
+        violations.push(violation(
+            "ree.run_lengths",
+            "the implicit final run length is < 1",
+        ));
+    }
+
+    // The run count the attachment bits are sized by, taken before the run list
+    // grows its one entry for §5.3's non-canonical all-black form. That form
+    // declares no run at all, and the overlay which follows it sits over one
+    // black run covering the layer - a run no bit addresses.
+    let declared = runs.len();
+    if run_count == 0 {
+        runs.push((0, total, 0x00));
+    }
+
+    let (aa_pixel_count, after) = read_varint(body, pos).map_err(DecodeError::varint)?;
+    pos = after;
+
+    // Two bits per declared run - its first pixel, then its last - packed into
+    // ceil(K/4) bytes, least significant bit first. The bits past the last run
+    // are padding, and a set one addresses a run the stream does not have.
+    let bit_bytes = declared.div_ceil(4);
+    let bits_end = pos.checked_add(bit_bytes).ok_or(ATTACH_BITS_SHORT)?;
+    let bits = body.get(pos..bits_end).ok_or(ATTACH_BITS_SHORT)?;
+    pos = bits_end;
+    for index in declared * 2..bits.len() * 8 {
+        if attach_bit(bits, index) {
+            violations.push(violation(
+                "ree.attach_bits",
+                "an attachment bit addresses a run past run_count",
+            ));
+        }
+    }
+
+    let (escape_count, after) = read_varint(body, pos).map_err(DecodeError::varint)?;
+    pos = after;
+    let (mut escape_planes, after, plane_violations) = read_planes(body, pos)?;
+    pos = after;
+    violations.extend(plane_violations);
+    let escape_deltas = read_array(&mut escape_planes, escape_count)?;
+    check_leftover(&escape_planes, &mut violations);
+
+    // An escape is an AA pixel no attachment bit expresses: an absolute index,
+    // delta-coded, and strictly inside its core run - at its first or last pixel
+    // it would be a bit's business.
+    let mut positions: Vec<u128> = Vec::with_capacity(escape_deltas.len());
+    let mut position = 0u128;
+    for (index, &delta) in escape_deltas.iter().enumerate() {
+        if index != 0 && delta < 1 {
+            violations.push(violation(
+                "ree.attach_positions",
+                "escape positions are not strictly increasing",
+            ));
+        }
+        position += delta;
+        positions.push(position);
+    }
+
+    // Which run each escape sits in: the last run that starts at or before it. A
+    // run of no pixels holds none, so a stream that declares one leaves its
+    // escapes with no run to be inside of.
+    let mut interior: Vec<Vec<usize>> = vec![Vec::new(); runs.len()];
+    let mut outside: Vec<usize> = Vec::new();
+    for (index, &escape) in positions.iter().enumerate() {
+        if escape >= total as u128 {
+            violations.push(violation(
+                "ree.attach_positions",
+                "an escape position is not below total_pixels",
+            ));
+            outside.push(index);
+            continue;
+        }
+        let Some(run) = runs
+            .partition_point(|&(run_start, _, _)| run_start <= escape as usize)
+            .checked_sub(1)
+        else {
+            violations.push(violation(
+                "ree.attach_positions",
+                "an escape position is not strictly inside its core run",
+            ));
+            outside.push(index);
+            continue;
+        };
+        let (run_start, run_end, _) = runs[run];
+        if escape as usize == run_start || escape as usize + 1 == run_end {
+            violations.push(violation(
+                "ree.attach_positions",
+                "an escape position is not strictly inside its core run",
+            ));
+        }
+        interior[run].push(index);
+    }
+
+    // The AA pixels in the order their values are stored: for each core run, the
+    // first pixel when its bit is set, then the escapes inside it, then the last
+    // pixel when its bit is set. A pixel the stream names but no run holds keeps
+    // its place and its value, and is written nowhere.
+    let mut walk: Vec<Option<(usize, u8)>> = Vec::new();
+    for (run, &(run_start, run_end, run_value)) in runs.iter().enumerate() {
+        let first = attach_bit(bits, run * 2);
+        let last = attach_bit(bits, run * 2 + 1);
+        // A run of one pixel expresses that pixel with the first bit alone; both
+        // bits would name it twice.
+        if first && last && run_end - run_start == 1 {
+            violations.push(violation(
+                "ree.attach_bits",
+                "a run of one pixel sets both of its bits",
+            ));
+        }
+        if first {
+            walk.push((run_end > run_start).then_some((run_start, run_value)));
+        }
+        for &escape in &interior[run] {
+            walk.push(Some((positions[escape] as usize, run_value)));
+        }
+        if last {
+            walk.push((run_end > run_start).then_some((run_end - 1, run_value)));
+        }
+    }
+    walk.extend(outside.iter().map(|_| None));
+    if walk.len() as u128 != aa_pixel_count {
+        return Err(ATTACH_COUNT);
+    }
+
+    // §5.6: the overlay's values are one plane array - the first as it is, every
+    // later one the step from the pixel before it in the walk.
+    let (mut value_planes, after, plane_violations) = read_planes(body, pos)?;
+    pos = after;
+    violations.extend(plane_violations);
+    let stored = read_array(&mut value_planes, aa_pixel_count)?;
+    check_leftover(&value_planes, &mut violations);
+
+    let mut values: Vec<u8> = Vec::with_capacity(stored.len());
+    let mut value = 0i128;
+    for (index, &entry) in stored.iter().enumerate() {
+        value = if index == 0 {
+            i128::try_from(entry).map_err(|_| NOT_A_BYTE)?
+        } else {
+            value + unzigzag(entry)
+        };
+        values.push(u8::try_from(value).map_err(|_| NOT_A_BYTE)?);
+    }
+
+    // The overlay, written over the core.
+    for (&named, &value) in walk.iter().zip(&values) {
+        if let Some((pixel, _)) = named {
+            mask[pixel] = value;
+        }
+    }
+
+    // Strict canonical form: an AA pixel is a coverage byte, so it is neither
+    // 0x00 nor 0xFF, and it thresholds to the value of the run it sits in -
+    // otherwise the core would not be the threshold of its own mask.
+    if values.iter().any(|&value| value == 0x00 || value == 0xFF) {
+        violations.push(violation(
+            "ree.attach_threshold",
+            "an overlay value is 0x00 or 0xFF",
+        ));
+    }
+    let mismatched = walk.iter().zip(&values).any(|(&named, &value)| {
+        named.is_some_and(|(_, run_value)| (if value >= 128 { 0xFF } else { 0x00 }) != run_value)
+    });
+    if mismatched {
+        violations.push(violation(
+            "ree.attach_threshold",
+            "an overlay value does not threshold to the value of the run it sits in",
         ));
     }
     Ok((mask, pos, violations))

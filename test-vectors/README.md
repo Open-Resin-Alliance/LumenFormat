@@ -48,8 +48,8 @@ broken to parse is reported rather than crashed on.
 
 ## What is exact, and what is not
 
-The spec leaves two things to the encoder (section 5.6): the choice between
-grayscale REE and split REE for a layer, and the number of layers a `LAYR` chunk
+The spec leaves two things to the encoder (section 5.7): the encoding tag of a layer -
+grayscale REE, split REE or attached REE - and the number of layers a `LAYR` chunk
 covers. It also mandates zstd, whose output bytes are not stable across versions,
 levels or builds.
 
@@ -74,11 +74,11 @@ So this corpus pins:
 ## Validation levels
 
 Every valid vector is accepted at both levels, and every invalid vector fails at the level
-its check names, which is `Loose` unless the manifest marks it `strict_only`. The five
+its check names, which is `Loose` unless the manifest marks it `strict_only`. The eight
 `strict_only` vectors take the opposite direction as well: the corpus asserts that a loose
 read **accepts** them, so the loose/strict split is pinned rather than described. A third
 party self-testing against this corpus should therefore run its own reader twice - once
-loose, expecting `valid/` to pass and the five `strict_only` files to pass too, and once
+loose, expecting `valid/` to pass and the eight `strict_only` files to pass too, and once
 strict, expecting every file in `invalid/` to fail the check its manifest entry names.
 
 Re-running `make_vectors` under a different zstd version may change
@@ -128,6 +128,8 @@ layer 2 and sector 1's own ends at layer 5.
 |--------|--------|--------|---------------|-----------|
 | `binary-basic` | 6 | 3 | - | Six layers over one sector covering the empty-layer form, binary REE, grayscale REE and split REE, in three LAYR chunks of two layers each with no dictionary, over a bottom range whose motion, wait and PWM values differ from the normal ones: the bottom layers take the bottom-prefixed values verbatim, the transition layer blends them, and light_pwm switches to the normal value at the first non-bottom layer instead of blending. |
 | `ree-degenerate-arrays` | 4 | 2 | - | Four layers over one sector pinning every run-length array that holds no varints: layer 0 is one run of 0xFF (tag 0x00, run_count 1), layer 1 one run of 0x80 (tag 0x01, run_count 1, one value byte), and layers 2 and 3 are splits whose thresholded core is a single run - 0xFF over a 0xC0 band at 1000..1200, whose first delta is two bytes, and 0x00 under a 0x40 band at 0..500, whose first delta is 0. Every one of those arrays still carries its four plane lengths as zeros: the header is unconditional, so a reader that returned before consuming it would leave four bytes behind and fail `ree.no_trailing_bytes` on a canonical stream. |
+| `attached-ree` | 6 | 2 | - | Six layers over one sector, every one of them stored as tag 0x03, in two LAYR chunks of three with no dictionary: attached REE with the overlay's pixels expressed both ways - AA pixels at the first and last pixel of core runs, AA bands strictly inside long runs, and a core run of one AA pixel - two layers whose core is a single run (one of them with AA at both ends), a layer with no AA at all, and both parities of the stored run lengths carrying negative differences. |
+| `attached-degenerate` | 3 | 1 | - | Three layers over one sector in one LAYR chunk, all tag 0x03 with an empty overlay, which is the parity-split delta binary core and nothing else: one core run, three core runs with 0x00 as first_value, and seven core runs whose stored differences are zero and negative. |
 | `dict-multi-block` | 64 | 4 | - | 64 layers with a trained ZDIC dictionary, in four LAYR chunks of sixteen layers each, every frame carrying the dictionary's id. |
 | `multi-sector` | 4 | 4 | - | Four layers with two non-overlapping sectors, the second defined by META.sectors: layer 2 carries no data at all and is the empty layer, its single sector-0 entry holding a zero length, and two LROV chunks override one layer of one sector each - sector 1 of layer 0 and sector 0 of layer 1 - so the timing of a point is the timing of that point and not of its layer. |
 | `sector-blend-ranges` | 10 | 4 | - | Ten layers over two sectors whose META.sectors entry for sector 1 carries bottom_layer_count 5 and no transition_layer_count, so sector 1 is blended over a bottom range of its own and inherits META's transition count; layer 4 is the layer where the two readings part, fully normal at 2500 ms for sector 0 and still a bottom layer at 30000 ms for sector 1, and their transition steps fall on layers 2 and 5 rather than together. |
@@ -159,7 +161,14 @@ layer 2 and sector 1's own ends at layer 5.
 | `lrov-not-json` | An LROV payload is truncated JSON, so the override set cannot be read at all. | `lrov.json` |
 | `lrov-wait-fractional` | An LROV payload carries wait_time_before_cure_ms = 500.5. A wait time is a whole number of milliseconds, so a fractional value is not a duration this format can express. | `lrov.time_integer` |
 | `run-count-zero-all-black` | Layer 0 stores all-black as tag 0x00 with run_count 0 instead of the empty-layer form. | `ree.no_run_count_zero` *(strict)* |
-| `split-all-binary` | Layer 0 is one run of 0xFF stored as tag 0x02 with an empty overlay, where §5.6 requires tag 0x00 for a slice whose pixels are all 0x00/0xFF: a split of a purely binary slice has no anti-aliasing to overlay and is strictly larger than the binary stream it duplicates. A loose reader accepts it - the stream is a legal tag 0x02 stream - and a strict validator rejects it, the same way it rejects the grayscale form of the same mistake. | `ree.split_all_binary` *(strict)* |
+| `split-all-binary` | Layer 0 is one run of 0xFF stored as tag 0x02 with an empty overlay, where §5.7 requires tag 0x00 for a slice whose pixels are all 0x00/0xFF: a split of a purely binary slice has no anti-aliasing to overlay and is strictly larger than the binary stream it duplicates. A loose reader accepts it - the stream is a legal tag 0x02 stream - and a strict validator rejects it, the same way it rejects the grayscale form of the same mistake. | `ree.split_all_binary` *(strict)* |
+| `attach-escape-at-run-start` | Layer 0's first anti-aliased pixel is the pixel its core run opens on and the stream writes it as an escape: an escape has to be strictly inside its run, because a run's opening pixel is what the run's own first attachment bit describes. | `ree.attach_positions` |
+| `attach-escapes-not-increasing` | Two of layer 0's escapes carry the same position, so the escape positions do not strictly increase. | `ree.attach_positions` |
+| `attach-pixel-count-short` | Layer 0's aa_pixel_count is one less than the number of pixels its attachment bits and escapes place, so the overlay it counts is not the overlay it describes. | `ree.attach_count` |
+| `attach-value-not-byte` | The first entry of layer 0's aa_values is 0x100: an overlay value is a byte, and only the first entry is a value at all - every later one is a difference, which the planes may spread over several bytes. | `ree.attach_count` |
+| `attach-single-pixel-two-bits` | A core run of layer 0 is one anti-aliased pixel long and sets both of its attachment bits, so both of them describe that single pixel, where a run of one pixel leaves its second bit clear. | `ree.attach_bits` *(strict)* |
+| `attach-value-binary` | An overlay value of layer 0 is 0x00, which is a value the core already carries and not an anti-aliased value at all. | `ree.attach_threshold` *(strict)* |
+| `attach-value-other-side` | An overlay value of layer 0 is 0x40 where the core run it sits in is 0xFF, so it thresholds to the other value than the run it is placed in and the core stops being the threshold of the layer. | `ree.attach_threshold` *(strict)* |
 | `layr-container-version` | A LAYR container declares version 2, which no reader implements; the frame behind it is well formed, so only the version refuses the file. | `layr.version` |
 | `layr-content-size-absent` | The LAYR frames are compressed without their content size. A writer MUST declare it (spec 4.9), because the descriptor's size_uncompressed is the container's length and the reader has nothing else to size the frame's output from. | `layr.content_size_present` |
 | `layr-frame-size-lie` | The first LAYR frame's header declares one byte more than the frame decompresses to, so its output cannot be allocated or checked against the declaration. | `layr.frame_decompressed_size` |

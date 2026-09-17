@@ -31,7 +31,9 @@ use serde_json::Value;
 use crate::engine::SlicerV3Error;
 use crate::types::SliceJobV3;
 
-use super::lumen_types::{DEFAULT_LAYERS_PER_CHUNK, DEFAULT_ZSTD_LEVEL, ENCODER_NAME};
+use super::lumen_types::{
+    DEFAULT_LAYERS_PER_CHUNK, DEFAULT_TAG_PROBE, DEFAULT_ZSTD_LEVEL, ENCODER_NAME,
+};
 
 /// LUMEN's `META` requires these ten fields to be present (section 11.2), so every
 /// one of them is written even when the job has nothing to say about it.
@@ -49,6 +51,14 @@ pub const EMBED_VOXL_SCENE_PATH: &str = "lumen.embedVoxlScene";
 
 /// The settings key that carries the scene's bytes, base64-encoded.
 pub const VOXL_SCENE_PATH: &str = "lumen.voxlSceneBase64";
+
+/// The settings key that turns the per-group encoding probe off.
+///
+/// Read by its exact `lumen.*` path, like the scene keys: no ChiTuBox profile has an
+/// equivalent. Absent means on, so a profile that predates the key gets the smaller
+/// file; a profile sets it to `false` when the print is going to a reader that
+/// predates tag `0x03`.
+pub const TAG_PROBE_PATH: &str = "lumen.tagProbe";
 
 /// The settings keys that carry the per-axis scale compensation, in percent.
 ///
@@ -69,6 +79,9 @@ pub struct LumenMetadata {
     pub meta: Meta,
     pub layers_per_chunk: u32,
     pub zstd_level: i32,
+    /// `lumen.tagProbe`: whether the writer weighs tag `0x03` against the tag
+    /// `EncodeMode::Auto` picks for each layer group.
+    pub tag_probe: bool,
     /// `lumen.embedVoxlScene`: whether this print's file should carry its scene.
     pub embed_voxl_scene: bool,
     /// `lumen.voxlSceneBase64`: the scene's bytes, base64, when the job carries them.
@@ -157,7 +170,12 @@ impl Values {
     /// profile that was written by hand, and reading `"false"` as false is the only
     /// interpretation that cannot turn the feature on behind the user's back.
     fn boolean_at(&self, path: &str) -> bool {
-        self.at(path).and_then(Value::as_bool).unwrap_or(false)
+        self.boolean_or(path, false)
+    }
+
+    /// A dotted path read as a boolean, with the answer when it is absent.
+    fn boolean_or(&self, path: &str, default: bool) -> bool {
+        self.at(path).and_then(Value::as_bool).unwrap_or(default)
     }
 }
 
@@ -475,6 +493,7 @@ pub fn build(job: &SliceJobV3) -> Result<LumenMetadata, SlicerV3Error> {
             .number("zstdLevel")
             .map(|level| (level.round() as i64).clamp(1, 22) as i32)
             .unwrap_or(DEFAULT_ZSTD_LEVEL),
+        tag_probe: values.boolean_or(TAG_PROBE_PATH, DEFAULT_TAG_PROBE),
         // The embedded scene. Both keys are read whatever the flag says, so the
         // encoder can tell "off, with a payload nobody asked for" - which it ignores -
         // from "on, with no payload", which is an error rather than a file that

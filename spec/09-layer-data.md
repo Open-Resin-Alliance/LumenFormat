@@ -222,7 +222,7 @@ verification. This enables:
 | 38 | N | - | `layer_hashes` | `layer_count × hash_size` bytes. `layer_hashes[i]` is the leaf hash `SHA-256(0x00 \|\| d)`, where `d` is layer `i`'s data: the slices its `LTBL` entries describe, concatenated in ascending `sector_id`, each byte range `[data_offset, + data_size)` taken from its `LAYR` chunk's decompressed output. An empty layer stores `SHA-256(0x00)`. |
 
 Because these hashes cover decompressed bytes, they are reproducible only if encoders
-agree on the byte stream; [§5.6](11-layer-encoding.md#56-canonical-encoding) defines that canonical form.
+agree on the byte stream; [§5.7](11-layer-encoding.md#57-canonical-encoding) defines that canonical form.
 
 **Merkle tree construction** (domain-separated, RFC 6962 style):
 

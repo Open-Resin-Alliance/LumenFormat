@@ -218,7 +218,7 @@ pub enum Check {
     LhasLeafMatch,
 
     // -- group: ree (section 5) --------------------------------------------
-    /// A layer carries an encoding tag other than `0x00`-`0x02`.
+    /// A layer carries an encoding tag other than `0x00`-`0x03`.
     ReeTag,
     /// A varint is overlong, truncated, or longer than 10 bytes.
     ReeVarint,
@@ -243,6 +243,19 @@ pub enum Check {
     ReeSplitThreshold,
     /// Split overlay positions are not strictly increasing, or out of range.
     ReeSplitPositions,
+    /// Attached-form escapes are not strictly increasing, fall outside the layer,
+    /// or do not sit strictly inside the core run they belong to.
+    ReeAttachPositions,
+    /// `aa_pixel_count` disagrees with the pixels the attachment bits and escapes
+    /// describe.
+    ReeAttachCount,
+    /// An attachment bit addresses a run that does not exist, or a run of one
+    /// pixel claims both of its ends, or padding bits past the last run are set
+    /// (strict).
+    ReeAttachBits,
+    /// An attached-form overlay value is `0x00`/`0xFF`, or does not threshold to
+    /// the core run it sits in (strict).
+    ReeAttachThreshold,
     /// The decoded stream does not end exactly at `total_pixels`.
     ReeEndPositions,
     /// Bytes follow the end of a layer's REE stream.
@@ -380,6 +393,10 @@ impl Check {
             ReeSplitAllBinary => "ree.split_all_binary",
             ReeSplitThreshold => "ree.split_threshold",
             ReeSplitPositions => "ree.split_positions",
+            ReeAttachPositions => "ree.attach_positions",
+            ReeAttachCount => "ree.attach_count",
+            ReeAttachBits => "ree.attach_bits",
+            ReeAttachThreshold => "ree.attach_threshold",
             ReeEndPositions => "ree.end_positions",
             ReeNoTrailingBytes => "ree.no_trailing_bytes",
             ReeDataSize => "ree.data_size",
@@ -412,6 +429,8 @@ impl Check {
                 | ReeGrayscaleAllBinary
                 | ReeSplitAllBinary
                 | ReeSplitThreshold
+                | ReeAttachBits
+                | ReeAttachThreshold
                 | SectorPartition
                 | LhasLeafMatch
                 | PrevPngSignature

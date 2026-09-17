@@ -884,6 +884,7 @@ fn explicit_encoding_modes_round_trip() {
         EncodeMode::Binary,
         EncodeMode::Grayscale,
         EncodeMode::Split,
+        EncodeMode::Attached,
     ] {
         let mut selected: Vec<Vec<u8>> = Vec::new();
         for (index, mask) in masks().iter().enumerate() {
@@ -899,12 +900,14 @@ fn explicit_encoding_modes_round_trip() {
                     assert_eq!(err.check_name(), "ree.first_value", "layer {index}");
                     continue;
                 }
-                // Section 5.6: a mask whose pixels are all 0x00/0xFF MUST use tag
+                // Section 5.7: a mask whose pixels are all 0x00/0xFF MUST use tag
                 // 0x00, and section 11.3 makes a strict validator reject one
                 // stored as grayscale or as split. Forcing another tag on such a
                 // mask therefore builds a stream no strict reader accepts, which
                 // is not a property worth asserting.
                 EncodeMode::Grayscale | EncodeMode::Split if binary => continue,
+                // Tag 0x03 is the parity-delta binary form when a mask carries no
+                // anti-aliasing, so section 5.7 allows it there too.
                 _ => {}
             }
             selected.push(mask.clone());
@@ -942,5 +945,6 @@ fn mode_name(mode: EncodeMode) -> &'static str {
         EncodeMode::Binary => "Binary",
         EncodeMode::Grayscale => "Grayscale",
         EncodeMode::Split => "Split",
+        EncodeMode::Attached => "Attached",
     }
 }

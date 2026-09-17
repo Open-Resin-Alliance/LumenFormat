@@ -103,7 +103,7 @@ first.
     "chamber_temperature_c": 30.0,
     "vat_temperature_c": 28.0,
 
-    // Resin working curve - experimental ([§5.7](11-layer-encoding.md#57-resin-working-curve-experimental)). If omitted, printer falls back
+    // Resin working curve - experimental ([§5.8](11-layer-encoding.md#58-resin-working-curve-experimental)). If omitted, printer falls back
     // to traditional exposure-time model.
     "cure_curve": {
       "dp_um": 120,

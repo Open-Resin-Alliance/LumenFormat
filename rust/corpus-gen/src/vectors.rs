@@ -1,4 +1,4 @@
-//! The corpus: the thirteen valid vectors, the deliberate defects, and the manifest.
+//! The corpus: the sixteen valid vectors, the deliberate defects, and the manifest.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -11,6 +11,7 @@ use crate::json;
 use crate::obj;
 use crate::payload::{self, Extd, ProfOverrides, ProfSettings};
 use crate::png;
+use crate::ree;
 use crate::vector::{self, Built, CryptoSpec, Override, Role, VectorSpec};
 use crate::{FORMAT_REVISION, ZSTD_LAYER_LEVEL, ZSTD_SMALL_LEVEL};
 
@@ -331,9 +332,98 @@ can express.",
         &mut manifest_invalid,
         Invalid::new(
             "split-all-binary",
-            "Layer 0 is one run of 0xFF stored as tag 0x02 with an empty overlay, where section 5.6 requires tag 0x00 for a slice whose pixels are all 0x00/0xFF: the split form has no anti-aliasing to carry and is strictly larger.",
+            "Layer 0 is one run of 0xFF stored as tag 0x02 with an empty overlay, where section 5.7 requires tag 0x00 for a slice whose pixels are all 0x00/0xFF: the split form has no anti-aliasing to carry and is strictly larger.",
             "ree.split_all_binary",
             source.raw,
+        )
+        .strict_only(),
+    );
+
+    // attach: an escape at the first pixel of its core run, where an escape has
+    // to be strictly inside one (hard)
+    emit(
+        &invalid_dir,
+        &mut manifest_invalid,
+        Invalid::new(
+            "attach-escape-at-run-start",
+            "Layer 0's first anti-aliased pixel is the pixel its core run opens on, and the stream writes it as an escape. An escape has to be strictly inside its run: the pixel a run opens on is what the run's own first attachment bit describes, and a bit costs nothing where a position costs a varint.",
+            "ree.attach_positions",
+            attach_defect_vector(ree::AttachedDefect::EscapeAtRunStart, &[(0, 8, 200), (8, 128, 255)]).raw,
+        ),
+    );
+
+    // attach: two escapes at one position, so the positions do not strictly
+    // increase (hard)
+    emit(
+        &invalid_dir,
+        &mut manifest_invalid,
+        Invalid::new(
+            "attach-escapes-not-increasing",
+            "Two of layer 0's escapes carry the same position, so the escape positions do not strictly increase and the pixel between them is placed twice. The delta that follows the repeat is 0, which is how a stream reaches a position it has already been to.",
+            "ree.attach_positions",
+            attach_defect_vector(ree::AttachedDefect::EscapeRepeat, &[(50, 53, 200), (53, 200, 255)]).raw,
+        ),
+    );
+
+    // attach: a count one pixel short of the walk (hard)
+    emit(
+        &invalid_dir,
+        &mut manifest_invalid,
+        Invalid::new(
+            "attach-pixel-count-short",
+            "Layer 0's aa_pixel_count is one less than the number of pixels its attachment bits and escapes place, so the overlay it counts is not the overlay it describes and the last pixel of the walk has no value in the stream at all.",
+            "ree.attach_count",
+            attach_defect_vector(ree::AttachedDefect::CountShort, &[(0, 8, 200), (8, 128, 255)]).raw,
+        ),
+    );
+
+    // attach: an overlay value stored in two bytes (hard)
+    emit(
+        &invalid_dir,
+        &mut manifest_invalid,
+        Invalid::new(
+            "attach-value-not-byte",
+            "The first entry of layer 0's aa_values is 0x100. An overlay value is a byte: only the first entry is stored as a value at all, and every later one is a difference, which the planes may spread over several bytes - but not the value itself.",
+            "ree.attach_count",
+            attach_defect_vector(ree::AttachedDefect::ValueNotByte, &[(0, 8, 200), (8, 128, 255)]).raw,
+        ),
+    );
+
+    // attach: a run of one pixel setting both of its bits (strict)
+    emit(
+        &invalid_dir,
+        &mut manifest_invalid,
+        Invalid::new(
+            "attach-single-pixel-two-bits",
+            "A core run of layer 0 is one anti-aliased pixel long and sets both of its attachment bits, so both of them describe that single pixel. A run of one pixel leaves its second bit clear: the pixel is both ends of the run, and one pixel is described once.",
+            "ree.attach_bits",
+            attach_defect_vector(ree::AttachedDefect::SinglePixelBothBits, &[(100, 101, 200)]).raw,
+        )
+        .strict_only(),
+    );
+
+    // attach: an overlay value of 0x00, which is not an anti-aliased value (strict)
+    emit(
+        &invalid_dir,
+        &mut manifest_invalid,
+        Invalid::new(
+            "attach-value-binary",
+            "An overlay value of layer 0 is 0x00, which is a value the core already carries and not an anti-aliased value at all: a pixel the core describes need not be written over it, so an overlay of 0x00 costs a position and a value to say nothing.",
+            "ree.attach_threshold",
+            attach_defect_vector(ree::AttachedDefect::ValueBinary, &[(0, 8, 100), (8, 128, 255)]).raw,
+        )
+        .strict_only(),
+    );
+
+    // attach: an overlay value that thresholds to the core run's other value (strict)
+    emit(
+        &invalid_dir,
+        &mut manifest_invalid,
+        Invalid::new(
+            "attach-value-other-side",
+            "An overlay value of layer 0 is 0x40 where the core run it sits in is 0xFF, so it thresholds to the other value than the run it is placed in. The core is the threshold of the layer, and an overlay value that disagrees with the run it overwrites makes the core something else.",
+            "ree.attach_threshold",
+            attach_defect_vector(ree::AttachedDefect::ValueOtherSide, &[(0, 8, 200), (8, 128, 255)]).raw,
         )
         .strict_only(),
     );
@@ -1167,11 +1257,13 @@ fn prune(dir: &Path, written: &BTreeSet<PathBuf>, removed: &mut usize) {
 // valid vectors
 // --------------------------------------------------------------------------
 
-/// The fourteen valid vectors, in the order the manifest lists them.
+/// The sixteen valid vectors, in the order the manifest lists them.
 pub fn valid_vectors() -> Vec<Built> {
     vec![
         binary_basic(),
         ree_degenerate_arrays(),
+        attached_ree(),
+        attached_degenerate(),
         dict_multi_block(),
         multi_sector(),
         sector_blend_ranges(),
@@ -1240,7 +1332,7 @@ fn ree_degenerate_arrays() -> Built {
     ];
     vector::build_vector(&VectorSpec {
         name: "ree-degenerate-arrays",
-        description: "Four layers over one sector, two LAYR chunks and no dictionary, pinning every run-length array that holds no varints: layer 0 is one run of 0xFF (tag 0x00, run_count 1), layer 1 one run of 0x80 (tag 0x01, run_count 1, one value byte), and layers 2 and 3 are splits whose thresholded core is a single run - one of 0xFF over a 0xC0 band at 1000..1200, whose first delta is two bytes, one of 0x00 under a 0x40 band at 0..500, whose first delta is 0. Each of those arrays carries its four plane lengths as zeros: the header is written unconditionally, and a reader that skipped it would leave those bytes unconsumed. The one degenerate form that is not canonical - a split whose overlay is empty, which section 5.6 forbids for an all-0x00/0xFF slice - is its own invalid vector, split-all-binary, because a valid vector must not carry a layer a strict reader is required to reject.",
+        description: "Four layers over one sector, two LAYR chunks and no dictionary, pinning every run-length array that holds no varints: layer 0 is one run of 0xFF (tag 0x00, run_count 1), layer 1 one run of 0x80 (tag 0x01, run_count 1, one value byte), and layers 2 and 3 are splits whose thresholded core is a single run - one of 0xFF over a 0xC0 band at 1000..1200, whose first delta is two bytes, one of 0x00 under a 0x40 band at 0..500, whose first delta is 0. Each of those arrays carries its four plane lengths as zeros: the header is written unconditionally, and a reader that skipped it would leave those bytes unconsumed. The one degenerate form that is not canonical - a split whose overlay is empty, which section 5.7 forbids for an all-0x00/0xFF slice - is its own invalid vector, split-all-binary, because a valid vector must not carry a layer a strict reader is required to reject.",
         features: &[
             "binary-ree",
             "grayscale-ree",
@@ -1253,6 +1345,110 @@ fn ree_degenerate_arrays() -> Built {
         layers,
         layers_per_chunk: 2,
         split_layers: vec![2, 3],
+        ..Default::default()
+    })
+}
+
+/// 6 layers, the attached REE form, no dictionary, two LAYR chunks.
+///
+/// Every layer is stored under tag 0x03, which is the encoder's choice (spec 5.7)
+/// and not the one the corpus' own tag choice makes, so each mask below is picked
+/// for the shape it gives the core and the walk rather than for what it depicts.
+fn attached_ree() -> Built {
+    let layers: Vec<vector::Layer> = vec![
+        // Six core runs, both attachment bits and both kinds of escape. Runs 0
+        // and 4 open and close on an anti-aliased pixel - one at 0..8 and 60, the
+        // other at 538 and 666 - while the bands at 1..7, 161..169 and 539..546
+        // sit strictly inside a run and have to be positioned.
+        vec![vec![
+            (0, 8, 200),
+            (8, 60, 255),
+            (60, 61, 200),
+            (161, 169, 64),
+            (353, 354, 200),
+            (538, 546, 128),
+            (546, 666, 255),
+            (666, 667, 200),
+        ]],
+        // No anti-aliasing at all: the core is the mask, every attachment bit is
+        // clear and the overlay is empty, which is where tag 0x03 degenerates to
+        // the parity-delta binary core. Run 2 is the length of run 0, so the
+        // third stored entry is the zigzag of a zero difference.
+        vec![vec![(100, 200, 255), (300, 3072, 255)]],
+        // A core of one run: every pixel thresholds to 0xFF, so the two length
+        // arrays carry no entries at all, and the run opens on the anti-aliased
+        // band at 0..8.
+        vec![vec![(0, 8, 200), (8, 3072, 255)]],
+        // One run with anti-aliasing at both of its ends, so both of its
+        // attachment bits are set and both bands between them are escapes.
+        vec![vec![(0, 8, 200), (8, 3064, 255), (3064, 3072, 160)]],
+        // Two core runs, the second opening on an anti-aliased pixel: the boundary
+        // between the runs is what an attachment bit is for, and the odd length
+        // array is empty while the even one carries the one stored length.
+        vec![vec![(0, 8, 200), (8, 1508, 255), (1508, 1516, 100)]],
+        // Five core runs, and the lengths shorten within each parity: run 2 is
+        // shorter than run 0 and run 3 shorter than run 1, so both stored arrays
+        // carry the zigzag of a negative difference.
+        vec![vec![
+            (0, 300, 255),
+            (500, 504, 192),
+            (504, 560, 255),
+            (660, 3072, 255),
+        ]],
+    ];
+    vector::build_vector(&VectorSpec {
+        name: "attached-ree",
+        description: "Six layers over one sector in two LAYR chunks of three layers each, no dictionary, every layer stored under tag 0x03: anti-aliased pixels at both ends of the core's first and fifth run and anti-aliased bands strictly inside three longer ones, a core run of one anti-aliased pixel between two black runs, a layer with no anti-aliasing at all whose overlay is empty, two layers whose core is a single run - one of them with anti-aliasing at both of its ends, so one byte carries both of that run's attachment bits - a layer of two runs that meets at an anti-aliased pixel, and a layer of five runs whose lengths shorten within each parity, so both stored arrays carry the zigzag of a negative difference.",
+        features: &[
+            "attached-ree",
+            "attach-bits",
+            "attach-escapes",
+            "single-pixel-run",
+            "single-run-stream",
+            "no-antialiasing",
+            "empty-plane-array",
+            "no-dictionary",
+        ],
+        display: (64, 48),
+        layers,
+        layers_per_chunk: 3,
+        force_attached: vec![0, 1, 2, 3, 4, 5],
+        ..Default::default()
+    })
+}
+
+/// 3 layers, the attached form with an empty overlay, one LAYR chunk.
+///
+/// The degenerate end of tag 0x03: the mask holds nothing but 0x00 and 0xFF, so
+/// there is no overlay to carry and the stream is the parity-delta core alone.
+/// Section 5.7 permits this form for such a layer where it permits tag 0x00, so a
+/// strict reader accepts it - unlike the same layer under tag 0x02, which the
+/// canonical tag choice refuses because the split form at least has an overlay
+/// field to leave empty.
+fn attached_degenerate() -> Built {
+    vector::build_vector(&VectorSpec {
+        name: "attached-degenerate",
+        description: "Three layers over one sector in one LAYR chunk, no dictionary, every layer stored under tag 0x03 with an empty overlay: the parity-delta binary core alone, one run of 0xFF under a one-byte attachment array, one layer whose three core runs start at 0x00, and one of seven runs whose stored differences are zero and negative - aa_pixel_count is 0 on all three, so the escape array is empty and the four value planes are four zero lengths.",
+        features: &[
+            "attached-ree",
+            "attach-degenerate",
+            "no-antialiasing",
+            "empty-plane-array",
+            "no-dictionary",
+        ],
+        display: (64, 48),
+        layers: vec![
+            // One run of 0xFF: run_count 1, no stored length, one attachment byte.
+            vec![vec![(0, 3072, 255)]],
+            // Three core runs starting at 0x00, the first of them a black run the
+            // mask never mentions.
+            vec![vec![(100, 120, 255)]],
+            // Seven core runs, four of whose six stored lengths differ from the
+            // run of their own parity two earlier - three by zero, one by -80.
+            vec![vec![(100, 200, 255), (300, 400, 255), (500, 520, 255)]],
+        ],
+        layers_per_chunk: 3,
+        force_attached: vec![0, 1, 2],
         ..Default::default()
     })
 }
@@ -1970,6 +2166,32 @@ fn sector_material_vector() -> Vec<u8> {
         ..Default::default()
     })
     .raw
+}
+
+/// A plaintext file whose layer 0 is stored under tag 0x03 with `defect`, and
+/// whose two remaining layers are conforming attached ones.
+///
+/// A file pins one rule, so everything the defect does not touch is canonical:
+/// layer 1 carries anti-aliasing at a core run's opening pixel and a band inside
+/// it, layer 2 none at all. Layer 0's mask is what places the defect, which is
+/// why each vector passes its own.
+fn attach_defect_vector(defect: ree::AttachedDefect, layer: &[vector::Span]) -> Built {
+    vector::build_vector(&VectorSpec {
+        name: "x-attach",
+        description: "source",
+        display: (64, 48),
+        layers: vec![
+            vec![layer.to_vec()],
+            // Both attachment bits and an escape strictly inside a run.
+            vec![vec![(0, 4, 200), (4, 100, 255)]],
+            // No anti-aliasing at all, so the overlay is empty.
+            vec![vec![(300, 400, 255)]],
+        ],
+        layers_per_chunk: 3,
+        force_attached: vec![1, 2],
+        attached_defects: vec![(0, defect)],
+        ..Default::default()
+    })
 }
 
 /// Four layers that each carry two sectors.

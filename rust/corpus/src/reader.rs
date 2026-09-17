@@ -72,10 +72,14 @@ const REQUIRED_META_FIELDS: [&str; 10] = [
 /// The order the REE checks are reported in, which is not the order they are
 /// discovered: a slice's stream can break several rules at once, and the report
 /// names the first one the specification lists.
-const REE_ORDER: [&str; 14] = [
+const REE_ORDER: [&str; 18] = [
     "ree.varint",
     "ree.tag",
     "ree.split_positions",
+    "ree.attach_positions",
+    "ree.attach_count",
+    "ree.attach_bits",
+    "ree.attach_threshold",
     "ree.first_value",
     "ree.end_positions",
     "ree.planes",
@@ -91,7 +95,9 @@ const REE_ORDER: [&str; 14] = [
 
 /// Checks a loose reader does not run, because they judge a file's fidelity to
 /// the canonical encoding rather than its readability.
-const STRICT_ONLY: [&str; 7] = [
+const STRICT_ONLY: [&str; 9] = [
+    "ree.attach_bits",
+    "ree.attach_threshold",
     "ree.planes",
     "ree.no_run_count_zero",
     "ree.run_lengths",
@@ -1352,7 +1358,7 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
                     Ok((mask, end, mut violations)) => {
                         // The overlay is already applied to this mask, so a
                         // mask that is still all-binary is a slice with no AA
-                        // pixels to overlay: §5.6 stores it as tag 0x00.
+                        // pixels to overlay: §5.7 stores it as tag 0x00.
                         if strict && mask.iter().all(|pixel| *pixel == 0 || *pixel == 255) {
                             violations.push(Violation {
                                 code: "ree.split_all_binary",
@@ -1361,6 +1367,17 @@ pub fn validate_bytes(raw: &[u8], strict: bool, crypto: Option<&CryptoBlock>) ->
                         }
                         (mask, end, violations)
                     }
+                    Err(error) => {
+                        truncated(&mut hits, &mut detail, &where_at(), error);
+                        continue;
+                    }
+                },
+                0x03 => match ree::attached(body, total_pixels) {
+                    // The attached form judges its own overlay, thresholds
+                    // included, so the mask arrives ready to compare with the
+                    // layer's other sectors - and an all-binary one is a legal
+                    // stream, not a non-canonical tag choice.
+                    Ok(decoded) => decoded,
                     Err(error) => {
                         truncated(&mut hits, &mut detail, &where_at(), error);
                         continue;

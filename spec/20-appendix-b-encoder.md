@@ -34,7 +34,7 @@ rust/lumen/src/
   chunks/        one codec per chunk type: head, json_chunks, ltbl, layr, zdic,
                  lhas, preview, voxl, extd
   json.rs        the typed META, PROF and LROV models
-  ree.rs         run-end encoding: binary, grayscale and split
+  ree.rs         run-end encoding: binary, grayscale, split and attached
   timing.rs      the per-layer settings pipeline of section 8
   crypto.rs      AUTH, the AEAD units, Argon2id and X25519 key wrapping
   validate.rs    the checks of section 11, named as the corpus names them
@@ -47,7 +47,7 @@ rust/lumen/src/
 else, which is what lets a firmware reader stream a long print through a bounded buffer.
 `Encoder` trains the dictionary, frames each layer group on worker threads and assembles
 the directory and trailer; identical input and settings produce identical bytes
-(§5.6), which is what makes re-slicing a scene reproduce its `LHAS` hashes. Sealed output
+(§5.7), which is what makes re-slicing a scene reproduce its `LHAS` hashes. Sealed output
 is the documented exception (§9.4): it draws its keys and nonces from the OS CSPRNG.
 
 ### B.3 The DragonFruit adapter
@@ -104,6 +104,7 @@ The integration, as the engine's traits are actually implemented:
 | `layers_per_chunk` (`lumen.layersPerChunk`) | 64 | §6.2's grouping: enough layers for cross-layer matching to pay for itself, few enough that a reader's working set stays bounded. |
 | `zstd_level` (`lumen.zstdLevel`) | 6 | §6.3 recommends level 3 for interactive work and level 6 for a final export. On a measured 3,688-layer 16K print - 122.8 MB of REE to compress - level 3 costs 0.60 s and 8.7% more file size than level 19, level 6 costs 1.08 s and 2.8% more, and level 19 costs 15.45 s. An anti-aliased print has more to gain: on an 800-layer 12K print whose 75.9 MB of streams are anti-aliased, against the same print at level 6, level 9 is 3% smaller and 0.2 s slower, level 12 is 6% smaller and 1.2 s slower, and level 19 is 17% smaller and 9.0 s slower. Level 6 is the default so a slice does not take longer than the format it replaces, and a profile can ask for 19 (or 9, or 12) when file size is what matters. |
 | dictionary (`Encoder::set_dictionary`, no setting) | on, and conditional in effect | §6.2's step 5: the writer samples the print, trains a dictionary and writes it only when a probe of the print says it earns its own bytes back, so "on" means "considered" rather than "written". An anti-aliased print's planes are high-entropy enough that a dictionary loses to no dictionary, and the writer omits the chunk there. The adapter always asks for it; the decision is the crate's, which is what keeps two DragonFruit versions writing the same file. |
+| encoding tag (`lumen.tagProbe`; `Encoder::set_tag_probe`, on by default) | on - the smaller candidate, by compressed frame | §5.7 leaves the tag to the encoder, so the writer chooses it per layer group, at the end, with the `ZDIC` dictionary the frames will actually use: it encodes the group's layers both ways - with the tag `EncodeMode::Auto` picks, and with tag `0x03` - compresses both frames exactly as the file frames them and keeps the smaller. A stream's raw length does not predict that: on a near-static binary print the attached form of a slice with no AA pixels is *smaller* uncompressed than the binary stream and 23% larger after zstd, so an encoder that chose by raw length would choose the larger file. The adapter pushes its runs under `EncodeMode::Auto`, so the choice stays the crate's. |
 | layer hashes (`Encoder::set_layer_hashes`, no setting) | on | §4.10's integrity tree is optional and the writer emits it: 32 bytes per layer, the thing that makes a partial file verifiable, and a printer that does not want it skips the chunk. |
 | `encoder_name` (constant) | `DragonFruit` | §4.1 leaves the field to the writer. |
 

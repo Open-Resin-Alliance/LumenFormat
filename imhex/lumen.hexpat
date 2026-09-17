@@ -390,14 +390,22 @@ fn zstd_info(u64 frame_addr) {
 // =============================================================================
 
 u64 g_pos;
+u64 g_dlen;                 // the slice the decode walks
+bool g_read_ok;             // false once a read would pass that slice
 u64 g_plane_start[4];
 u64 g_plane_len[4];
 u64 g_plane_pos[4];
 
+// Every read is bounded by the slice: a stream that lies about a length or ends
+// in the middle of a field makes the decode refuse, it never walks off the view.
 fn ree_read_varint(ref auto d) {
     u64 value = 0;
     u32 shift = 0;
     while (true) {
+        if (g_pos >= g_dlen) {
+            g_read_ok = false;
+            return u64(0);
+        }
         u8 b = d[g_pos];
         g_pos += 1;
         value |= u64(b & 0x7F) << shift;
@@ -418,6 +426,11 @@ fn ree_read_planes(ref auto d) {
             g_plane_start[0] = g_pos;
         else
             g_plane_start[j] = g_plane_start[j - 1] + g_plane_len[j - 1];
+    }
+    // The starts ascend, so the last plane's end is the furthest of them.
+    if (g_plane_start[3] + g_plane_len[3] > g_dlen) {
+        g_read_ok = false;
+        return;
     }
     g_pos = g_plane_start[3] + g_plane_len[3];
 };
@@ -441,6 +454,42 @@ fn ree_planes_next(ref auto d) {
     return value;
 };
 
+// The plane state above holds one array at a time, but tag 0x03 reads three in
+// step: the core's even lengths, the core's odd lengths, and the escape list. A
+// kept array is the same four lengths and bytes, parked under a slot number so
+// the next plane block can take over the primary state.
+u64 g_keep_start[12];
+u64 g_keep_len[12];
+u64 g_keep_pos[12];
+
+fn ree_planes_keep(u64 slot) {
+    for (u64 j = 0, j < 4, j += 1) {
+        g_keep_start[slot * 4 + j] = g_plane_start[j];
+        g_keep_len[slot * 4 + j] = g_plane_len[j];
+        g_keep_pos[slot * 4 + j] = 0;
+    }
+};
+
+fn ree_planes_kept_next(ref auto d, u64 slot) {
+    u64 value = 0;
+    u32 shift = 0;
+    for (u64 j = 0, j < 4, j += 1) {
+        u64 p = slot * 4 + j;
+        if (g_keep_pos[p] >= g_keep_len[p]) break;
+        u8 b = d[g_keep_start[p] + g_keep_pos[p]];
+        g_keep_pos[p] = g_keep_pos[p] + 1;
+        value |= u64(b & 0x7F) << shift;
+        if ((b & 0x80) == 0) break;
+        shift += 7;
+    }
+    return value;
+};
+
+// zigzag (§5.2): even values carry the non-negative half, odd the negative one.
+fn ree_unzigzag(u64 v) {
+    return (v & 1) == 0 ? s64(v >> 1) : s64(-1) - s64(v >> 1);
+};
+
 fn ree_fill(ref auto mask, u64 first, u64 last, u32 value) {
     for (u64 i = first, i < last, i += 1)
         mask[i] = u8(value & 0xFF);
@@ -453,9 +502,11 @@ fn ree_binary(ref auto d, u64 dlen, ref auto mask, u64 total) {
     g_pos += 1;
 
     u64 run_count = ree_read_varint(d);
+    if (!g_read_ok) return false;
     if (run_count == 0) { ree_fill(mask, 0, total, 0); return true; }
 
     ree_read_planes(d);
+    if (!g_read_ok) return false;
     if (run_count == 1) { ree_fill(mask, 0, total, first); return true; }
 
     u32 value = first;
@@ -478,6 +529,7 @@ fn ree_binary(ref auto d, u64 dlen, ref auto mask, u64 total) {
 // tag 0x01 (§5.4)
 fn ree_grayscale(ref auto d, u64 dlen, ref auto mask, u64 total) {
     u64 run_count = ree_read_varint(d);
+    if (!g_read_ok) return false;
     if (run_count == 0) { ree_fill(mask, 0, total, 0); return true; }
     if (g_pos + run_count > dlen) return false;
 
@@ -485,6 +537,7 @@ fn ree_grayscale(ref auto d, u64 dlen, ref auto mask, u64 total) {
     g_pos += run_count;
 
     ree_read_planes(d);
+    if (!g_read_ok) return false;
 
     u64 start = 0;
     for (u64 i = 0, i < run_count, i += 1) {
@@ -505,9 +558,11 @@ fn ree_split(ref auto d, u64 dlen, ref auto mask, u64 total) {
     if (!ree_binary(d, dlen, mask, total)) return false;
 
     u64 aa_count = ree_read_varint(d);
+    if (!g_read_ok) return false;
     if (aa_count == 0) return true;
 
     ree_read_planes(d);
+    if (!g_read_ok) return false;
     ree_planes_reset();
 
     u64 values = g_pos;
@@ -521,11 +576,176 @@ fn ree_split(ref auto d, u64 dlen, ref auto mask, u64 total) {
     return true;
 };
 
+// tag 0x03 (§5.6), attached REE: a thresholded core whose run lengths are split
+// by parity and delta coded against the run two back, plus an overlay of AA
+// pixels that the core's run ends carry - two bits per run - and that an escape
+// list completes.
+u64 g_aa_value;    // the overlay value the walk has reached
+bool g_aa_ok;      // whether the last one read was a byte
+
+// The next overlay value: the first is stored as it is, every later one is the
+// running value plus a first difference, and each is a byte of the mask.
+fn ree_aa_next(ref auto d, u64 placed, u64 aa_count) {
+    if (placed >= aa_count) {
+        g_aa_ok = false;
+        return u64(0);
+    }
+
+    u64 stored = ree_planes_next(d);
+    if (placed == 0) {
+        if (stored > 255) {
+            g_aa_ok = false;
+            return u64(0);
+        }
+        g_aa_value = stored;
+    } else {
+        s64 v = s64(g_aa_value) + ree_unzigzag(stored);
+        if (v < 0 || v > 255) {
+            g_aa_ok = false;
+            return u64(0);
+        }
+        g_aa_value = u64(v);
+    }
+    g_aa_ok = true;
+    return g_aa_value;
+};
+
+fn ree_attached(ref auto d, u64 dlen, ref auto mask, u64 total) {
+    if (g_pos >= dlen) return false;
+    u32 declared = u64(d[g_pos]);
+    g_pos += 1;
+    if (declared != 0x00 && declared != 0xFF) return false;
+
+    u64 run_count = ree_read_varint(d);
+    if (!g_read_ok) return false;
+    if (run_count > total + 1) return false;
+
+    // run_count == 0 is the non-canonical one-black-run form, exactly as tag
+    // 0x00 reads it: the overlay fields that follow then describe pixels over a
+    // core that is black everywhere, and the empty bit array claims none.
+    u32 first = run_count == 0 ? 0x00 : declared;
+    u64 runs = run_count == 0 ? 1 : run_count;
+
+    // even_lengths then odd_lengths, parked before the next block overwrites the
+    // plane state; the walk reads the two in step with the run order.
+    ree_read_planes(d);
+    if (!g_read_ok) return false;
+    ree_planes_keep(0);
+    ree_read_planes(d);
+    if (!g_read_ok) return false;
+    ree_planes_keep(1);
+
+    if (g_pos >= dlen) return false;
+    u64 aa_count = ree_read_varint(d);
+    if (!g_read_ok) return false;
+    if (aa_count > total + 1) return false;
+
+    // Two bits per core run: bit 2r is "the run's first pixel is an AA pixel",
+    // bit 2r+1 its last. Runs past run_count have no bits of their own.
+    u64 bit_bytes = (run_count + 3) / 4;
+    if (g_pos + bit_bytes > dlen) return false;
+    u64 bits_at = g_pos;
+    g_pos += bit_bytes;
+
+    u64 escape_count = ree_read_varint(d);
+    if (!g_read_ok) return false;
+    if (escape_count > aa_count) return false;
+    ree_read_planes(d);
+    if (!g_read_ok) return false;
+    ree_planes_keep(2);        // escape_positions: delta coded absolute indices
+
+    ree_read_planes(d);        // aa_values: the first value, then first differences
+    if (!g_read_ok) return false;
+
+    u64 prev[2];    // the length two runs back, one lane per parity
+    prev[0] = 0;
+    prev[1] = 0;
+
+    u64 placed = 0;
+    u64 escapes_used = 0;
+    u64 escape_pos = 0;
+    bool escape_held = false;
+    u64 start = 0;
+
+    for (u64 r = 0, r < runs, r += 1) {
+        // Run K-1 is implicit: it runs to the end of the mask.
+        u64 len = total - start;
+        if (r + 1 < runs) {
+            u64 stored = (r & 1) == 0 ? ree_planes_kept_next(d, 0) : ree_planes_kept_next(d, 1);
+            if (r < 2)
+                len = stored;
+            else
+                len = u64(s64(prev[r & 1]) + ree_unzigzag(stored));
+            prev[r & 1] = len;
+        }
+        if (len > total - start) return false;    // a run may not pass the layer
+        u64 end = start + len;
+
+        ree_fill(mask, start, end, (r & 1) == 0 ? first : 255 - first);
+
+        bool first_aa = false;
+        bool last_aa = false;
+        if (bit_bytes > 0) {
+            u8 attach = d[bits_at + (r >> 2)];
+            first_aa = ((attach >> ((r & 3) * 2)) & 1) != 0;
+            last_aa  = ((attach >> ((r & 3) * 2 + 1)) & 1) != 0;
+        }
+
+        // The walk is run by run: the run's first pixel, then the escapes inside
+        // it in ascending order, then its last pixel - the order the overlay
+        // values are stored in.
+        if (first_aa && end > start) {
+            u64 value = ree_aa_next(d, placed, aa_count);
+            if (!g_aa_ok) return false;
+            mask[start] = u8(value);
+            placed += 1;
+        }
+
+        // An escape is strictly inside the run that holds it, so a position at
+        // or past this run's end belongs to a later one and is held over; a held
+        // position is placed even when the list holds nothing more to read.
+        while (true) {
+            if (!escape_held) {
+                if (escapes_used == escape_count) break;
+                u64 delta = ree_planes_kept_next(d, 2);
+                if (escapes_used > 0 && delta == 0) return false;   // strictly increasing
+                escape_pos += delta;
+                if (escape_pos >= total) return false;
+                escapes_used += 1;
+                escape_held = true;
+            }
+            if (escape_pos >= end) break;
+            if (escape_pos <= start || escape_pos + 1 >= end) return false;  // not strictly inside
+            u64 value = ree_aa_next(d, placed, aa_count);
+            if (!g_aa_ok) return false;
+            mask[escape_pos] = u8(value);
+            placed += 1;
+            escape_held = false;
+        }
+
+        if (last_aa && end > start) {
+            u64 value = ree_aa_next(d, placed, aa_count);
+            if (!g_aa_ok) return false;
+            mask[end - 1] = u8(value);
+            placed += 1;
+        }
+
+        start = end;
+    }
+
+    // The walk yields exactly the pixels the attachment bits and the escapes
+    // describe, and no escape is left over past the last run.
+    return placed == aa_count && !escape_held;
+};
+
 fn ree_decode(u8 tag, ref auto d, u64 dlen, ref auto mask, u64 total) {
     g_pos = 1;    // d is the whole slice: the tag byte comes first (spec 4.9)
+    g_dlen = dlen;
+    g_read_ok = true;
     if (tag == 0x00) return ree_binary(d, dlen, mask, total);
     if (tag == 0x01) return ree_grayscale(d, dlen, mask, total);
     if (tag == 0x02) return ree_split(d, dlen, mask, total);
+    if (tag == 0x03) return ree_attached(d, dlen, mask, total);
     return false;
 };
 
@@ -1046,7 +1266,8 @@ fn readme_txt() {
     s += "lumen/layers/Lnnnnn-Snn.pgm       the same mask as a binary PGM\n\n";
     s += "Masks are written exactly over the HEAD grid, row major from the first\n";
     s += "pixel, 0x00 black and 0xFF full exposure (spec 4.1). Encoding tags are\n";
-    s += "0x00 binary REE, 0x01 grayscale REE and 0x02 split REE (spec 5).\n\n";
+    s += "0x00 binary REE, 0x01 grayscale REE, 0x02 split REE and 0x03 attached\n";
+    s += "REE (spec 5).\n\n";
     s += "Decoding a LAYR frame needs zstd without a dictionary: where the file's\n";
     s += "frames were compressed with the ZDIC dictionary, ImHex's builtin zstd\n";
     s += "decompressor cannot read them and only the stored frame is offered.\n\n";

@@ -149,12 +149,82 @@
     },
     {
       "base_vector": null,
-      "description": "Layer 0 is one run of 0xFF stored as tag 0x02 with an empty overlay, where section 5.6 requires tag 0x00 for a slice whose pixels are all 0x00/0xFF: the split form has no anti-aliasing to carry and is strictly larger.",
+      "description": "Layer 0 is one run of 0xFF stored as tag 0x02 with an empty overlay, where section 5.7 requires tag 0x00 for a slice whose pixels are all 0x00/0xFF: the split form has no anti-aliasing to carry and is strictly larger.",
       "expected_failure": "ree.split_all_binary",
       "file": "invalid/split-all-binary.lumen",
       "file_sha256": "185f534a3a09cbaad980bf71393514c534547cad7ae527b4c97d87d37637cee4",
       "file_size": 840,
       "name": "split-all-binary",
+      "strict_only": true
+    },
+    {
+      "base_vector": null,
+      "description": "Layer 0's first anti-aliased pixel is the pixel its core run opens on, and the stream writes it as an escape. An escape has to be strictly inside its run: the pixel a run opens on is what the run's own first attachment bit describes, and a bit costs nothing where a position costs a varint.",
+      "expected_failure": "ree.attach_positions",
+      "file": "invalid/attach-escape-at-run-start.lumen",
+      "file_sha256": "507f08b1aee1df0cf2159dcc563fd7fde38985dcda79b48a39e5dab07651892c",
+      "file_size": 772,
+      "name": "attach-escape-at-run-start",
+      "strict_only": false
+    },
+    {
+      "base_vector": null,
+      "description": "Two of layer 0's escapes carry the same position, so the escape positions do not strictly increase and the pixel between them is placed twice. The delta that follows the repeat is 0, which is how a stream reaches a position it has already been to.",
+      "expected_failure": "ree.attach_positions",
+      "file": "invalid/attach-escapes-not-increasing.lumen",
+      "file_sha256": "1bd0115fed88de3d57887c3912cbe1e3c6f1444ca97365f054186893691e0ab1",
+      "file_size": 773,
+      "name": "attach-escapes-not-increasing",
+      "strict_only": false
+    },
+    {
+      "base_vector": null,
+      "description": "Layer 0's aa_pixel_count is one less than the number of pixels its attachment bits and escapes place, so the overlay it counts is not the overlay it describes and the last pixel of the walk has no value in the stream at all.",
+      "expected_failure": "ree.attach_count",
+      "file": "invalid/attach-pixel-count-short.lumen",
+      "file_sha256": "f61a59050bef25d8b98603645dfee61565ce4bdff5d6f0a7c7e19ff8bfa5dc4c",
+      "file_size": 773,
+      "name": "attach-pixel-count-short",
+      "strict_only": false
+    },
+    {
+      "base_vector": null,
+      "description": "The first entry of layer 0's aa_values is 0x100. An overlay value is a byte: only the first entry is stored as a value at all, and every later one is a difference, which the planes may spread over several bytes - but not the value itself.",
+      "expected_failure": "ree.attach_count",
+      "file": "invalid/attach-value-not-byte.lumen",
+      "file_sha256": "cb3cca14b8849ca1d6723a130903c2c021fccd7178c5a814156ce4954b1b5263",
+      "file_size": 774,
+      "name": "attach-value-not-byte",
+      "strict_only": false
+    },
+    {
+      "base_vector": null,
+      "description": "A core run of layer 0 is one anti-aliased pixel long and sets both of its attachment bits, so both of them describe that single pixel. A run of one pixel leaves its second bit clear: the pixel is both ends of the run, and one pixel is described once.",
+      "expected_failure": "ree.attach_bits",
+      "file": "invalid/attach-single-pixel-two-bits.lumen",
+      "file_sha256": "42b41c6ec892a390f8356d23846168e5c551f0fa75016a71099567f7af351948",
+      "file_size": 768,
+      "name": "attach-single-pixel-two-bits",
+      "strict_only": true
+    },
+    {
+      "base_vector": null,
+      "description": "An overlay value of layer 0 is 0x00, which is a value the core already carries and not an anti-aliased value at all: a pixel the core describes need not be written over it, so an overlay of 0x00 costs a position and a value to say nothing.",
+      "expected_failure": "ree.attach_threshold",
+      "file": "invalid/attach-value-binary.lumen",
+      "file_sha256": "97c54b537616aec4b62c89002ed29f1cad51c9597dba40de95d3779a0192c4f9",
+      "file_size": 770,
+      "name": "attach-value-binary",
+      "strict_only": true
+    },
+    {
+      "base_vector": null,
+      "description": "An overlay value of layer 0 is 0x40 where the core run it sits in is 0xFF, so it thresholds to the other value than the run it is placed in. The core is the threshold of the layer, and an overlay value that disagrees with the run it overwrites makes the core something else.",
+      "expected_failure": "ree.attach_threshold",
+      "file": "invalid/attach-value-other-side.lumen",
+      "file_sha256": "6fb20f9e010ccde88881414bbe3d1eab57d879bbc790a1b0a728547bfc1750f5",
+      "file_size": 777,
+      "name": "attach-value-other-side",
       "strict_only": true
     },
     {
@@ -1004,7 +1074,7 @@
     },
     {
       "chunk_count": 6,
-      "description": "Four layers over one sector, two LAYR chunks and no dictionary, pinning every run-length array that holds no varints: layer 0 is one run of 0xFF (tag 0x00, run_count 1), layer 1 one run of 0x80 (tag 0x01, run_count 1, one value byte), and layers 2 and 3 are splits whose thresholded core is a single run - one of 0xFF over a 0xC0 band at 1000..1200, whose first delta is two bytes, one of 0x00 under a 0x40 band at 0..500, whose first delta is 0. Each of those arrays carries its four plane lengths as zeros: the header is written unconditionally, and a reader that skipped it would leave those bytes unconsumed. The one degenerate form that is not canonical - a split whose overlay is empty, which section 5.6 forbids for an all-0x00/0xFF slice - is its own invalid vector, split-all-binary, because a valid vector must not carry a layer a strict reader is required to reject.",
+      "description": "Four layers over one sector, two LAYR chunks and no dictionary, pinning every run-length array that holds no varints: layer 0 is one run of 0xFF (tag 0x00, run_count 1), layer 1 one run of 0x80 (tag 0x01, run_count 1, one value byte), and layers 2 and 3 are splits whose thresholded core is a single run - one of 0xFF over a 0xC0 band at 1000..1200, whose first delta is two bytes, one of 0x00 under a 0x40 band at 0..500, whose first delta is 0. Each of those arrays carries its four plane lengths as zeros: the header is written unconditionally, and a reader that skipped it would leave those bytes unconsumed. The one degenerate form that is not canonical - a split whose overlay is empty, which section 5.7 forbids for an all-0x00/0xFF slice - is its own invalid vector, split-all-binary, because a valid vector must not carry a layer a strict reader is required to reject.",
       "dict": {
         "dict_id": 0,
         "dict_size": 0,
@@ -1221,6 +1291,456 @@
       "total_layers": 4,
       "total_uncompressed_size": 765,
       "trailer_crc32c": "0xB1C7FD7E"
+    },
+    {
+      "chunk_count": 6,
+      "description": "Six layers over one sector in two LAYR chunks of three layers each, no dictionary, every layer stored under tag 0x03: anti-aliased pixels at both ends of the core's first and fifth run and anti-aliased bands strictly inside three longer ones, a core run of one anti-aliased pixel between two black runs, a layer with no anti-aliasing at all whose overlay is empty, two layers whose core is a single run - one of them with anti-aliasing at both of its ends, so one byte carries both of that run's attachment bits - a layer of two runs that meets at an anti-aliased pixel, and a layer of five runs whose lengths shorten within each parity, so both stored arrays carry the zigzag of a negative difference.",
+      "dict": {
+        "dict_id": 0,
+        "dict_size": 0,
+        "present": false
+      },
+      "dir_offset": 902,
+      "display_height_px": 48,
+      "display_width_px": 64,
+      "features": [
+        "attached-ree",
+        "attach-bits",
+        "attach-escapes",
+        "single-pixel-run",
+        "single-run-stream",
+        "no-antialiasing",
+        "empty-plane-array",
+        "no-dictionary"
+      ],
+      "file": "valid/attached-ree.lumen",
+      "file_sha256": "8f0e12868b384907703920a650c606312125964361ab497245f4275d7841edf8",
+      "file_size": 1102,
+      "header_flags": 0,
+      "layer_height_um": 50,
+      "layers": [
+        {
+          "decompressed_sha256": "04c0150f031328b538c137eb225882374ec9d0a9bb23dfba57550b393567ea70",
+          "empty": false,
+          "index": 0,
+          "lhas_leaf": "47dde048275f4e71c7446b48aae7dceb64967ddf8acea410e61481ff8df98c5d",
+          "sector_count": 1,
+          "sector_tags": [
+            3
+          ],
+          "tag": 3
+        },
+        {
+          "decompressed_sha256": "bd84aa7f8e454e48f7a9ef26bdcffca51d7736532833be2353ffb07904dbf072",
+          "empty": false,
+          "index": 1,
+          "lhas_leaf": "e824ed0432d3126620c8e8e5a74e91f398bcac3d0d985ecd1363751291606197",
+          "sector_count": 1,
+          "sector_tags": [
+            3
+          ],
+          "tag": 3
+        },
+        {
+          "decompressed_sha256": "511261cb4edc52322d8460c91a246f46341762ee3d827a4bc7d6ae1ca151d791",
+          "empty": false,
+          "index": 2,
+          "lhas_leaf": "6ef91ed2b20a99fd793909b08830d7d2b7e2b5a4035794db8eff1a2a2def921c",
+          "sector_count": 1,
+          "sector_tags": [
+            3
+          ],
+          "tag": 3
+        },
+        {
+          "decompressed_sha256": "7eecfbba7e47cd816272528e135b730bd901af7853a8449c5eb8cacad95e7bd7",
+          "empty": false,
+          "index": 3,
+          "lhas_leaf": "ad7bcdc7f8f85ee5e730b9f6a66c4620de2902706164849a20bf5f8157731f6e",
+          "sector_count": 1,
+          "sector_tags": [
+            3
+          ],
+          "tag": 3
+        },
+        {
+          "decompressed_sha256": "d69f0de8077a469a651c4d632c7bdb5146f504db75e41834753f0bb9c2376637",
+          "empty": false,
+          "index": 4,
+          "lhas_leaf": "539407d9e3f008d99a7d4eafe3e32d328d593cd2cb322cee08de296e78a642b8",
+          "sector_count": 1,
+          "sector_tags": [
+            3
+          ],
+          "tag": 3
+        },
+        {
+          "decompressed_sha256": "5f5d4eea6946c5640986ff639e040c842cbd80658a511227fabe1642ed8bac7f",
+          "empty": false,
+          "index": 5,
+          "lhas_leaf": "cc381f8e4878719b4f58098cb5246959c991831a7d4fa258b7a9d7a7561fb21e",
+          "sector_count": 1,
+          "sector_tags": [
+            3
+          ],
+          "tag": 3
+        }
+      ],
+      "layers_per_chunk": 3,
+      "layr_chunks": [
+        {
+          "content_size": 150,
+          "dict_id": 0,
+          "first_layer": 0,
+          "frame_size": 98,
+          "index": 4,
+          "layer_count": 3,
+          "sealed": false,
+          "sector_id": 0,
+          "stored_len": 102,
+          "version": 1
+        },
+        {
+          "content_size": 151,
+          "dict_id": 0,
+          "first_layer": 3,
+          "frame_size": 98,
+          "index": 5,
+          "layer_count": 3,
+          "sealed": false,
+          "sector_id": 0,
+          "stored_len": 102,
+          "version": 1
+        }
+      ],
+      "ltbl": [
+        {
+          "additional_sector_count": 0,
+          "data_offset": 0,
+          "data_size": 87,
+          "entry_index": 0,
+          "first_layr": 4,
+          "first_lrov": 0,
+          "layer": 0,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 87,
+          "data_size": 25,
+          "entry_index": 1,
+          "first_layr": 4,
+          "first_lrov": 0,
+          "layer": 1,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 112,
+          "data_size": 38,
+          "entry_index": 2,
+          "first_layr": 4,
+          "first_lrov": 0,
+          "layer": 2,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 0,
+          "data_size": 54,
+          "entry_index": 3,
+          "first_layr": 5,
+          "first_lrov": 0,
+          "layer": 3,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 54,
+          "data_size": 57,
+          "entry_index": 4,
+          "first_layr": 5,
+          "first_lrov": 0,
+          "layer": 4,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 111,
+          "data_size": 40,
+          "entry_index": 5,
+          "first_layr": 5,
+          "first_lrov": 0,
+          "layer": 5,
+          "sector_id": 0
+        }
+      ],
+      "merkle_root": "05740b228fcfdd1e8827e4fe2ab3c99414ad793973ef32b418336671045c0873",
+      "multi_sector": false,
+      "name": "attached-ree",
+      "resolved_timing": [
+        {
+          "exposure_ms": 30000,
+          "layer": 0,
+          "layer_height_um": 50,
+          "lift_fast_distance_um": 0,
+          "lift_fast_speed_um_min": 0,
+          "lift_slow_distance_um": 5000,
+          "lift_slow_speed_um_min": 65000,
+          "light_pwm": 255,
+          "retract_fast_distance_um": 5000,
+          "retract_fast_speed_um_min": 150000,
+          "retract_slow_distance_um": 0,
+          "retract_slow_speed_um_min": 0,
+          "sector": 0,
+          "wait_time_after_cure_ms": 0,
+          "wait_time_after_lift_ms": 0,
+          "wait_time_before_cure_ms": 0
+        },
+        {
+          "exposure_ms": 30000,
+          "layer": 1,
+          "layer_height_um": 50,
+          "lift_fast_distance_um": 0,
+          "lift_fast_speed_um_min": 0,
+          "lift_slow_distance_um": 5000,
+          "lift_slow_speed_um_min": 65000,
+          "light_pwm": 255,
+          "retract_fast_distance_um": 5000,
+          "retract_fast_speed_um_min": 150000,
+          "retract_slow_distance_um": 0,
+          "retract_slow_speed_um_min": 0,
+          "sector": 0,
+          "wait_time_after_cure_ms": 0,
+          "wait_time_after_lift_ms": 0,
+          "wait_time_before_cure_ms": 0
+        },
+        {
+          "exposure_ms": 16250,
+          "layer": 2,
+          "layer_height_um": 50,
+          "lift_fast_distance_um": 0,
+          "lift_fast_speed_um_min": 0,
+          "lift_slow_distance_um": 5000,
+          "lift_slow_speed_um_min": 65000,
+          "light_pwm": 255,
+          "retract_fast_distance_um": 5000,
+          "retract_fast_speed_um_min": 150000,
+          "retract_slow_distance_um": 0,
+          "retract_slow_speed_um_min": 0,
+          "sector": 0,
+          "wait_time_after_cure_ms": 0,
+          "wait_time_after_lift_ms": 0,
+          "wait_time_before_cure_ms": 0
+        },
+        {
+          "exposure_ms": 2500,
+          "layer": 3,
+          "layer_height_um": 50,
+          "lift_fast_distance_um": 0,
+          "lift_fast_speed_um_min": 0,
+          "lift_slow_distance_um": 5000,
+          "lift_slow_speed_um_min": 65000,
+          "light_pwm": 255,
+          "retract_fast_distance_um": 5000,
+          "retract_fast_speed_um_min": 150000,
+          "retract_slow_distance_um": 0,
+          "retract_slow_speed_um_min": 0,
+          "sector": 0,
+          "wait_time_after_cure_ms": 0,
+          "wait_time_after_lift_ms": 0,
+          "wait_time_before_cure_ms": 0
+        },
+        {
+          "exposure_ms": 2500,
+          "layer": 5,
+          "layer_height_um": 50,
+          "lift_fast_distance_um": 0,
+          "lift_fast_speed_um_min": 0,
+          "lift_slow_distance_um": 5000,
+          "lift_slow_speed_um_min": 65000,
+          "light_pwm": 255,
+          "retract_fast_distance_um": 5000,
+          "retract_fast_speed_um_min": 150000,
+          "retract_slow_distance_um": 0,
+          "retract_slow_speed_um_min": 0,
+          "sector": 0,
+          "wait_time_after_cure_ms": 0,
+          "wait_time_after_lift_ms": 0,
+          "wait_time_before_cure_ms": 0
+        }
+      ],
+      "total_layers": 6,
+      "total_uncompressed_size": 1000,
+      "trailer_crc32c": "0x913BB390"
+    },
+    {
+      "chunk_count": 5,
+      "description": "Three layers over one sector in one LAYR chunk, no dictionary, every layer stored under tag 0x03 with an empty overlay: the parity-delta binary core alone, one run of 0xFF under a one-byte attachment array, one layer whose three core runs start at 0x00, and one of seven runs whose stored differences are zero and negative - aa_pixel_count is 0 on all three, so the escape array is empty and the four value planes are four zero lengths.",
+      "dict": {
+        "dict_id": 0,
+        "dict_size": 0,
+        "present": false
+      },
+      "dir_offset": 567,
+      "display_height_px": 48,
+      "display_width_px": 64,
+      "features": [
+        "attached-ree",
+        "attach-degenerate",
+        "no-antialiasing",
+        "empty-plane-array",
+        "no-dictionary"
+      ],
+      "file": "valid/attached-degenerate.lumen",
+      "file_sha256": "0622c093d1f9d45e64b437f3659ed6d94ce3ab96bde9fc97edec660538d9b52f",
+      "file_size": 735,
+      "header_flags": 0,
+      "layer_height_um": 50,
+      "layers": [
+        {
+          "decompressed_sha256": "834c6ec350b7496e8e7248e0175111fc2606896b4bda2e621a4775012e5c1694",
+          "empty": false,
+          "index": 0,
+          "lhas_leaf": "895298f75c5fce6f1d70eab74ff61f357d810f3d22f6a6faf368e26716be933b",
+          "sector_count": 1,
+          "sector_tags": [
+            3
+          ],
+          "tag": 3
+        },
+        {
+          "decompressed_sha256": "06da9d48599a64b5ae02a3839e51ad468be69a8df26a37dcc9f5c5d164ba956a",
+          "empty": false,
+          "index": 1,
+          "lhas_leaf": "85de8f715ee6c22e54f74eb29894d7072c573552a738716aba14c75f97fb7d98",
+          "sector_count": 1,
+          "sector_tags": [
+            3
+          ],
+          "tag": 3
+        },
+        {
+          "decompressed_sha256": "f668ec3777446ac2421498c2bfbb1cc30d41b5bc03d5bd2f6e98e031c47d6b9a",
+          "empty": false,
+          "index": 2,
+          "lhas_leaf": "f54b7f4fb687e90ae6858e6ea7a567fa23375604e04753c6f3a5ed1c12765429",
+          "sector_count": 1,
+          "sector_tags": [
+            3
+          ],
+          "tag": 3
+        }
+      ],
+      "layers_per_chunk": 3,
+      "layr_chunks": [
+        {
+          "content_size": 76,
+          "dict_id": 0,
+          "first_layer": 0,
+          "frame_size": 43,
+          "index": 4,
+          "layer_count": 3,
+          "sealed": false,
+          "sector_id": 0,
+          "stored_len": 47,
+          "version": 1
+        }
+      ],
+      "ltbl": [
+        {
+          "additional_sector_count": 0,
+          "data_offset": 0,
+          "data_size": 22,
+          "entry_index": 0,
+          "first_layr": 4,
+          "first_lrov": 0,
+          "layer": 0,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 22,
+          "data_size": 24,
+          "entry_index": 1,
+          "first_layr": 4,
+          "first_lrov": 0,
+          "layer": 1,
+          "sector_id": 0
+        },
+        {
+          "additional_sector_count": 0,
+          "data_offset": 46,
+          "data_size": 30,
+          "entry_index": 2,
+          "first_layr": 4,
+          "first_lrov": 0,
+          "layer": 2,
+          "sector_id": 0
+        }
+      ],
+      "merkle_root": "25a6d84b6be3a839eff533a11d494b2eefffaf9ae842d39f7abe1d0f85f15a73",
+      "multi_sector": false,
+      "name": "attached-degenerate",
+      "resolved_timing": [
+        {
+          "exposure_ms": 30000,
+          "layer": 0,
+          "layer_height_um": 50,
+          "lift_fast_distance_um": 0,
+          "lift_fast_speed_um_min": 0,
+          "lift_slow_distance_um": 5000,
+          "lift_slow_speed_um_min": 65000,
+          "light_pwm": 255,
+          "retract_fast_distance_um": 5000,
+          "retract_fast_speed_um_min": 150000,
+          "retract_slow_distance_um": 0,
+          "retract_slow_speed_um_min": 0,
+          "sector": 0,
+          "wait_time_after_cure_ms": 0,
+          "wait_time_after_lift_ms": 0,
+          "wait_time_before_cure_ms": 0
+        },
+        {
+          "exposure_ms": 30000,
+          "layer": 1,
+          "layer_height_um": 50,
+          "lift_fast_distance_um": 0,
+          "lift_fast_speed_um_min": 0,
+          "lift_slow_distance_um": 5000,
+          "lift_slow_speed_um_min": 65000,
+          "light_pwm": 255,
+          "retract_fast_distance_um": 5000,
+          "retract_fast_speed_um_min": 150000,
+          "retract_slow_distance_um": 0,
+          "retract_slow_speed_um_min": 0,
+          "sector": 0,
+          "wait_time_after_cure_ms": 0,
+          "wait_time_after_lift_ms": 0,
+          "wait_time_before_cure_ms": 0
+        },
+        {
+          "exposure_ms": 16250,
+          "layer": 2,
+          "layer_height_um": 50,
+          "lift_fast_distance_um": 0,
+          "lift_fast_speed_um_min": 0,
+          "lift_slow_distance_um": 5000,
+          "lift_slow_speed_um_min": 65000,
+          "light_pwm": 255,
+          "retract_fast_distance_um": 5000,
+          "retract_fast_speed_um_min": 150000,
+          "retract_slow_distance_um": 0,
+          "retract_slow_speed_um_min": 0,
+          "sector": 0,
+          "wait_time_after_cure_ms": 0,
+          "wait_time_after_lift_ms": 0,
+          "wait_time_before_cure_ms": 0
+        }
+      ],
+      "total_layers": 3,
+      "total_uncompressed_size": 663,
+      "trailer_crc32c": "0x1C2D23D1"
     },
     {
       "chunk_count": 9,

@@ -48,8 +48,14 @@ enum LayerSlot {
     Missing,
     /// Delivered and empty: LUMEN's empty-layer form, which stores no stream at all.
     Empty,
-    /// A REE stream, tag byte first.
-    Stream(Vec<u8>),
+    /// A REE stream, tag byte first, with tag `0x03`'s encoding of the same runs
+    /// when the worker computed one.
+    Stream {
+        /// The stream `EncodeMode::Auto` chose.
+        primary: Vec<u8>,
+        /// Tag `0x03`'s stream for the same runs, or `None` when the probe is off.
+        alternative: Option<Vec<u8>>,
+    },
 }
 
 /// The engine's RLE sink for one print.
@@ -85,21 +91,31 @@ impl LumenRleStreamEncoder {
             self.layers
                 .resize_with(index + 1, || LayerSlot::Missing);
         }
-        self.layers[index] = if bytes.is_empty() {
-            LayerSlot::Empty
-        } else {
-            LayerSlot::Stream(bytes)
+        self.layers[index] = match unpack_layer(bytes) {
+            None => LayerSlot::Empty,
+            Some((primary, alternative)) => LayerSlot::Stream {
+                primary,
+                alternative,
+            },
         };
     }
 }
 
-/// One layer's runs as its REE stream.
+/// One layer's runs as the two REE streams the writer weighs against each other.
 ///
-/// An empty layer comes back as an empty vector: `encode_runs` reports the empty
-/// layer form as `None` because LUMEN stores no stream for it, and no real stream is
-/// ever empty, so the empty vector is an unambiguous marker rather than a special
-/// case in the encoding.
-fn encode_layer(runs: &[RleRun], total_pixels: u32) -> Result<Vec<u8>, SlicerV3Error> {
+/// An empty layer comes back with both streams empty: `encode_runs` reports the
+/// empty layer form, because LUMEN stores no stream for it, and no real stream is
+/// ever empty.
+///
+/// Both encodings are computed here, on the engine's worker for this layer: the
+/// writer's choice between them is a choice of encoding and not of pixels, and a
+/// worker that produced only one stream would leave the writer's probe nothing to
+/// weigh when the layer group closes.
+fn encode_layer(
+    runs: &[RleRun],
+    total_pixels: u32,
+    tag_probe: bool,
+) -> Result<LayerStreams, SlicerV3Error> {
     // The rasterizer does not emit zero-length runs, but one would be rejected by the
     // reference encoder's canonical rules; dropping it changes no pixel.
     let runs: Vec<Run> = runs
@@ -108,12 +124,73 @@ fn encode_layer(runs: &[RleRun], total_pixels: u32) -> Result<Vec<u8>, SlicerV3E
         .map(|run| Run::new(run.length, run.value))
         .collect();
     if runs.is_empty() {
-        return Ok(Vec::new());
+        return Ok(LayerStreams::default());
     }
-    let encoded = encode_runs(&runs, total_pixels, EncodeMode::Auto).map_err(|error| {
+    let primary = stream_of(&runs, total_pixels, EncodeMode::Auto)?;
+    let alternative = if tag_probe {
+        Some(stream_of(&runs, total_pixels, EncodeMode::Attached)?)
+    } else {
+        None
+    };
+    Ok(LayerStreams {
+        primary,
+        alternative,
+    })
+}
+
+/// One encoding of one layer's runs, tag byte first.
+fn stream_of(runs: &[Run], total_pixels: u32, mode: EncodeMode) -> Result<Vec<u8>, SlicerV3Error> {
+    let encoded = encode_runs(runs, total_pixels, mode).map_err(|error| {
         SlicerV3Error::UnsupportedOutput(format!("lumen layer encoding failed: {error}"))
     })?;
     Ok(encoded.map(|(_tag, stream)| stream).unwrap_or_default())
+}
+
+/// A layer's two candidate encodings, before they are packed for the engine's sink.
+#[derive(Default)]
+struct LayerStreams {
+    primary: Vec<u8>,
+    alternative: Option<Vec<u8>>,
+}
+
+impl LayerStreams {
+    /// The pair as the one `Vec<u8>` the engine's sink hands back per layer.
+    ///
+    /// A worker returns one vector per layer and the sink stores one, so the two
+    /// encodings travel packed: a four-byte length, the primary stream, then the
+    /// alternative. An empty vector is the empty-layer form, which neither encoding
+    /// of an empty layer carries a byte for.
+    fn pack(self) -> Vec<u8> {
+        let LayerStreams {
+            primary,
+            alternative,
+        } = self;
+        if primary.is_empty() && alternative.as_ref().is_none_or(Vec::is_empty) {
+            return Vec::new();
+        }
+        let alternative = alternative.unwrap_or_default();
+        let mut packed = Vec::with_capacity(4 + primary.len() + alternative.len());
+        packed.extend_from_slice(&(primary.len() as u32).to_le_bytes());
+        packed.extend_from_slice(&primary);
+        packed.extend_from_slice(&alternative);
+        packed
+    }
+}
+
+/// The two encodings [`LayerStreams::pack`] put in one vector: `None` for the
+/// empty-layer form.
+fn unpack_layer(packed: Vec<u8>) -> Option<(Vec<u8>, Option<Vec<u8>>)> {
+    if packed.is_empty() {
+        return None;
+    }
+    let mut length = [0u8; 4];
+    length.copy_from_slice(&packed[..4]);
+    let split = 4 + u32::from_le_bytes(length) as usize;
+    let mut rest = packed;
+    let alternative = rest.split_off(split);
+    rest.drain(..4);
+    let alternative = (!alternative.is_empty()).then_some(alternative);
+    Some((rest, alternative))
 }
 
 /// The scene the profile asked to embed, decoded and checked, or `None` when it did
@@ -166,6 +243,11 @@ fn open_encoder(
     let mut encoder = Encoder::new(metadata.head.clone(), metadata.meta.clone());
     encoder.set_layers_per_chunk(metadata.layers_per_chunk);
     encoder.set_zstd_level(metadata.zstd_level);
+    // `lumen.tagProbe`: the writer weighs tag 0x03 against the tag `EncodeMode::Auto`
+    // picks for every layer group, by compressing the frames both ways. A profile
+    // turns it off for a reader that predates the tag, and the worker then encodes
+    // one stream per layer instead of two.
+    encoder.set_tag_probe(metadata.tag_probe);
     // The writer samples the print, trains a dictionary and writes it only when the
     // print's own data says it pays (section 6.2): an anti-aliased print's greyscale
     // planes are high-entropy enough that a dictionary makes them larger, and a file
@@ -196,7 +278,7 @@ impl RleStreamEncoder for LumenRleStreamEncoder {
         layer_index: u32,
         runs: Vec<RleRun>,
     ) -> Result<(), SlicerV3Error> {
-        let bytes = encode_layer(&runs, self.total_pixels)?;
+        let bytes = encode_layer(&runs, self.total_pixels, self.metadata.tag_probe)?.pack();
         self.store(layer_index, bytes);
         Ok(())
     }
@@ -210,8 +292,9 @@ impl RleStreamEncoder for LumenRleStreamEncoder {
         &self,
     ) -> Option<Arc<dyn Fn(u32, &[RleRun]) -> Result<Vec<u8>, SlicerV3Error> + Send + Sync>> {
         let total_pixels = self.total_pixels;
+        let tag_probe = self.metadata.tag_probe;
         Some(Arc::new(move |_layer_index, runs| {
-            encode_layer(runs, total_pixels)
+            Ok(encode_layer(runs, total_pixels, tag_probe)?.pack())
         }))
     }
 
@@ -227,18 +310,32 @@ impl RleStreamEncoder for LumenRleStreamEncoder {
         }
         let mut encoder = open_encoder(&self.metadata, self.preview_png.as_deref())?;
         for (index, slot) in std::mem::take(&mut self.layers).into_iter().enumerate() {
-            let layer = match slot {
-                LayerSlot::Empty => EncodedLayer::Empty,
-                LayerSlot::Stream(bytes) => EncodedLayer::single(bytes).map_err(|error| {
+            let single = |bytes: Vec<u8>| {
+                EncodedLayer::single(bytes).map_err(|error| {
                     SlicerV3Error::UnsupportedOutput(format!("lumen layer {index}: {error}"))
-                })?,
+                })
+            };
+            let (layer, alternative) = match slot {
+                LayerSlot::Empty => (EncodedLayer::Empty, None),
+                LayerSlot::Stream {
+                    primary,
+                    alternative,
+                } => {
+                    let alternative = alternative.map(single).transpose()?;
+                    (single(primary)?, alternative)
+                }
                 LayerSlot::Missing => {
                     return Err(SlicerV3Error::MissingRenderedLayerPayload(format!(
                         "no mask was delivered for layer {index}"
                     )))
                 }
             };
-            encoder.push_encoded_layer(layer).map_err(lumen_error)?;
+            // The pair goes to the writer together: the writer weighs the two
+            // encodings of the group against each other once the group closes, and
+            // both streams are the same layer's, so the choice is one of encoding.
+            encoder
+                .push_encoded_layer_pair(layer, alternative)
+                .map_err(lumen_error)?;
         }
         encoder.finish().map_err(lumen_error)
     }

@@ -121,12 +121,16 @@ compressed chunk as `frame.allocation_bound`.
 - [ ] A frame's zstd dictionary ID equals `ZDIC.dict_id` when `ZDIC` is present (`layr.dict_id_match`, `zdic.dict_id_match`), and is `0` when it is absent (`layr.dict_id_absent`).
 - [ ] For each `LTBL` entry: `data_offset + data_size` is within the decompressed output of the chunk `first_layr` names (`ltbl.offset_within_chunk`), and entries naming one chunk do not overlap (`ltbl.slices_disjoint`).
 - [ ] All varints are well-formed: minimally encoded (no overlong forms), terminated within the containing buffer, and at most 10 bytes (the maximum for a 64-bit value, `ree.varint`).
-- [ ] Layer encoding tag is in `{0x00, 0x01, 0x02}` (`ree.tag`). Reject any layer with an unknown tag.
+- [ ] Layer encoding tag is in `{0x00, 0x01, 0x02, 0x03}` (`ree.tag`). Reject any layer with an unknown tag.
 - [ ] Split-encoded layers (tag `0x02`): `aa_positions` values are strictly increasing and every position is `< total_pixels` (`ree.split_positions`), and `aa_values` holds exactly `aa_pixel_count` bytes.
-- [ ] For binary REE (tag `0x00`): `first_value` must be `0x00` or `0xFF` (`ree.first_value`).
+- [ ] Attached-encoded layers (tag `0x03`): every escape position is strictly increasing, is `< total_pixels`, and lies strictly inside the core run it attaches to - its offset in that run is neither `0` nor the run's last pixel (`ree.attach_positions`).
+- [ ] Attached-encoded layers (tag `0x03`): `aa_pixel_count` equals the number of overlay pixels the attachment bits and the escapes describe, `escape_count` does not exceed it, and every stored overlay value is a byte (`ree.attach_count`).
+- [ ] (Strict mode) Attached-encoded layers (tag `0x03`): no attachment bit addresses a run at or past `run_count`, no run of one pixel sets both of its bits, and the bits past the last run are clear (`ree.attach_bits`).
+- [ ] (Strict mode) Attached-encoded layers (tag `0x03`): every overlay value is neither `0x00` nor `0xFF` and thresholds (`v >= 128`) to the value of the core run it sits in (`ree.attach_threshold`).
+- [ ] For binary REE (tag `0x00`) and attached REE (tag `0x03`): `first_value` must be `0x00` or `0xFF` (`ree.first_value`).
 - [ ] REE streams decode to strictly increasing end positions, and the last end position equals `total_pixels` (`ree.end_positions`).
 - [ ] (Strict mode) Significance planes ([§5.3.1](11-layer-encoding.md#531-significance-planes)): a stream's four plane lengths describe planes that are prefix-closed - a non-empty plane may not follow an empty one - and the fixed bytes, the plane lengths and the planes account for exactly `data_size` (`ree.planes`, `ree.no_trailing_bytes`).
-- [ ] A slice's stored bytes and its `data_size` agree: the stream at `data_offset` consumes exactly `data_size` bytes with nothing left over (`ree.data_size`, `ree.no_trailing_bytes`), and a slice with `data_size == 0` carries no stream at all - it is an all-black `(layer, sector)` ([§5.6](11-layer-encoding.md#56-canonical-encoding)).
+- [ ] A slice's stored bytes and its `data_size` agree: the stream at `data_offset` consumes exactly `data_size` bytes with nothing left over (`ree.data_size`, `ree.no_trailing_bytes`), and a slice with `data_size == 0` carries no stream at all - it is an all-black `(layer, sector)` ([§5.7](11-layer-encoding.md#57-canonical-encoding)).
 - [ ] (Strict mode) No slice uses the non-canonical `run_count == 0` form (`ree.no_run_count_zero`); an all-black slice is stored with `data_size == 0` and no bytes ([§5.3](11-layer-encoding.md#53-binary-ree-no-anti-aliasing)).
 - [ ] (Strict mode) Binary REE (tag `0x00`): every stored run length is `>= 1`, the implicit final run length is `>= 1`, and the lengths sum to exactly `total_pixels` (`ree.run_lengths`).
 - [ ] (Strict mode) Grayscale REE (tag `0x01`): every run length is `>= 1` and no two adjacent runs carry the same value (`ree.grayscale_runs`).
@@ -193,7 +197,7 @@ the whole file as committed, frames included, for the zstd version that built it
 encrypted vectors carry their test password and recipient key in the manifest.
 
 Coverage is not exhaustive. The corpus exercises single- and multi-sector layer data,
-the empty-slice form, all three encoding tags, dictionary compression, files with more
+the empty-slice form, all four encoding tags, dictionary compression, files with more
 than one `LAYR` chunk, both encryption modes and both ciphers, and every chunk type this
 specification defines. The `LAYR` unit-index binding is exercised by such a file: two
 `LAYR` chunks whose sealed frames are interchangeable in shape, so moving one to the other

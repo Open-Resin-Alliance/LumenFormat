@@ -98,7 +98,7 @@ chunk group can be read on its own.
 | [`08-print-control.md`](spec/08-print-control.md) | §4.5-4.6 | `LROV`, `PREV` |
 | [`09-layer-data.md`](spec/09-layer-data.md) | §4.7-4.10 | `LTBL`, `ZDIC`, `LAYR`, `LHAS` |
 | [`10-scene-chunks.md`](spec/10-scene-chunks.md) | §4.11-4.12 | `VOXL` embedded scene, `EXTD` extensions |
-| [`11-layer-encoding.md`](spec/11-layer-encoding.md) | §5 | Run-end encoding: binary, grayscale and split REE |
+| [`11-layer-encoding.md`](spec/11-layer-encoding.md) | §5 | Run-end encoding: binary, grayscale, split and attached REE |
 | [`12-compression.md`](spec/12-compression.md) | §6 | zstd frame framing and the shared trained dictionary |
 | [`13-sectors.md`](spec/13-sectors.md) | §7 | Multi-material sectors and the sector mask invariant |
 | [`14-layer-timing.md`](spec/14-layer-timing.md) | §8 | Per-layer settings, bottom/transition blending, overrides |
@@ -153,15 +153,15 @@ independently of the specification's own encoder:
 
 | Path | Contents |
 |------|----------|
-| `valid/*.lumen` | 14 files a conforming reader must accept, each pinning the structures it contains |
-| `invalid/*.lumen` | 59 files a conforming reader must reject, each failing the check its manifest entry names, which is the first one the validator order reaches |
+| `valid/*.lumen` | 16 files a conforming reader must accept, each pinning the structures it contains |
+| `invalid/*.lumen` | 66 files a conforming reader must reject, each failing the check its manifest entry names, which is the first one the validator order reaches |
 | `manifest.json` | Golden data for every vector: sizes, offsets, the layer table, each `LAYR` chunk's frame, per-layer hashes, Merkle root, CRC-32C, the timing a conforming reader must resolve for a sample of `(layer, sector)` points, and the credentials for encrypted vectors |
 | [`rust/corpus-gen/`](rust/corpus-gen/) | `make_vectors`: reference encoder that regenerates the corpus from the specification |
 | [`rust/corpus/`](rust/corpus/) | `verify_vectors`: independent reader and validator, sharing no code with the generator. `cross_check` runs it against files the reference crate wrote |
 
 Because the generator and the validator share no code, and neither depends on the reference
 crate, agreement between them is evidence that the specification is unambiguous rather than
-that one module is self-consistent. Five invalid vectors are marked `strict_only`: their
+that one module is self-consistent. Eight invalid vectors are marked `strict_only`: their
 defect is invisible to a loose-mode reader, and the corpus asserts that a loose read accepts
 them, which pins the loose/strict distinction itself.
 

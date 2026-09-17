@@ -13,7 +13,7 @@ cargo run --example make_test_file -- /tmp/lumen
 
 | File | What it is |
 |------|------------|
-| `sample.lumen` | Twelve layers over one sector that between them use every layer encoding, with a trained dictionary, a profile, a preview, an embedded scene and an extension |
+| `sample.lumen` | Twelve layers over one sector that between them exercise the empty-layer form, binary REE and split REE, with a trained dictionary, a profile, a preview, an embedded scene and an extension |
 | `sample-no-lhas.lumen` | The same print without the optional integrity tree |
 | `sample-encrypted.lumen` | The same print sealed with a password |
 | `sample-multi-sector.lumen` | Ten layers over two resins, with per-layer settings over both |
@@ -49,9 +49,13 @@ buys full re-editability.
 ### A.2 The single-sector example
 
 Twelve layers of a 64×48 display, one sector, `bottom_layer_count` 2 and
-`transition_layer_count` 3, in three `LAYR` chunks of four layers each. The encoder
-picks the smallest of the three encodings for each layer, which is why the masks
-below carry the tags they do:
+`transition_layer_count` 3, in three `LAYR` chunks of four layers each. The writer
+encodes each layer group both ways - with the tag `EncodeMode::Auto` picks, and with tag
+`0x03` - compresses both frames with the `ZDIC` dictionary the file will use, and keeps
+the smaller, with `Encoder::set_tag_probe` on by default. The choice follows the
+compressed result rather than the streams' raw lengths
+([§5.7](11-layer-encoding.md#57-canonical-encoding)), and on this example it declines the
+new tag everywhere, which is the print a chooser counting bytes would have got wrong:
 
 | Layer | Mask | Tag | Stored |
 |-------|------|-----|--------|

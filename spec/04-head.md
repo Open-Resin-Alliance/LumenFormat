@@ -69,7 +69,7 @@ encoder SHOULD write a stable name for itself rather than a per-build or per-use
 
 **Timestamps.** `created_unix_sec` is the wall-clock time the file was written, and an encoder
 writes it. It is an input rather than a derived value, so it is one of the two things left out
-of the byte-reproducibility guarantee of [§5.6](11-layer-encoding.md#56-canonical-encoding): an
+of the byte-reproducibility guarantee of [§5.7](11-layer-encoding.md#57-canonical-encoding): an
 encoder given the same scene and the same settings and the same `created_unix_sec` produces the
 same file, and one that stamps the current time produces a file that differs in this field and
 in the trailer CRC. The other exception is sealed output, whose keys and nonces come from a
