@@ -12,7 +12,7 @@ with the conformance corpus under
 
 ```toml
 [dependencies]
-lumen-format = "0.1"
+lumen-format = "1.0"
 ```
 
 The package is `lumen-format` and the library target is `lumen`, so code reads
@@ -229,18 +229,17 @@ Deliberately not implemented, with reasons:
 
 ## Specification revision
 
-Written against **LUMEN v1.0**. As of this release the specification's
-`status.json` says `"status": "draft"` with no published git ref, and section
-10.3 permits a draft to be revised in place — so the text this crate was written
-against is still allowed to move. That is why it is 0.1.x: a draft revision that
-changes what a conforming encoder writes would be a breaking change here, and
-this crate's conformance test is what would report it. Once the specification
-publishes a revision, this crate will name it and version against it.
+Written against **LUMEN v1.0**, the published revision tagged
+[`v1.0`](https://github.com/Open-Resin-Alliance/LumenFormat/releases/tag/v1.0) in the
+[LumenFormat repository](https://github.com/Open-Resin-Alliance/LumenFormat), which is where
+the text of that revision is fixed. A published revision is immutable (§10.3): a correction
+ships as a new revision with its own number, and it is this crate's conformance test that
+reports the difference, since the crate names a revision rather than tracking the working
+tree. That is why the crate's version is the revision it was written against, 1.0.
 
-The corpus is the shared contract in the meantime. A file this crate writes is
-checked against the specification's own encoder by its own validator, in both
-directions, and that agreement is what "conforming" means here rather than any
-claim about this crate's internals.
+The corpus is the shared contract. A file this crate writes is checked against the
+specification's own encoder by its own validator, in both directions, and that agreement is
+what "conforming" means here rather than any claim about this crate's internals.
 
 ## Requirements
 

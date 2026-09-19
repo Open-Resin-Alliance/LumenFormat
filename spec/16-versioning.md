@@ -23,10 +23,11 @@ layout bumps `header.version`; one that only adds fields bumps that field's own
 sub-version.
 
 This revision rearranges the container - a sector's data and overrides have their own
-chunks, and the layer table indexes the chunk directory directly - and still carries
-`header.version = 1`, because v1.0 is a draft: a draft's layout is still being settled, and
-the number moves when a revision that fixes the layout is published, not on every edit
-before that ([§10.3](#103-change-control)).
+chunks, and the layer table indexes the chunk directory directly - and carries
+`header.version = 1`. It settled that layout while v1.0 was a draft, which
+[§10.3](#103-change-control) permits: a draft may be revised in place, so the rearrangements
+landed under the same number rather than each taking one. `header.version` names the
+container lineage, and from here it moves only when a breaking revision changes the layout.
 
 ### 10.2 Forward Compatibility Mechanisms
 

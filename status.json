@@ -1,8 +1,8 @@
 {
   "spec": "LUMEN",
   "version": "1.0",
-  "status": "draft",
-  "updated": "2026-09-15",
+  "status": "published",
+  "updated": "2026-09-19",
   "license": "MIT",
-  "stable": null
+  "stable": "v1.0"
 }

@@ -1,9 +1,9 @@
 [dependencies]
-# The LUMEN reference crate. It lives in this plugin's own checkout rather than on
-# crates.io, and the engine's registry generator compiles plugin encoders into the
-# engine, so the crate an encoder needs is declared here and merged into the
-# engine's manifest during the build - the same route every other plugin's crates
-# take.
+# The LUMEN reference crate, pinned to this plugin's own checkout rather than to the
+# crates.io release, so the submodule's specification, corpus and implementation move
+# together. The engine's registry generator compiles plugin encoders into the engine, so
+# the crate an encoder needs is declared here and merged into the engine's manifest
+# during the build - the same route every other plugin's crates take.
 
 lumen-format = { path = "../../rust/lumen" }
 

@@ -19,9 +19,8 @@ text under [`spec/`](spec/), the byte-exact conformance corpus under
 corpus, and the corpus is the contract the specification publishes - so CI runs them
 against each other on every change.
 
-> :warning: **LUMEN v1.0 is a draft revision.** A draft may be revised in place, so check
-> [`status.json`](status.json) before depending on a detail. Once a revision is published
-> it is immutable and every later change ships as a new revision.
+> **LUMEN v1.0 is published.** Its text is immutable: [`status.json`](status.json) names the
+> git tag `v1.0` that holds it, and every later change ships as a new revision ([§10.3](spec/16-versioning.md#103-change-control)).
 
 ## Table of Contents
 
@@ -121,8 +120,9 @@ everything, and keep §11 open as their test plan.
 
 [`status.json`](status.json) is the machine-readable answer to "which revision is this, and
 is it finished". The website reads it, so the specification published at
-<https://openresin.org/specs/lumen> is the one this repository declares - a draft in
-progress is not published by being pushed.
+<https://openresin.org/specs/lumen> is the one this repository declares - the declaration,
+not a push, is what publishes a revision. LUMEN v1.0 is published: `status` is `published`
+and `stable` names the git tag `v1.0`, which holds the text of the revision.
 
 | Field | Meaning |
 |-------|---------|
@@ -195,14 +195,14 @@ names implementations are encouraged to report verbatim.
 
 [`rust/lumen/`](rust/lumen/) is the encoder, decoder and validator for anything that reads
 or writes `.lumen` without re-deriving the format from the text. The crate is
-`lumen-format` and the library target is `lumen`, so code reads `use lumen::…`. It is not
-on crates.io yet, so consume it from this repository:
+`lumen-format` and the library target is `lumen`, so code reads `use lumen::…`. It is
+published on crates.io, and this repository is the source of that release:
 
 ```toml
 [dependencies]
-# Beside a checkout of this repository:
-lumen-format = { path = "../LumenFormat/rust/lumen" }
-# Inside DragonFruit, where this repository is the plugins/lumen submodule:
+lumen-format = "1.0"
+# Or from a checkout. DragonFruit takes this route, where this repository is the
+# plugins/lumen submodule and the plugin and the crate stay in step:
 lumen-format = { path = "plugins/lumen/rust/lumen" }
 ```
 
