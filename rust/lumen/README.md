@@ -166,7 +166,7 @@ three separate claims:
 
 1. **Validator agreement.** Every valid vector passes at both levels; every
    invalid vector fails the check its manifest entry names, *and fails it first*;
-   the four `strict_only` vectors pass a loose read and fail a strict one.
+   the eight `strict_only` vectors pass a loose read and fail a strict one.
 2. **Decoder agreement.** The golden values in `manifest.json` - chunk layout,
    the layer table, each `LAYR` chunk's frame and version, per-layer decompressed
    bytes, leaf hashes and Merkle root - are recomputed from this crate's own parse
