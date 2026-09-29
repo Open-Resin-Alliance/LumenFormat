@@ -473,8 +473,16 @@ pub fn build(job: &SliceJobV3) -> Result<LumenMetadata, SlicerV3Error> {
         anti_aliasing: Some(anti_aliasing),
         scale_compensation_pct,
         slicer: Some(Slicer {
-            name: Some("DragonFruit".to_string()),
-            version: Some(env!("CARGO_PKG_VERSION").to_string()),
+            // The app that sliced the job, as it says in the job. This file is
+            // compiled into the slicing engine, so `CARGO_PKG_VERSION` here is the
+            // engine's version, not the app's; with no version in the job, write
+            // none rather than that.
+            name: Some(
+                values
+                    .text_at("slicer.name")
+                    .unwrap_or_else(|| "DragonFruit".to_string()),
+            ),
+            version: values.text_at("slicer.version"),
             url: Some("https://dragonfruit-slicer.com".to_string()),
             ..Slicer::default()
         }),
