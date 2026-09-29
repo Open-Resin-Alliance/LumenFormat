@@ -554,6 +554,34 @@ mod tests {
         assert_eq!(png_dimensions(&previews[0].png), (400, 240));
     }
 
+    /// The slicer the file names is the app the job says sliced it.
+    fn stamped_slicer(metadata_json: &str) -> (Option<String>, Option<String>) {
+        let job = SliceJobV3 {
+            metadata_json: metadata_json.to_string(),
+            ..test_job(None)
+        };
+        let slicer = lumen_metadata::build(&job).unwrap().meta.slicer.unwrap();
+        (slicer.name, slicer.version)
+    }
+
+    #[test]
+    fn the_file_names_the_app_that_sliced_it() {
+        assert_eq!(
+            stamped_slicer(r#"{"slicer":{"name":"DragonFruit","version":"0.1.15"}}"#),
+            (Some("DragonFruit".to_string()), Some("0.1.15".to_string())),
+        );
+    }
+
+    #[test]
+    fn a_job_that_does_not_say_which_app_writes_no_version() {
+        // The engine's own version is what `CARGO_PKG_VERSION` would give here,
+        // and it is not the slicer's.
+        assert_eq!(
+            stamped_slicer("{}"),
+            (Some("DragonFruit".to_string()), None)
+        );
+    }
+
     #[test]
     fn a_job_without_a_usable_capture_writes_no_preview() {
         // No thumbnail at all.
