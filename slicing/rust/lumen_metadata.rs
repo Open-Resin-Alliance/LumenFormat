@@ -460,7 +460,6 @@ pub fn build(job: &SliceJobV3) -> Result<LumenMetadata, SlicerV3Error> {
         blur_brush_kernel: Some(job.blur_brush_kernel.clone()).filter(|kernel| !kernel.is_empty()),
         blur_brush_sigma_x: Some(job.blur_brush_sigma_x),
         blur_brush_sigma_y: Some(job.blur_brush_sigma_y),
-        z_blend_look_back: Some(job.z_blend_look_back),
         dither_enabled: Some(job.dither_enabled),
         ..AntiAliasing::default()
     };
